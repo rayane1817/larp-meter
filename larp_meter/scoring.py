@@ -26,10 +26,16 @@ def score(results):
     larp = round(100 * trig_w / decided_w) if decided_w else 0
 
     scored = coverage >= MIN_COVERAGE
+    decided_flags = sum(1 for r in results.values() if r.status in (TRIGGERED, PASSED))
     if not scored:
         level = "INSUFFICIENT DATA"
-        summary = ("Not enough decidable evidence to score responsibly. Supply a longer text, "
-                   "or run web mode with --verify.")
+        # Say what was actually missing, and note the one thing a reader can do
+        # with this verdict: a profile that is genuinely this content-free is
+        # itself worth remarking on, though it is not evidence of anything.
+        summary = (f"Only {decided_flags} of {len(REGISTRY)} flags could be decided, which is too "
+                   f"little to score responsibly. Supply the full profile text, or run web mode "
+                   f"with --verify. If this already IS the subject's complete public presentation, "
+                   f"its thinness is worth noting — but thinness is not evidence of deception.")
     else:
         level, summary = next((lv, s) for cut, lv, s in LEVELS if larp < cut)
 

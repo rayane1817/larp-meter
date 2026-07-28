@@ -16,9 +16,11 @@ All calls use urllib from the stdlib — the tool keeps its zero-dependency prom
 
 import json
 import hashlib
+import html as html_lib
 import os
 import re
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -28,6 +30,7 @@ from . import names
 from .extract import VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE
 
 VERIFY_TTL = 30 * 24 * 3600
+MAX_RESPONSE_BYTES = 2_000_000
 USER_AGENT = ("larp-meter/3.0 (OSINT due-diligence triage; "
               "+https://github.com/rayane1817/larp-meter)")
 TIMEOUT = 12
@@ -40,8 +43,32 @@ _ORG_STOPWORDS = {
 }
 
 
+# Institution-type words differ by language and inflection across registries:
+# Institute/Institutet/Instituto/Institut, University/Universiteit/Université.
+# Comparing them literally makes a real university look like "a different
+# organization", so they are folded to a common stem before matching.
+_ORG_STEMS = (
+    ("universit", "univ"), ("uniwersytet", "univ"), ("universidad", "univ"),
+    ("universidade", "univ"), ("hochschule", "univ"),
+    ("institut", "institut"), ("instituto", "institut"),
+    ("polytech", "polytech"), ("politecnico", "polytech"), ("polytechni", "polytech"),
+    ("college", "college"), ("colegio", "college"),
+    ("school", "school"), ("schule", "school"), ("escuela", "school"), ("ecole", "school"),
+    ("academy", "academy"), ("akademie", "academy"), ("academia", "academy"),
+)
+
+
+def _stem_org_token(token):
+    for prefix, stem in _ORG_STEMS:
+        if token.startswith(prefix):
+            return stem
+    return token
+
+
 def _significant_tokens(name):
-    return {t for t in re.split(r"[^\w]+", (name or "").casefold())
+    decomposed = unicodedata.normalize("NFKD", name or "")
+    flat = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return {_stem_org_token(t) for t in re.split(r"[^\w]+", flat.casefold())
             if t and t not in _ORG_STOPWORDS and len(t) > 1}
 
 
@@ -100,7 +127,9 @@ class Verifier:
 
         headers = {"User-Agent": USER_AGENT, "Accept": accept}
         token = os.environ.get("GITHUB_TOKEN")
-        if token and "api.github.com" in url:
+        # Host check, not a substring of the URL: a path or query containing
+        # "api.github.com" must never leak the token to another host.
+        if token and urllib.parse.urlsplit(url).hostname == "api.github.com":
             headers["Authorization"] = f"Bearer {token}"
 
         body, ok = "", False
@@ -108,7 +137,7 @@ class Verifier:
             self.calls += 1
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body, ok = resp.read().decode("utf-8", errors="replace"), True
+                body, ok = resp.read(MAX_RESPONSE_BYTES).decode("utf-8", errors="replace"), True
         except urllib.error.HTTPError as e:
             # 404/410 is a real answer: the registry says it does not exist.
             if e.code in (404, 410):
@@ -132,16 +161,31 @@ class Verifier:
         """True when the subject appears in `candidates`; None when unanswerable."""
         return names.name_matches(self.subject_name, candidates)
 
-    def _attribute(self, claim, names, label, url):
-        """Shared tail: artifact exists — does it belong to the subject?"""
-        match = self._name_matches(names)
-        shown = ", ".join(names[:4]) or "no names listed"
-        if match is None:
-            claim.status, claim.detail = VERIFIED, f"{label} exists ({shown}). Pass --name to check attribution."
+    def _attribute(self, claim, candidate_names, label, url):
+        """Shared tail: the artifact exists — does it belong to the subject?
+
+        Three outcomes, and conflating them is how this tool would libel
+        someone. A registry that returns no usable names (books with no author
+        array, ORCID records set to private, scraped markup that drifted) tells
+        us nothing about attribution, so it must not resolve to MISMATCH.
+        """
+        usable = [n for n in candidate_names or [] if n and n.strip()]
+        match = names.name_matches(self.subject_name, usable)
+        shown = ", ".join(usable[:4])
+
+        if not self.subject_name:
+            claim.status = VERIFIED
+            claim.detail = f"{label} exists ({shown or 'no names listed'}). Pass --name to check attribution."
+        elif not usable:
+            claim.status = UNCHECKABLE
+            claim.detail = (f"{label} exists, but the registry published no names to compare "
+                            f"against — attribution cannot be checked here.")
         elif match:
-            claim.status, claim.detail = VERIFIED, f"{label} exists and lists the subject ({shown})."
+            claim.status = VERIFIED
+            claim.detail = f"{label} exists and lists the subject ({shown})."
         else:
-            claim.status, claim.detail = MISMATCH, f"{label} exists but does NOT list the subject ({shown})."
+            claim.status = MISMATCH
+            claim.detail = f"{label} exists but does NOT list the subject ({shown})."
         claim.source = url
 
     # ── per-registry verifiers ──────────────────────────────────────────
@@ -180,10 +224,13 @@ class Verifier:
             name = person.get("name") or {}
             given = ((name.get("given-names") or {}) or {}).get("value", "")
             family = ((name.get("family-name") or {}) or {}).get("value", "")
-            full = f"{given} {family}".strip() or "name withheld"
+            full = f"{given} {family}".strip()
         except Exception:
             return self._uncheckable(claim, "ORCID returned an unparseable record")
-        self._attribute(claim, [full], "ORCID record", url)
+        # An ORCID holder may set their name to private. Passing a placeholder
+        # like "name withheld" would sail past the emptiness guard and be
+        # scored as "this record names someone else".
+        self._attribute(claim, [full] if full else [], "ORCID record", url)
         return claim
 
     def verify_github(self, claim):
@@ -225,6 +272,10 @@ class Verifier:
         body, ok = self._get(url, accept="application/atom+xml")
         if not ok:
             return self._uncheckable(claim, "arXiv unreachable")
+        if not body:
+            claim.status, claim.detail = NOT_FOUND, "No arXiv paper with this ID."
+            claim.source = url
+            return claim
         try:
             ns = {"a": "http://www.w3.org/2005/Atom"}
             root = ElementTree.fromstring(body)
@@ -234,6 +285,14 @@ class Verifier:
                 claim.source = url
                 return claim
             title = (entry.findtext("a:title", "", ns) or "").strip()
+            # arXiv serves its errors as a 200 OK Atom feed whose single entry
+            # is titled "Error" and authored by "arXiv api core". Attributing
+            # that entry would accuse the subject of not writing an error page.
+            entry_id = (entry.findtext("a:id", "", ns) or "")
+            if "api/errors" in entry_id or title.casefold() == "error":
+                claim.status, claim.detail = NOT_FOUND, "arXiv has no paper with this ID."
+                claim.source = url
+                return claim
             authors = [(a.findtext("a:name", "", ns) or "").strip()
                        for a in entry.findall("a:author", ns)]
         except Exception:
@@ -307,10 +366,14 @@ class Verifier:
                 if overlap > best_overlap:
                     best_name, best_item, best_overlap = variant, item, overlap
 
+        # ROR indexes research organizations. Absence is a lead, not a finding:
+        # asserting that a named institution "is a different organization" would
+        # be this tool stating as fact something it cannot know.
         claim.status = NOT_FOUND
-        claim.detail = (f"No registry entry matches '{claim.value}'."
-                        + (f" Closest is '{best_name}'{_ror_country(best_item)}, which is a "
-                           f"different organization." if best_name else ""))
+        claim.detail = (f"'{claim.value}' has no matching entry in ROR, which indexes research "
+                        f"organizations — confirm directly before drawing any conclusion."
+                        + (f" Nearest listed name: '{best_name}'{_ror_country(best_item)}."
+                           if best_name else ""))
         claim.source = url
         return claim
 
@@ -330,7 +393,17 @@ class Verifier:
             claim.status, claim.detail = NOT_FOUND, f"No patent record for {pid}."
             claim.source = url
             return claim
-        inventors = re.findall(r'<dd itemprop="inventor"[^>]*>([^<]+)</dd>', body)
+        # Scraped markup, not an API: if Google changes this element every
+        # patent claim would silently become a weight-2.5 accusation. No
+        # inventors parsed means the scrape failed, not that the subject lied.
+        inventors = [html_lib.unescape(n).strip()
+                     for n in re.findall(r'<dd itemprop="inventor"[^>]*>([^<]+)</dd>', body)]
+        if not inventors:
+            claim.status = UNCHECKABLE
+            claim.detail = (f"Patent {pid} exists ({title[:60]}), but no inventor list could be "
+                            f"read from the page — attribution not checked.")
+            claim.source = url
+            return claim
         self._attribute(claim, inventors, f"Patent {pid} ({title[:60]})", url)
         return claim
 

@@ -38,16 +38,21 @@ def initials(name):
 def name_matches(subject, candidates):
     """Does `subject` appear among `candidates`?
 
-    Returns True / False, or None when the question is not answerable (no
-    subject name supplied) — the caller must not treat None as a mismatch.
+    Returns True / False, or None when the question is not answerable — either
+    no subject name was supplied, or the registry gave no names to compare
+    against. The caller must never treat None as a mismatch: "we could not
+    check" and "this is someone else's work" are different claims, and only
+    one of them is an accusation.
     """
     mine = tokens(subject)
     if not mine:
         return None
-    if not candidates:
-        return False
 
-    blob = normalize(" ".join(c for c in candidates if c))
+    usable = [c for c in candidates or [] if c and c.strip()]
+    if not usable:
+        return None
+
+    blob = normalize(" ".join(usable))
     present = {t for t in mine if re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", blob)}
 
     # A single-token name (mononym) matches on that token alone.

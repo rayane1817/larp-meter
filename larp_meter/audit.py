@@ -24,15 +24,16 @@ def run_audit(target, text, mode="text", source_urls=None, subject_name=None,
 
     verifier = None
     if verify:
-        verifier = Verifier(Path(cache_dir or ".") / "verify",
-                            subject_name=subject_name or target)
+        # Only an explicitly supplied name may drive attribution. Falling back
+        # to `target` would feed a UI placeholder into the name comparison.
+        verifier = Verifier(Path(cache_dir or ".") / "verify", subject_name=subject_name)
         verifier.verify_all(claims, progress=progress)
 
     ctx = AuditContext(
         text=text,
         claims=claims,
         source_urls=source_urls,
-        subject_name=subject_name or target,
+        subject_name=subject_name or "",
         banks=banks or load_banks(),
         verified=bool(verify),
         signals=signals,

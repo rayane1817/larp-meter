@@ -15,7 +15,7 @@ from datetime import datetime
 from . import TRIGGERED, PASSED, UNKNOWN
 from . import extract as ex
 from . import domains as dom
-from .matching import find_terms, count_occurrences, load_banks
+from .matching import find_terms, count_occurrences, host_matches, load_banks
 
 CREDENTIALS = "credentials"
 TRACK_RECORD = "track record"
@@ -211,12 +211,11 @@ def f_output(ctx):
              f"{', '.join(scholar.get('institutions') or []) or 'no affiliation listed'}"])
 
     if hard:
-        good = [c for c in hard if c.status in (ex.VERIFIED, ex.UNCHECKED, ex.UNCHECKABLE)]
-        if good:
-            return FlagResult(PASSED, f"{len(hard)} independently checkable artifact(s) cited.",
-                              [f"{c.subtype}: {c.value}" for c in hard[:4]])
-        return FlagResult(TRIGGERED, "Every cited artifact failed verification.",
-                          [f"{c.subtype}: {c.value} — {c.detail}" for c in hard[:4]])
+        # Presence only. Whether those artifacts survive verification is flag
+        # 11's job; judging it here too made a single registry result move 4.0
+        # of 17.0 total weight and print the same evidence twice.
+        return FlagResult(PASSED, f"{len(hard)} independently checkable artifact(s) cited.",
+                          [f"{c.subtype}: {c.value}" for c in hard[:4]])
     if building:
         return FlagResult(
             TRIGGERED,
@@ -252,15 +251,30 @@ def f_fundraising(ctx):
       "Are claimed degrees tied to a named, checkable institution?")
 def f_credentials(ctx):
     degrees = ex.claims_by(ctx.claims, "degree", "degree")
-    institutions = ex.claims_by(ctx.claims, "degree", "institution")
+    # Only an institution attached to the degree itself counts. Binding a degree
+    # to any institution named elsewhere cleared this flag for "holds an MBA;
+    # spent two years at the Fraunhofer Institute" — an employer, not a school.
+    institutions = ex.claims_by(ctx.claims, "degree", "degree_institution")
+    mentioned = ex.claims_by(ctx.claims, "degree", "mentioned_institution")
     if not degrees:
         return FlagResult(UNKNOWN, "No degree is claimed.")
     if not institutions:
+        if mentioned:
+            return FlagResult(
+                UNKNOWN,
+                f"A degree is claimed and institutions are named "
+                f"({', '.join(m.value for m in mentioned[:2])}), but none is tied to the degree, "
+                f"so the credential cannot be matched to a school from this text alone.")
+        # Failure to parse an institution is not concealment. Institution names
+        # this extractor cannot read are common outside English, and penalising
+        # them would score people on how their university spells itself.
         return FlagResult(
-            TRIGGERED,
-            f"Degree claimed ({', '.join(d.value for d in degrees[:2])}) without naming any "
-            f"institution — unverifiable as stated.")
-    fake = [i for i in institutions if i.status == ex.NOT_FOUND]
+            UNKNOWN,
+            f"Degree claimed ({', '.join(d.value for d in degrees[:2])}) with no institution "
+            f"identified in the text — not enough to judge either way.")
+    # Only an actual registry lookup can contradict; without --verify the
+    # status is UNCHECKED and says nothing.
+    fake = [i for i in institutions if i.status == ex.NOT_FOUND] if ctx.verified else []
     if fake:
         # ROR indexes research organizations. A vocational school, a small
         # private college or a non-research institute can be legitimately
@@ -303,7 +317,7 @@ def f_validation(ctx):
     markers = find_terms(ctx.text, b["external_validation"], skip_negated=True)
     outlets = find_terms(ctx.text, b["press_outlets"], skip_negated=True)
     independent = [u for u in ctx.source_urls
-                   if not any(d in u.lower() for d in b["self_published_domains"])]
+                   if not host_matches(u, b["self_published_domains"])]
     controlled = len(ctx.source_urls) - len(independent)
 
     # An encyclopedia article about the subject is unambiguous third-party coverage.
@@ -318,6 +332,12 @@ def f_validation(ctx):
         note = (f" ({len(independent)} independent of {len(ctx.source_urls)} sources)"
                 if ctx.source_urls else "")
         return FlagResult(PASSED, f"Third-party validation present{note}.", ev)
+    # Silence from a blocked or unreachable search layer is not silence about
+    # the subject. Only conclude "no independent coverage" if we could look.
+    if ctx.signals.get("search_ok") is False:
+        return FlagResult(UNKNOWN, "The search layer could not reach its sources, so the absence "
+                                   "of third-party coverage says nothing.")
+
     if ctx.source_urls and not independent:
         return FlagResult(
             TRIGGERED,
@@ -374,6 +394,9 @@ def f_contradicted(ctx):
       "Do the claimed dates and durations fit into a single human career?")
 def f_timeline(ctx):
     exp_claims = ex.claims_by(ctx.claims, "timeline", "claimed_experience_years")
+    # Only retrospective years. Forward-looking targets ("deployment is targeted
+    # for 2030") are goals, not claimed history, and were being reported as a
+    # fabricated timeline.
     years = sorted({int(c.value) for c in ex.claims_by(ctx.claims, "timeline", "year")})
     if not exp_claims and not years:
         return FlagResult(UNKNOWN, "No dates or durations stated.")
@@ -381,7 +404,7 @@ def f_timeline(ctx):
     problems = []
     future = [y for y in years if y > ctx.now_year]
     if future:
-        problems.append(f"date(s) in the future: {', '.join(map(str, future))}")
+        problems.append(f"date(s) stated as past but in the future: {', '.join(map(str, future))}")
 
     parsed = [n for n in (ex.experience_years(c.value) for c in exp_claims) if n]
     if parsed and years:

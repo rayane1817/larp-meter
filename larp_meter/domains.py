@@ -61,10 +61,14 @@ DOMAINS = {
             "clinical study", "genomics", "biotechnology", "materials research",
             "computational modelling", "experimental validation", "trl",
         ],
+        # Fields only. "phd"/"doctorate"/"postdoc" are degree LEVELS, not
+        # subjects: listing them here meant a doctorate in any subject counted
+        # as a science credential — and since science is adjacent to technology,
+        # any PhD whatsoever cleared the deep-tech credential check.
         "credentials": [
             "physics", "chemistry", "biology", "bioinformatics", "biochemistry",
-            "neuroscience", "computational science", "phd", "doctorate", "postdoc",
-            "molecular biology", "astrophysics",
+            "neuroscience", "computational science", "molecular biology",
+            "astrophysics", "genetics", "ecology",
         ],
         "roles": [
             "research scientist", "researcher", "postdoctoral", "principal investigator",
@@ -210,12 +214,15 @@ for _d in DOMAINS:
 # A credential only counts inside an educational context. Without this, a bare
 # domain noun in an ordinary sentence ("we run a quantitative finance fund")
 # reads as a qualification and silently clears the credential flag.
+# Word-boundary anchored throughout: without \b, "read" matched inside
+# "already" and "spread", fabricating an education context out of ordinary
+# prose and letting any nearby field word count as a qualification.
 _EDU_TRIGGER_RE = re.compile(
-    r"(?:(?i:msc|bsc|phd|mba|meng|beng|llm|llb|master's|master of|master in|"
+    r"\b(?:(?i:msc|bsc|phd|mba|meng|beng|llm|llb|master's|master of|master in|"
     r"bachelor's|bachelor of|bachelor in|doctorate|doctor of|degree|diploma|"
-    r"studied|graduated|graduate of|alumnus|alumna|educated at|trained as|"
-    r"trained at|postdoctoral|postdoc|read)"
-    r"|\b(?:MA|BA|MS|BS|MD|JD)\b)")
+    r"studied|studying|graduated|graduate of|alumnus|alumna|educated at|"
+    r"trained as|trained at|postdoctoral|postdoc|read\s+\w+\s+at)"
+    r"|(?:MA|BA|MS|BS|MD|JD))\b")
 _SENTENCE_SPLIT_RE = re.compile(r"[.;\n•|]")
 
 

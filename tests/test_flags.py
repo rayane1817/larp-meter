@@ -73,8 +73,11 @@ class TestIndividualFlags(unittest.TestCase):
         text = "We build robots for ports and have done so for a decade with our team."
         self.assertEqual(status_of(text, 7), UNKNOWN)
 
-    def test_degree_without_institution(self):
-        self.assertEqual(status_of("I hold an MSc in public health policy.", 8), TRIGGERED)
+    def test_degree_without_institution_is_undecidable_not_an_accusation(self):
+        """Failure to parse an institution is not concealment. Institution names
+        this extractor cannot read are common outside English, and triggering on
+        them scored people on how their university spells itself."""
+        self.assertEqual(status_of("I hold an MSc in public health policy.", 8), UNKNOWN)
 
     def test_degree_with_institution_passes(self):
         self.assertEqual(

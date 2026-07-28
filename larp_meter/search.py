@@ -100,23 +100,31 @@ class WebSource:
         return text
 
 
-def gather(name, cache_dir, deep=False, progress=None):
+def gather(name, cache_dir, deep=False, progress=None, refresh=False):
     """Gather a public footprint via the provider chain. Returns a Gathered bundle."""
     ws = WebSource(cache_dir)
+    failures = []
 
     def fetch(url, browser=False):
-        cached = ws._cached("g:" + url)
-        if cached is not None:
-            return cached.get("body", "")
+        """Returns the body, or "" on failure. Failures are never cached.
+
+        Caching an empty body on a network error turned a blocked or throttled
+        request into a permanent "no third-party coverage exists" for the whole
+        cache lifetime — and flag 10 then read that silence as an echo chamber.
+        """
+        if not refresh:
+            cached = ws._cached("g:" + url)
+            if cached is not None:
+                return cached.get("body", "")
         headers = {"User-Agent": BROWSER_UA if browser else API_UA,
                    "Accept": "text/html" if browser else "application/json"}
-        body = ""
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=ws.timeout) as resp:
                 body = resp.read(800_000).decode("utf-8", errors="replace")
-        except Exception:
-            body = ""
+        except Exception as exc:
+            failures.append(f"{urllib.parse.urlsplit(url).hostname}: {type(exc).__name__}")
+            return ""
         ws._store("g:" + url, {"body": body})
         time.sleep(ws.delay)
         return body
@@ -126,14 +134,26 @@ def gather(name, cache_dir, deep=False, progress=None):
     if deep:
         extra = []
         for f in bundle.findings[:8]:
-            if not f.url.startswith("http") or "api." in f.url:
+            # These URLs come from search results, i.e. from untrusted input.
+            # Restrict to http(s) so --deep cannot be steered into file://,
+            # ftp:// or a link-local metadata address.
+            parts = urllib.parse.urlsplit(f.url)
+            if parts.scheme not in ("http", "https") or not parts.hostname:
+                continue
+            if parts.hostname in ("localhost", "127.0.0.1", "::1", "169.254.169.254"):
+                continue
+            if not f.about_subject:
                 continue
             if progress:
                 progress(f"reading {f.url[:60]}")
             body = ws.page_text(f.url)
             if body:
                 extra.append(providers.Finding(f.url, f.title, body[:4000],
-                                               f.provider, f.kind, f.independent))
+                                               f.provider, f.kind, f.independent, True))
         bundle.findings.extend(extra)
 
+    # The search layer's own health, so downstream flags can tell "nobody has
+    # written about this person" apart from "we could not ask".
+    bundle.signals["search_failures"] = failures
+    bundle.signals["search_ok"] = not failures or bool(bundle.providers_ok)
     return bundle

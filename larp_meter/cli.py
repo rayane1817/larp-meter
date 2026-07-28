@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -37,12 +38,12 @@ def _emit(report, args):
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(render_terminal(report))
-    if not args.no_save:
-        written = save_all(report, OUTPUT_DIR, vault_path=VAULT_PATH,
-                           html_path=args.html, md_path=args.md)
-        if not args.json:
-            for p in written:
-                print(f"  saved: {p}")
+    written = save_all(report, OUTPUT_DIR, vault_path=None if args.no_save else VAULT_PATH,
+                       html_path=args.html, md_path=args.md,
+                       write_json=not args.no_save)
+    if not args.json:
+        for p in written:
+            print(f"  saved: {p}")
 
 
 def _progress(args):
@@ -59,7 +60,13 @@ def _progress(args):
 
 
 def cmd_text(args, target, text):
-    report = run_audit(target, text, mode="text", subject_name=args.name or target,
+    # `target` is a UI label — "pasted-text", "stdin", a filename. Passing it
+    # as the subject's name made every genuine artifact a MISMATCH, because
+    # "pasted-text" tokenizes to a real-looking name that matches nothing.
+    if args.verify and not args.name and not args.quiet:
+        print("  note: --verify without --name checks that artifacts exist, but cannot check "
+              "whether they belong to the subject. Pass --name for attribution.")
+    report = run_audit(target, text, mode="text", subject_name=args.name,
                        verify=args.verify, cache_dir=CACHE_DIR, progress=_progress(args))
     _emit(report, args)
     return report
@@ -68,7 +75,8 @@ def cmd_text(args, target, text):
 def cmd_web(args, target):
     if not args.json and not args.quiet:
         print(f"\n  LARP METER v{__version__} — web audit of {target}")
-    bundle = gather(target, CACHE_DIR, deep=args.deep, progress=_progress(args))
+    bundle = gather(target, CACHE_DIR, deep=args.deep, progress=_progress(args),
+                    refresh=args.refresh)
     if not args.json and not args.quiet:
         if bundle.providers_ok:
             print(f"  sources answering: {', '.join(bundle.providers_ok)}"
@@ -118,12 +126,15 @@ def cmd_batch(args):
             report = run_audit(name, text, mode="batch-text", subject_name=name,
                                verify=args.verify, cache_dir=CACHE_DIR)
         else:
-            bundle = gather(name, CACHE_DIR, deep=args.deep)
+            bundle = gather(name, CACHE_DIR, deep=args.deep, refresh=args.refresh)
             report = run_audit(name, bundle.corpus, mode="batch-web", source_urls=bundle.urls,
                                subject_name=name, verify=args.verify, cache_dir=CACHE_DIR,
                                signals=bundle.signals)
-        if not args.no_save:
-            save_all(report, OUTPUT_DIR, vault_path=None)
+        stem = re.sub(r"[^a-zA-Z0-9]+", "-", name.lower()).strip("-")[:40] or "audit"
+        save_all(report, OUTPUT_DIR, vault_path=None,
+                 html_path=(Path(args.html).parent / f"{i:03d}-{stem}.html") if args.html else None,
+                 md_path=(Path(args.md).parent / f"{i:03d}-{stem}.md") if args.md else None,
+                 write_json=not args.no_save, unique_suffix=f"{i:03d}")
         triggered = sum(1 for f in report["flags"] if f["status"] == TRIGGERED)
         print(f"      {LEVEL_ICON.get(report['level'], '⚪')} {report['level']} · "
               f"score {score_text(report, '')} · coverage {report['evidence_coverage_pct']}% · "
@@ -288,6 +299,8 @@ def build_parser():
                      help="Check identifiers against public registries (network)")
     beh.add_argument("--deep", action="store_true",
                      help="Web mode: also fetch and read the top result pages")
+    beh.add_argument("--refresh", action="store_true",
+                     help="Ignore cached search results and re-query the sources")
     beh.add_argument("--name", help="Subject's real name, for attribution checks during --verify")
     beh.add_argument("--interactive", "-i", action="store_true", help="Guided 12-question assessment")
     out = p.add_argument_group("output")

@@ -9,6 +9,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 _TERM_CACHE = {}
 
@@ -181,6 +182,29 @@ DEFAULT_BANKS = {
         "instagram.com", "youtube.com", "about.me", "crunchbase.com",
     ],
 }
+
+
+def host_of(url):
+    """Registrable host of a URL, lowercased and without a leading www."""
+    try:
+        host = (urlsplit(str(url)).hostname or "").casefold()
+    except ValueError:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def host_matches(url, domains):
+    """True when the URL's host IS one of `domains` or a subdomain of one.
+
+    A substring test against the whole URL made "x.com" match vox.com,
+    xerox.com and netflix.com, so genuine third-party press was classified as
+    the subject's own platform and reported as an echo chamber.
+    """
+    host = host_of(url)
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in
+               ((d[4:] if d.startswith("www.") else d).casefold() for d in domains))
 
 
 def load_banks(path=None):

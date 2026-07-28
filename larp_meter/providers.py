@@ -18,6 +18,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 from . import names
+from .matching import host_matches
 
 API_UA = ("larp-meter/3.0 (OSINT due-diligence triage; "
           "+https://github.com/rayane1817/larp-meter)")
@@ -87,8 +88,7 @@ class Gathered:
 
 
 def _is_independent(url):
-    host = urllib.parse.urlparse(url).netloc.casefold()
-    return not any(h in host for h in CONTROLLED_HOSTS)
+    return not host_matches(url, CONTROLLED_HOSTS)
 
 
 class Provider:

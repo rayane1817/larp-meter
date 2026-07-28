@@ -52,20 +52,34 @@ SOFT_EVIDENCE = [
     (re.compile(r"\bISO\s?\d{4,5}\b", re.I), "ISO certification"),
 ]
 
-DEGREE_RE = re.compile(
-    r"\b(MSc|M\.Sc\.|BSc|B\.Sc\.|PhD|Ph\.D\.|MBA|MEng|BEng|LLM|"
-    r"Master(?:'s)?|Bachelor(?:'s)?|Doctorate)\b"
-    r"(?:\s+(?:of|in))?\s*([A-Za-z][\w\s&,-]{0,50}?)?"
-    r"(?:\s*(?:,|\bat\b|\bfrom\b)\s*"
-    r"((?:[A-Z][\w.-]+\s+){0,3}(?:University|Universiteit|Université|Institute|College|School|Polytechnic)"
-    r"(?:\s+(?:of|de|van)\s+[A-Z][\w.-]+(?:\s+[A-Z][\w.-]+)?)?"
-    r"|(?:University|Institute|College)\s+of\s+[A-Z][\w.-]+(?:\s+[A-Z][\w.-]+)?))?",
-    re.I)
+# Institution-type words in the languages this tool is likely to meet. Matching
+# only the English spellings made the credential flag fire on how a university
+# happens to spell itself: "Technische Universität München" parsed as nothing.
+_INST_TYPES = (r"Universit\w*|Uniwersytet\w*|Universidad\w*|Universidade\w*|Institut\w*|"
+               r"Hochschule\w*|Polytechni\w*|Politecnico\w*|Colleg\w*|Colegio\w*|"
+               r"Escuela\w*|[EÉ]cole\w*|Akadem\w*|Academ\w*|School\w*")
 
-INSTITUTION_RE = re.compile(
-    r"\b((?:[A-Z][\w.-]+\s+){0,3}(?:University|Universiteit|Université|Institute|College|Polytechnic)"
-    r"(?:\s+(?:of|de|van)\s+[A-Z][\w.-]+(?:\s+[A-Z][\w.-]+)?)?"
-    r"|(?:University|Institute)\s+of\s+[A-Z][\w.-]+(?:\s+[A-Z][\w.-]+)?)")
+# The prefix class excludes '.' so a sentence boundary cannot be swallowed
+# ("...in Wilrijk. Karolinska Institutet" must not parse as one name), and the
+# trailing \b stops "Institutet" being truncated to "Institute".
+_INSTITUTION_CORE = (
+    r"(?:[A-Z][\w-]*\s+){0,3}(?:" + _INST_TYPES + r")"
+    r"(?:\s+(?:of|de|van|di|du|för)\s+[A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,2})?")
+
+INSTITUTION_RE = re.compile(r"\b(" + _INSTITUTION_CORE + r")\b")
+
+# The field of study is matched lazily but anchored on a following delimiter.
+# Without the lookahead the lazy group sat inside an optional group followed by
+# another optional group, so it settled for one character and the report quoted
+# degrees like "MSc A" and "MBA f".
+DEGREE_RE = re.compile(
+    r"\b(MSc|M\.Sc\.|BSc|B\.Sc\.|PhD|Ph\.D\.|MBA|MEng|BEng|LLM|LLB|"
+    r"Master(?:'s)?|Bachelor(?:'s)?|Doctorate|Doctor)\b"
+    r"(?:[\s,]+(?:of\s+|in\s+)?(?!from\b|at\b|and\b|with\b)"
+    r"(?P<field>[A-Za-z][A-Za-z&\- ]{1,60}?)"
+    r"(?=\s*(?:[,;.]|\bat\b|\bfrom\b|\band\b|$)))?"
+    r"(?:\s*(?:,|\bat\b|\bfrom\b)\s*(?P<inst>" + _INSTITUTION_CORE + r")\b)?",
+    re.I)
 
 # Case-insensitive trigger word, case-sensitive org name (orgs are capitalised)
 OWNED_ORG_RE = re.compile(
@@ -81,8 +95,11 @@ ROLE_RE = re.compile(
     r"\b(CEO|CTO|President|Founder|Co-founder|Chairman|Managing Director|"
     r"Head of [A-Z]\w+)\b\s*(?:of|at|@)\s+([A-Z][\w&-]*(?:[ \t][A-Z][\w&-]*){0,3})")
 
+# The digit run is bounded: an unbounded [\d,.]* before an alternation that
+# often fails backtracks quadratically, so a page with a long number could hang
+# the whole analysis.
 TRACTION_RE = re.compile(
-    r"([€$£]?\s?\d[\d,.]*\s?(?:k|m|bn|million|billion)?)\s*"
+    r"([€$£]?\s?\d[\d,.]{0,24}\s?(?:k|m|bn|million|billion)?)\s*"
     r"(customers|clients|users|subscribers|revenue|arr|mrr|employees|units|installations)",
     re.I)
 
@@ -96,6 +113,13 @@ EXPERIENCE_RE = re.compile(
     r"\b(\d{1,2}|" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True)) + r")\+?\s*"
     r"years?\s+(?:of\s+)?(?:experience|expertise)", re.I)
 YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\b")
+
+# A stated goal is not a falsified credential. "Full deployment is targeted for
+# 2030" must not be read as a date the subject claims to have lived through.
+FORWARD_MARKERS = re.compile(
+    r"\b(?:by|target(?:ed|ing)?|projected|expected|planned|planning|roadmap|horizon|"
+    r"due|forecast|goal|aim(?:ing)?|launch(?:ing)?|shipping|will|anticipated|"
+    r"scheduled|from now until|through)\b[^.;\n]{0,40}$", re.I)
 
 
 def experience_years(raw):
@@ -143,16 +167,24 @@ def extract_claims(text):
         if m:
             add("artifact", "assertion", label, _context(text, m))
 
+    degree_institutions = set()
     for m in DEGREE_RE.finditer(text):
-        level, field_, institution = m.group(1), (m.group(2) or "").strip(" ,."), m.group(3)
+        level = m.group(1)
+        field_ = (m.group("field") or "").strip(" ,.")
+        institution = (m.group("inst") or "").strip()
         value = " ".join(x for x in [level, field_] if x).strip()
         add("degree", "degree", value, _context(text, m))
         if institution:
-            add("degree", "institution", institution.strip(), _context(text, m))
+            degree_institutions.add(institution)
+            add("degree", "degree_institution", institution, _context(text, m))
 
-    # Institutions named outside a degree phrase still matter (employers, collaborators)
+    # Institutions named outside a degree phrase are employers, collaborators or
+    # venues — kept under a distinct subtype so the credential flag cannot bind
+    # a degree to whatever institution happens to appear elsewhere in the text.
     for m in INSTITUTION_RE.finditer(text):
-        add("degree", "institution", m.group(1).strip(), _context(text, m))
+        name = m.group(1).strip()
+        if name not in degree_institutions:
+            add("degree", "mentioned_institution", name, _context(text, m))
 
     for m in ROLE_RE.finditer(text):
         add("role", "leadership", f"{m.group(1)} of {m.group(2)}", _context(text, m))
@@ -173,10 +205,30 @@ def extract_claims(text):
     for m in EXPERIENCE_RE.finditer(text):
         add("timeline", "claimed_experience_years", m.group(1), _context(text, m))
 
-    for m in YEAR_RE.finditer(text):
-        add("timeline", "year", m.group(1), _context(text, m))
+    # Years are read from text with identifiers and quantities blanked out.
+    # Unmasked, the digits inside "10.1109/TNS.2023.3241234" became a career
+    # date and the profile was accused of an impossible timeline.
+    masked = _mask_non_dates(text)
+    for m in YEAR_RE.finditer(masked):
+        forward = bool(FORWARD_MARKERS.search(masked[max(0, m.start() - 60):m.start()]))
+        add("timeline", "year_target" if forward else "year", m.group(1), _context(text, m))
 
     return claims
+
+
+def _mask_non_dates(text):
+    """Blank spans whose digits are identifiers or quantities, not dates."""
+    chars = list(text)
+    spans = []
+    for _subtype, rx in ARTIFACT_PATTERNS:
+        spans.extend(m.span() for m in rx.finditer(text))
+    spans.extend(m.span(1) for m in TRACTION_RE.finditer(text))
+    spans.extend(m.span() for m in re.finditer(r"\b\d[\d,.]{0,24}\s?(?:MHz|GHz|kHz|km|kg|nm|"
+                                               r"mm|hours?|days?|%)\b", text, re.I))
+    for start, end in spans:
+        for i in range(start, min(end, len(chars))):
+            chars[i] = " "
+    return "".join(chars)
 
 
 def claims_by(claims, kind=None, subtype=None):

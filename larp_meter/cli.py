@@ -11,7 +11,8 @@ from . import __version__, TRIGGERED, PASSED, UNKNOWN
 from .audit import run_audit
 from .flags import REGISTRY, TOTAL_WEIGHT
 from .matching import load_banks
-from .report import render_terminal, render_html, render_markdown, save_all, LEVEL_ICON
+from .report import (render_terminal, render_html, render_markdown, save_all,
+                     score_text, LEVEL_ICON)
 from .scoring import LEVELS, MIN_COVERAGE
 from .search import gather
 
@@ -125,7 +126,7 @@ def cmd_batch(args):
             save_all(report, OUTPUT_DIR, vault_path=None)
         triggered = sum(1 for f in report["flags"] if f["status"] == TRIGGERED)
         print(f"      {LEVEL_ICON.get(report['level'], '⚪')} {report['level']} · "
-              f"score {report['larp_score']} · coverage {report['evidence_coverage_pct']}% · "
+              f"score {score_text(report, '')} · coverage {report['evidence_coverage_pct']}% · "
               f"{triggered} flags")
         rows.append({
             "target": name, "level": report["level"], "larp_score": report["larp_score"],
@@ -187,6 +188,7 @@ def cmd_interactive(args):
         "version": __version__, "schema": 3, "target": "interactive assessment",
         "mode": "interactive", "timestamp": "", "verified": False,
         "level": verdict["level"], "larp_score": verdict["score"],
+        "raw_score": verdict["raw_score"], "scored": verdict["scored"],
         "evidence_coverage_pct": verdict["coverage"], "specificity_index": 0.0,
         "summary": verdict["summary"], "categories": verdict["categories"],
         "word_count": 0,
@@ -214,7 +216,8 @@ def cmd_list(args):
         except Exception:
             continue
         print(f"  {LEVEL_ICON.get(d.get('level'), '⚪')} {str(d.get('target'))[:28]:<28} "
-              f"{str(d.get('level')):<18} {str(d.get('larp_score', '?')):>5} "
+              f"{str(d.get('level')):<18} "
+              f"{('n/a' if d.get('larp_score') is None else d.get('larp_score')):>5} "
               f"{str(d.get('evidence_coverage_pct', '—')):>4}% {str(d.get('timestamp'))[:10]:>11}")
     print()
 

@@ -68,5 +68,33 @@ class TestScoring(unittest.TestCase):
             last = s
 
 
+class TestScoreGating(unittest.TestCase):
+    """A report can hit 100 on a single decided flag. Exposing that as larp_score
+    would let a consumer filtering on the number alone read 'not enough evidence'
+    as 'maximum risk'."""
+
+    def test_ungraded_report_exposes_no_score(self):
+        verdict = score({4: FlagResult(TRIGGERED)})
+        self.assertEqual(verdict["level"], "INSUFFICIENT DATA")
+        self.assertIsNone(verdict["score"])
+        self.assertFalse(verdict["scored"])
+        self.assertEqual(verdict["raw_score"], 100)
+
+    def test_graded_report_exposes_the_score(self):
+        verdict = score(build({s["id"]: TRIGGERED for s in REGISTRY}))
+        self.assertTrue(verdict["scored"])
+        self.assertEqual(verdict["score"], 100)
+
+    def test_renderers_show_na_rather_than_a_number(self):
+        from larp_meter.audit import run_audit
+        from larp_meter.report import render_terminal, render_markdown, render_html, score_text
+        r = run_audit("tiny", "Founder. Building things.", mode="text")
+        self.assertIsNone(r["larp_score"])
+        self.assertEqual(score_text(r), "n/a")
+        self.assertIn("n/a", render_terminal(r))
+        self.assertIn("larp_score: null", render_markdown(r))
+        self.assertIn("n/a", render_html(r))
+
+
 if __name__ == "__main__":
     unittest.main()

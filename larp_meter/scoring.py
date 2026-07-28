@@ -25,7 +25,8 @@ def score(results):
     coverage = decided_w / TOTAL_WEIGHT if TOTAL_WEIGHT else 0.0
     larp = round(100 * trig_w / decided_w) if decided_w else 0
 
-    if coverage < MIN_COVERAGE:
+    scored = coverage >= MIN_COVERAGE
+    if not scored:
         level = "INSUFFICIENT DATA"
         summary = ("Not enough decidable evidence to score responsibly. Supply a longer text, "
                    "or run web mode with --verify.")
@@ -33,7 +34,12 @@ def score(results):
         level, summary = next((lv, s) for cut, lv, s in LEVELS if larp < cut)
 
     return {
-        "score": larp,
+        # `scored` gates the number: a report can reach 100 on a single decided
+        # flag, and a consumer filtering on larp_score alone would read that as
+        # maximum risk rather than "not enough evidence to say anything".
+        "score": larp if scored else None,
+        "raw_score": larp,
+        "scored": scored,
         "coverage": round(coverage * 100),
         "level": level,
         "summary": summary,

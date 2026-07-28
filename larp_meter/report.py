@@ -15,6 +15,13 @@ CLAIM_ICON = {VERIFIED: "✔", MISMATCH: "✗", NOT_FOUND: "✗", UNCHECKABLE: "
               UNCHECKED: "·"}
 
 
+def score_text(report, suffix="/100"):
+    """The score, or an explicit n/a when coverage was too low to grade."""
+    if report.get("larp_score") is None:
+        return "n/a"
+    return f"{report['larp_score']}{suffix}"
+
+
 def caveats(report):
     """Things a human must know before acting on this report."""
     out = []
@@ -83,7 +90,7 @@ def render_terminal(report, show_claims=True):
     out.append("")
     out.append(f"  {'─' * 62}")
     out.append(f"  {LEVEL_ICON.get(lvl, '⚪')} {level_color(c, lvl)}{c.bold}{lvl}{c.reset}"
-               f"   LARP score {report['larp_score']}/100"
+               f"   LARP score {score_text(report)}"
                f"   ·  evidence coverage {report['evidence_coverage_pct']}%"
                f"   ·  {'verified' if report['verified'] else 'unverified'}")
     out.append(f"  {'─' * 62}")
@@ -163,7 +170,7 @@ def render_markdown(report):
         f"created: {report['timestamp']}",
         "source: larp-meter",
         "tags: [larp, osint, research]",
-        f"larp_score: {report['larp_score']}",
+        f"larp_score: {report['larp_score'] if report.get('larp_score') is not None else 'null'}",
         f"level: {report['level']}",
         "status: final",
         "---",
@@ -171,7 +178,7 @@ def render_markdown(report):
         f"# LARP Audit: {report['target']}",
         "",
         f"**Level:** {report['level']}  ",
-        f"**LARP score:** {report['larp_score']}/100  ",
+        f"**LARP score:** {score_text(report)}  ",
         f"**Evidence coverage:** {report['evidence_coverage_pct']}%  ",
         f"**Specificity index:** {report['specificity_index']}  ",
         f"**Registry verification:** {'yes' if report['verified'] else 'no'}  ",
@@ -273,7 +280,7 @@ def render_html(report):
                  f"{report['word_count']} words analysed</div>")
 
     parts.append("<div class='hero'>")
-    parts.append(f"<div><div class='score {lvl_cls}'>{report['larp_score']}</div>"
+    parts.append(f"<div><div class='score {lvl_cls}'>{score_text(report, '')}</div>"
                  f"<div class='meta'>LARP score /100</div></div>")
     parts.append(f"<div style='flex:1;min-width:240px'><div class='level {lvl_cls}'>{_esc(lvl)}</div>"
                  f"<div style='margin:6px 0'>{_esc(report['summary'])}</div>"

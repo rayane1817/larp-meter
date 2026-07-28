@@ -164,8 +164,8 @@ def f_self_referential(ctx):
 def f_buzzwords(ctx):
     if ctx.word_count < 25:
         return FlagResult(UNKNOWN, "Text too short to measure density meaningfully.")
-    distinct = find_terms(ctx.text, ctx.banks["buzzwords"])
-    density = count_occurrences(ctx.text, ctx.banks["buzzwords"]) / ctx.word_count * 100
+    distinct = find_terms(ctx.text, ctx.banks["buzzwords"], skip_negated=True)
+    density = count_occurrences(ctx.text, ctx.banks["buzzwords"], skip_negated=True) / ctx.word_count * 100
     if len(distinct) >= 4 and density >= 2.0:
         return FlagResult(
             TRIGGERED,
@@ -179,8 +179,8 @@ def f_buzzwords(ctx):
 @flag(5, "Vague Partnerships Only", 1.0, RELATIONSHIPS,
       "Are collaborations only MoUs/NDAs rather than contracts or grants?")
 def f_vague_partnerships(ctx):
-    vague = find_terms(ctx.text, ctx.banks["vague_partnership"])
-    concrete = find_terms(ctx.text, ctx.banks["concrete_partnership"])
+    vague = find_terms(ctx.text, ctx.banks["vague_partnership"], skip_negated=True)
+    concrete = find_terms(ctx.text, ctx.banks["concrete_partnership"], skip_negated=True)
     if not vague and not concrete:
         return FlagResult(UNKNOWN, "No partnership or deal language to classify.")
     if len(vague) >= 2 and len(vague) > len(concrete):
@@ -198,7 +198,7 @@ def f_vague_partnerships(ctx):
 def f_output(ctx):
     artifacts = ex.claims_by(ctx.claims, "artifact")
     hard = [c for c in artifacts if c.subtype != "assertion"]
-    building = find_terms(ctx.text, ctx.banks["building_claims"])
+    building = find_terms(ctx.text, ctx.banks["building_claims"], skip_negated=True)
 
     # A scholarly record found independently outsettles anything the text asserts.
     scholar = ctx.signals.get("openalex")
@@ -232,9 +232,9 @@ def f_output(ctx):
 @flag(7, "Fundraising Without Traction", 1.5, TRACK_RECORD,
       "Is money being raised with zero evidence of customers or revenue?")
 def f_fundraising(ctx):
-    asks = find_terms(ctx.text, ctx.banks["funding_ask"])
-    traction_terms = find_terms(ctx.text, ctx.banks["traction"])
-    traction_claims = ex.claims_by(ctx.claims, "traction")
+    asks = find_terms(ctx.text, ctx.banks["funding_ask"], skip_negated=True)
+    traction_terms = find_terms(ctx.text, ctx.banks["traction"], skip_negated=True)
+    traction_claims = [c for c in ex.claims_by(ctx.claims, "traction") if not c.negated]
     if not asks:
         return FlagResult(UNKNOWN, "Not visibly fundraising; the flag does not apply.")
     if traction_claims:
@@ -281,7 +281,7 @@ def f_credentials(ctx):
       "Many partner names but no evidence of deep collaboration?")
 def f_logo_wall(ctx):
     _overlap, _owned, partners = ex.owned_and_partner_orgs(ctx.claims)
-    deep = find_terms(ctx.text, ctx.banks["deep_collab"])
+    deep = find_terms(ctx.text, ctx.banks["deep_collab"], skip_negated=True)
     distinct = sorted({ex.norm_org(p) for p in partners})
     if len(distinct) >= 4 and not deep:
         return FlagResult(
@@ -300,8 +300,8 @@ def f_logo_wall(ctx):
       "Any third-party coverage not originating from the subject?")
 def f_validation(ctx):
     b = ctx.banks
-    markers = find_terms(ctx.text, b["external_validation"])
-    outlets = find_terms(ctx.text, b["press_outlets"])
+    markers = find_terms(ctx.text, b["external_validation"], skip_negated=True)
+    outlets = find_terms(ctx.text, b["press_outlets"], skip_negated=True)
     independent = [u for u in ctx.source_urls
                    if not any(d in u.lower() for d in b["self_published_domains"])]
     controlled = len(ctx.source_urls) - len(independent)

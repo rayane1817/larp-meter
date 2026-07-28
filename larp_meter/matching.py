@@ -25,17 +25,57 @@ def term_re(term):
     return rx
 
 
-def has_term(text, term):
-    return bool(term_re(term).search(text))
+# Reading a term as evidence when the text denies it inverts the finding.
+# "We have no customers and no revenue" previously satisfied the traction
+# check — clearing the very flag it should have tripped.
+NEGATORS = {
+    "no", "not", "never", "without", "none", "neither", "nor", "lack", "lacks",
+    "lacking", "dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent",
+    "hasnt", "havent", "cannot", "cant", "rather", "instead", "unlike",
+    "avoid", "avoids", "avoiding", "free", "zero", "0", "yet", "besides", "beyond",
+}
+_WORD_RE = re.compile(r"[\w']+")
+_CLAUSE_END_RE = re.compile(r"[.;:!?\n•|]")
+_NEG_LOOKBACK_TOKENS = 6
 
 
-def find_terms(text, terms):
-    """Subset of `terms` present in `text`, order preserved."""
-    return [t for t in terms if term_re(t).search(text)]
+def is_negated(text, start):
+    """Is the term at `start` denied by something earlier in its clause?
+
+    The window reaches back a few words rather than one, so that negation
+    distributes over coordination the way it does in English: in "I do not
+    build technology or hardware", *hardware* is negated too. It stops at the
+    clause boundary, so "no legacy systems at all, and we serve 40 customers"
+    leaves *customers* asserted.
+    """
+    boundary = max((m.end() for m in _CLAUSE_END_RE.finditer(text, 0, start)), default=0)
+    prefix = text[boundary:start].casefold().replace("'", "")
+    recent = _WORD_RE.findall(prefix)[-_NEG_LOOKBACK_TOKENS:]
+    return any(tok in NEGATORS for tok in recent)
 
 
-def count_occurrences(text, terms):
-    return sum(len(term_re(t).findall(text)) for t in terms)
+def _matches(text, term, skip_negated):
+    for m in term_re(term).finditer(text):
+        if skip_negated and is_negated(text, m.start()):
+            continue
+        yield m
+
+
+def has_term(text, term, skip_negated=False):
+    return any(True for _ in _matches(text, term, skip_negated))
+
+
+def find_terms(text, terms, skip_negated=False):
+    """Subset of `terms` asserted in `text`, order preserved.
+
+    With skip_negated, a term the text denies ("no revenue", "not raising")
+    does not count as present.
+    """
+    return [t for t in terms if has_term(text, t, skip_negated)]
+
+
+def count_occurrences(text, terms, skip_negated=False):
+    return sum(sum(1 for _ in _matches(text, t, skip_negated)) for t in terms)
 
 
 # ── Default keyword banks ────────────────────────────────────────────────

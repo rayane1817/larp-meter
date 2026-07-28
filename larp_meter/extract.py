@@ -9,6 +9,8 @@ against a public registry in verify.py.
 import re
 from dataclasses import dataclass, field, asdict
 
+from .matching import is_negated
+
 # Claim verification states
 UNCHECKED = "UNCHECKED"      # never submitted to a verifier
 VERIFIED = "VERIFIED"        # registry confirms the artifact exists
@@ -26,6 +28,7 @@ class Claim:
     status: str = UNCHECKED
     detail: str = ""           # human-readable verification result
     source: str = ""           # URL consulted by the verifier
+    negated: bool = False      # the text denies this ("no customers", "not raising")
 
     def to_dict(self):
         return asdict(self)
@@ -121,12 +124,13 @@ def extract_claims(text):
     claims = []
     seen = set()
 
-    def add(kind, subtype, value, context):
+    def add(kind, subtype, value, context, negated=False):
         key = (kind, subtype, value.casefold())
         if key in seen:
             return
         seen.add(key)
-        claims.append(Claim(kind=kind, subtype=subtype, value=value, context=context))
+        claims.append(Claim(kind=kind, subtype=subtype, value=value, context=context,
+                            negated=negated))
 
     for subtype, rx in ARTIFACT_PATTERNS:
         for m in rx.finditer(text):
@@ -160,7 +164,11 @@ def extract_claims(text):
         add("partnership", "partner_org", m.group(1).strip(), _context(text, m))
 
     for m in TRACTION_RE.finditer(text):
-        add("traction", m.group(2).lower(), f"{m.group(1).strip()} {m.group(2)}", _context(text, m))
+        # "no customers" and "0 users" are not traction.
+        amount = m.group(1).strip()
+        zero = re.fullmatch(r"[€$£]?\s?0+([.,]0+)?", amount) is not None
+        add("traction", m.group(2).lower(), f"{amount} {m.group(2)}", _context(text, m),
+            negated=zero or is_negated(text, m.start()))
 
     for m in EXPERIENCE_RE.finditer(text):
         add("timeline", "claimed_experience_years", m.group(1), _context(text, m))

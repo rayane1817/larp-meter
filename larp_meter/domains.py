@@ -237,7 +237,8 @@ def education_text(text):
 def _hits(text, domain, facet, edu_text=None):
     if facet == "credentials":
         text = edu_text if edu_text is not None else education_text(text)
-    return find_terms(text, DOMAINS[domain][facet])
+    # "I do not build technology" is a disclaimer, not a claim to expertise.
+    return find_terms(text, DOMAINS[domain][facet], skip_negated=True)
 
 
 def profile(text):

@@ -50,7 +50,19 @@ Two fairness rules are built in:
 - **Credentials only count inside an education context.** Otherwise the sentence "we run a quantitative **finance** fund" reads as a finance qualification and clears the very flag it should trip.
 - **Only credential-gated domains can trigger a mismatch** (technology, science, medicine, finance, law). Marketing, design, business and policy are open-entry, so a "missing degree" there is not evidence of anything — flagging it would just punish self-taught people and career changers.
 
-### 3. Absence of evidence is never innocence
+### 3. Absence of evidence is never an accusation
+
+The failure mode that matters in a due-diligence tool is not missing a fraud — it is libelling an honest person. v3 was put through an adversarial review specifically hunting for that, and the fixes are load-bearing:
+
+- **Existence is not attribution, and silence is neither.** A registry that returns no usable names — a book with no author array, an ORCID record set to private, arXiv's 200-OK error feed, scraped patent markup that drifted — returns `UNCHECKABLE`. Only a registry that *does* list names and does not list the subject returns `MISMATCH`.
+- **Attribution requires `--name`.** Without it the tool reports that an artifact exists and says so, rather than comparing against a placeholder.
+- **A blocked network is not an empty world.** Search failures are never cached as emptiness, and flag 10 returns `UNKNOWN` when the search layer could not reach its sources.
+- **Failure to parse is not concealment.** An institution name the extractor cannot read (common outside English) makes the credential flag `UNKNOWN`, not triggered.
+- **Registry absence is a lead, not a verdict.** ROR indexes research organizations, so the report says "confirm directly" rather than asserting an institution is fake.
+- **Namesakes are not merged.** Web results that are not clearly about the subject are excluded from scoring and reported as set aside, and the tool warns when several people share the name.
+- **Reporting on a field is not claiming to work in it.** A technology journalist or a recruiter placing engineers is not treated as claiming technical expertise.
+
+### 4. Absence of evidence is never innocence
 
 Every flag returns `TRIGGERED`, `PASSED`, or **`UNKNOWN`**. Unknown flags are excluded from the score entirely and lower *evidence coverage* instead. Below 35% coverage the tool refuses to grade and returns `INSUFFICIENT DATA`.
 
@@ -69,7 +81,7 @@ coverage   = (weight of decided flags) / (total weight, 17.0)
 
 Results are also broken down **by dimension** — credentials, track record, relationships, rhetoric, validation — because one number hides where the problem actually is.
 
-### 4. Web mode no longer depends on scraping
+### 5. Web mode no longer depends on scraping
 
 Search engines now answer automated requests with anti-bot pages. Instead of one scraper, v3 runs a **provider chain** of authoritative key-free APIs, and treats HTML search as an optional bonus:
 
@@ -110,7 +122,7 @@ Python 3.8+, **zero dependencies**, stdlib only. Runs on Windows and POSIX.
 ```bash
 git clone https://github.com/rayane1817/larp-meter.git
 cd larp-meter
-python larp-meter.py --selftest     # 132 tests
+python larp-meter.py --selftest     # 212 tests
 python larp-meter.py --explain      # full methodology
 ```
 
@@ -122,8 +134,8 @@ python larp-meter.py --file bio.txt
 # Web footprint via the provider chain, with registry verification
 python larp-meter.py "Jane Doe" --verify --name "Jane Doe"
 
-# Read the top result pages too
-python larp-meter.py "Jane Doe" --deep
+# Read the top result pages too; --refresh bypasses the cache
+python larp-meter.py "Jane Doe" --deep --refresh
 
 # Machine-readable / reports
 python larp-meter.py --text "..." --json --no-save

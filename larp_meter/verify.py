@@ -268,7 +268,7 @@ class Verifier:
         return claim
 
     def verify_arxiv(self, claim):
-        url = f"http://export.arxiv.org/api/query?id_list={urllib.parse.quote(claim.value)}"
+        url = f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(claim.value)}"
         body, ok = self._get(url, accept="application/atom+xml")
         if not ok:
             return self._uncheckable(claim, "arXiv unreachable")

@@ -15,7 +15,8 @@ from datetime import datetime
 from . import TRIGGERED, PASSED, UNKNOWN
 from . import extract as ex
 from . import domains as dom
-from .matching import find_terms, count_occurrences, host_matches, load_banks
+from .matching import (find_terms, count_occurrences, find_non_overlapping,
+                       host_matches, load_banks)
 
 CREDENTIALS = "credentials"
 TRACK_RECORD = "track record"
@@ -98,6 +99,26 @@ def f_education(ctx):
                           f"A degree is mentioned but its field is unclear, so it cannot be matched "
                           f"against the claimed {dom.label(claimed)} expertise.")
 
+    # Working ON a domain is not claiming to BE in it. A technology journalist,
+    # a recruiter for engineers or a lawyer advising chip companies all name
+    # technical subject matter without asserting technical expertise. If their
+    # credentials fit the occupation their own roles describe, there is no gap.
+    #
+    # This does not apply to someone holding a senior title: "Chief Medical
+    # Officer" is a claim to be in the domain, not to report on it.
+    if not find_terms(ctx.text, ctx.banks["leadership_titles"]):
+        roles = dom.supporting_domains(ctx.text, "roles", prof)
+        for role_domain in roles:
+            if role_domain == claimed:
+                continue
+            fits, via_role = dom.is_supported(role_domain, credentials)
+            if fits:
+                return FlagResult(
+                    PASSED,
+                    f"Works in {dom.label(role_domain)} with training in {dom.label(via_role)}. "
+                    f"{dom.label(claimed).capitalize()} terms appear as subject matter rather "
+                    f"than as a claim of expertise.")
+
     others = ", ".join(dom.label(d) for d in sorted(credentials))
     return FlagResult(
         TRIGGERED,
@@ -164,8 +185,8 @@ def f_self_referential(ctx):
 def f_buzzwords(ctx):
     if ctx.word_count < 25:
         return FlagResult(UNKNOWN, "Text too short to measure density meaningfully.")
-    distinct = find_terms(ctx.text, ctx.banks["buzzwords"], skip_negated=True)
-    density = count_occurrences(ctx.text, ctx.banks["buzzwords"], skip_negated=True) / ctx.word_count * 100
+    distinct, hits = find_non_overlapping(ctx.text, ctx.banks["buzzwords"], skip_negated=True)
+    density = hits / ctx.word_count * 100
     if len(distinct) >= 4 and density >= 2.0:
         return FlagResult(
             TRIGGERED,

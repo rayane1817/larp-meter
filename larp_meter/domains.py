@@ -261,11 +261,22 @@ def profile(text):
 
 
 def _top(prof, facet, minimum=1):
-    ranked = sorted(prof.items(), key=lambda kv: len(kv[1][facet]), reverse=True)
-    for domain, facets in ranked:
-        if len(facets[facet]) >= minimum:
-            return domain, facets[facet]
-    return None, []
+    """Highest-scoring domain for a facet.
+
+    Ties are broken by supporting evidence and then alphabetically. Relying on
+    dict order silently resolved every tie to `technology` (it is declared
+    first), so mixed-field professionals were pulled into the one domain whose
+    credential mismatch is scored hardest.
+    """
+    candidates = [(d, f) for d, f in prof.items() if len(f[facet]) >= minimum]
+    if not candidates:
+        return None, []
+    best = max(len(f[facet]) for _d, f in candidates)
+    tied = [(d, f) for d, f in candidates if len(f[facet]) == best]
+    if len(tied) == 1:
+        return tied[0][0], tied[0][1][facet]
+    tied.sort(key=lambda kv: (-len(kv[1]["roles"]), -len(kv[1]["credentials"]), kv[0]))
+    return tied[0][0], tied[0][1][facet]
 
 
 def claimed_domain(text, prof=None):

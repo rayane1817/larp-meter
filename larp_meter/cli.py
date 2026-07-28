@@ -319,8 +319,32 @@ def build_parser():
 
 
 def main(argv=None):
+    """Entry point. Returns an exit code; user errors are messages, not tracebacks."""
+    try:
+        return _run(build_parser().parse_args(argv))
+    except KeyboardInterrupt:
+        print("\n  interrupted", file=sys.stderr)
+        return 130
+    except FileNotFoundError as exc:
+        print(f"  error: no such file: {exc.filename}", file=sys.stderr)
+        return 2
+    except PermissionError as exc:
+        print(f"  error: permission denied: {exc.filename}", file=sys.stderr)
+        return 2
+    except IsADirectoryError as exc:
+        print(f"  error: expected a file but found a directory: {exc.filename}", file=sys.stderr)
+        return 2
+    except json.JSONDecodeError as exc:
+        print(f"  error: malformed JSON in the batch file (line {exc.lineno}): {exc.msg}",
+              file=sys.stderr)
+        return 2
+    except UnicodeDecodeError:
+        print("  error: input file is not valid UTF-8 text", file=sys.stderr)
+        return 2
+
+
+def _run(args):
     _fix_console()
-    args = build_parser().parse_args(argv)
 
     if args.selftest:
         return cmd_selftest(args)

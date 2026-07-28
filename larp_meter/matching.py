@@ -79,6 +79,29 @@ def count_occurrences(text, terms, skip_negated=False):
     return sum(sum(1 for _ in _matches(text, t, skip_negated)) for t in terms)
 
 
+def find_non_overlapping(text, terms, skip_negated=False):
+    """(distinct terms, occurrence count) counting each span of text once.
+
+    Banks legitimately contain nested entries ("paradigm" and "paradigm
+    shift"). Counting both made one phrase read as two separate buzzwords and
+    doubled the density, so a single cliche could carry the flag.
+    """
+    spans = []
+    for term in terms:
+        for m in _matches(text, term, skip_negated):
+            spans.append((m.start(), m.end(), term))
+    # Longest first, so "paradigm shift" claims the span before "paradigm".
+    spans.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+    taken, chosen = [], []
+    for start, end, term in spans:
+        if any(start < t_end and end > t_start for t_start, t_end in taken):
+            continue
+        taken.append((start, end))
+        chosen.append(term)
+    distinct = list(dict.fromkeys(chosen))
+    return distinct, len(chosen)
+
+
 # ── Default keyword banks ────────────────────────────────────────────────
 DEFAULT_BANKS = {
     "tech_edu": [

@@ -86,9 +86,12 @@ OWNED_ORG_RE = re.compile(
     r"(?i:founder|co-founder|founded|president|created|established|my company|"
     r"chairman|owner|ceo|cto)\s+(?i:(?:and\s+\w+\s+)?(?:of|at|@))\s+"
     r"([A-Z][\w&-]*(?:[ \t][A-Z][\w&-]*){0,3})")
+# The honorific guard stops "partnership with Dr. Smith" being recorded as a
+# partner organization called "Dr", which then counted toward the logo wall.
 PARTNER_ORG_RE = re.compile(
     r"(?i:partner(?:ship|ed|s)?|collaborat\w+|mou|alliance|consortium|agreement|"
     r"teamed\s+up)\s+(?i:with|between)\s+"
+    r"(?!(?:Dr|Mr|Mrs|Ms|Prof|Sir|Dame|Rev|The)\b)"
     r"([A-Z][\w&-]*(?:[ \t][A-Z][\w&-]*){0,3})")
 
 ROLE_RE = re.compile(

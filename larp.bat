@@ -1,3 +1,2 @@
 @echo off
-cd /d C:Usersuserlarp-meter
-python larp-meter.py %*
+python "%~dp0larp-meter.py" %*

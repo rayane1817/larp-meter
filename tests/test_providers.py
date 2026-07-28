@@ -135,6 +135,42 @@ class TestGatherChain(unittest.TestCase):
         self.assertIn("exploding", bundle.providers_failed)
         self.assertIn("wikipedia", bundle.providers_ok)
 
+    def test_namesake_material_is_excluded_from_the_corpus(self):
+        """A search for a common name returns several people. Merging them into one
+        profile would attribute a stranger's claims to the subject."""
+        bundle = providers.Gathered(findings=[
+            providers.Finding("https://a", "Ada Lovelace", "mathematician", about_subject=True),
+            providers.Finding("https://b", "Rex Falsum", "convicted fraudster",
+                              about_subject=False)])
+        self.assertIn("Ada Lovelace", bundle.corpus)
+        self.assertNotIn("fraudster", bundle.corpus)
+        self.assertEqual(bundle.used_urls, ["https://a"])
+        self.assertEqual(bundle.urls, ["https://a", "https://b"])   # still listed for the human
+        self.assertEqual(len(bundle.discarded), 1)
+
+    def test_wikipedia_passing_mention_is_not_treated_as_the_subject(self):
+        _findings, signals = providers.Wikipedia(
+            stub({"wikipedia.org": WIKI_BODY})).search("Ada Lovelace")
+        bundle = providers.Gathered(
+            findings=providers.Wikipedia(stub({"wikipedia.org": WIKI_BODY})).search("Ada Lovelace")[0])
+        self.assertIn("English", bundle.corpus)             # the article about her
+        self.assertNotIn("in passing", bundle.corpus)       # the article that mentions her
+        self.assertEqual(signals["wikipedia_about_subject"], ["Ada Lovelace"])
+
+    def test_ambiguous_identity_is_reported(self):
+        body = json.dumps({"results": [
+            {"id": "A1", "display_name": "Ada Lovelace", "works_count": 11,
+             "cited_by_count": 429, "last_known_institutions": []},
+            {"id": "A2", "display_name": "Ada Lovelace", "works_count": 3,
+             "cited_by_count": 5, "last_known_institutions": []}]})
+        _f, signals = providers.OpenAlex(stub({"openalex.org": body})).search("Ada Lovelace")
+        self.assertEqual(signals["ambiguous_identity"], 2)
+
+    def test_single_match_is_not_flagged_ambiguous(self):
+        _f, signals = providers.OpenAlex(
+            stub({"openalex.org": OPENALEX_BODY})).search("Ada Lovelace")
+        self.assertNotIn("ambiguous_identity", signals)
+
     def test_urls_are_deduplicated_in_order(self):
         bundle = providers.Gathered(findings=[
             providers.Finding("https://a", "A"), providers.Finding("https://b", "B"),

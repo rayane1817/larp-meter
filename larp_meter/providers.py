@@ -40,6 +40,7 @@ class Finding:
     provider: str = ""
     kind: str = "web"          # encyclopedia | publication | profile | web
     independent: bool = True   # not a platform the subject controls
+    about_subject: bool = True # does this material actually describe the subject?
 
     def as_text(self):
         return f"{self.title}. {self.snippet}".strip()
@@ -54,16 +55,35 @@ class Gathered:
 
     @property
     def corpus(self):
-        return "\n".join(f.as_text() for f in self.findings)
+        """Only material that plausibly describes the subject.
+
+        A name search returns several different people. Pouring all of it into
+        one profile would attribute a stranger's claims to the subject — the
+        cheapest way this tool could produce a false accusation.
+        """
+        return "\n".join(f.as_text() for f in self.findings if f.about_subject)
 
     @property
     def urls(self):
+        return self._urls(only_used=False)
+
+    @property
+    def used_urls(self):
+        return self._urls(only_used=True)
+
+    def _urls(self, only_used):
         seen, out = set(), []
         for f in self.findings:
+            if only_used and not f.about_subject:
+                continue
             if f.url and f.url not in seen:
                 seen.add(f.url)
                 out.append(f.url)
         return out
+
+    @property
+    def discarded(self):
+        return [f for f in self.findings if not f.about_subject]
 
 
 def _is_independent(url):
@@ -103,9 +123,11 @@ class Wikipedia(Provider):
             title = h.get("title", "")
             snippet = re.sub(r"<[^>]+>", "", h.get("snippet", ""))
             page = "https://en.wikipedia.org/wiki/" + urllib.parse.quote(title.replace(" ", "_"))
-            findings.append(Finding(page, title, snippet, self.name, self.kind, True))
-            # An article ABOUT the subject is far stronger than a passing mention.
-            if names.name_matches(subject, [title]):
+            # An article ABOUT the subject is validation; one that merely mentions
+            # them is not, and its text must not be read as their own claims.
+            is_about = bool(names.name_matches(subject, [title]))
+            findings.append(Finding(page, title, snippet, self.name, self.kind, True, is_about))
+            if is_about:
                 exact.append(title)
         return findings, {"wikipedia_articles": len(findings),
                           "wikipedia_about_subject": exact}
@@ -127,11 +149,12 @@ class OpenAlex(Provider):
         except Exception:
             return [], {}
 
-        findings, best = [], None
+        findings, best, matches = [], None, 0
         for a in results:
             display = a.get("display_name", "")
             if not names.name_matches(subject, [display]):
                 continue      # a different researcher who happens to rank highly
+            matches += 1
             works = a.get("works_count", 0)
             cited = a.get("cited_by_count", 0)
             insts = [i.get("display_name") for i in (a.get("last_known_institutions") or [])
@@ -140,11 +163,16 @@ class OpenAlex(Provider):
                 a.get("id", ""), f"{display} — scholarly record",
                 f"{works} works, {cited} citations"
                 + (f", affiliated with {', '.join(insts)}" if insts else ""),
-                self.name, self.kind, True))
+                self.name, self.kind, True, True))
             if best is None or works > best.get("works", 0):
                 best = {"works": works, "citations": cited, "institutions": insts,
                         "orcid": a.get("orcid"), "display_name": display}
-        return findings, ({"openalex": best} if best else {"openalex": None})
+        signals = {"openalex": best}
+        # Several distinct researchers sharing the name means any web-mode
+        # conclusion may be conflating people. The human needs to know.
+        if matches > 1:
+            signals["ambiguous_identity"] = matches
+        return findings, signals
 
 
 class Crossref(Provider):
@@ -173,7 +201,7 @@ class Crossref(Provider):
             doi = it.get("DOI", "")
             findings.append(Finding(f"https://doi.org/{doi}" if doi else "", title,
                                     f"authors: {', '.join(authors[:5])}",
-                                    self.name, self.kind, True))
+                                    self.name, self.kind, True, True))
         return findings, {"crossref_works": len(findings)}
 
 
@@ -195,8 +223,11 @@ class DuckDuckGo(Provider):
             link = urllib.parse.unquote(uddg.group(1)) if uddg else href
             title = re.sub(r"<[^>]+>", "", title_html).strip()
             if link.startswith("http") and title:
+                # A general web hit only counts as the subject's if their name
+                # is actually in it; namesakes are otherwise silently merged.
+                is_about = bool(names.name_matches(subject, [title]))
                 findings.append(Finding(link, title, "", self.name, self.kind,
-                                        _is_independent(link)))
+                                        _is_independent(link), is_about))
             if len(findings) >= 8:
                 break
         return findings, {}

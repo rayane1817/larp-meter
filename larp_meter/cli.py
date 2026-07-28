@@ -76,12 +76,20 @@ def cmd_web(args, target):
         else:
             print("\n  ⚠ No source returned anything. Public APIs may be unreachable from this "
                   "network. Fall back to --text with a pasted bio.")
-    report = run_audit(target, bundle.corpus, mode="web", source_urls=bundle.urls,
+    report = run_audit(target, bundle.corpus, mode="web", source_urls=bundle.used_urls,
                        subject_name=args.name or target, verify=args.verify,
                        cache_dir=CACHE_DIR, progress=_progress(args),
                        signals=bundle.signals)
     report["providers_ok"] = bundle.providers_ok
     report["providers_failed"] = bundle.providers_failed
+    report["sources_discarded"] = [f.url for f in bundle.discarded if f.url]
+    if not args.json and not args.quiet:
+        if bundle.discarded:
+            print(f"  {len(bundle.discarded)} result(s) set aside as not clearly about "
+                  f"{target} — they were NOT scored.")
+        if bundle.signals.get("ambiguous_identity"):
+            print(f"  ⚠ {bundle.signals['ambiguous_identity']} different people share this name "
+                  f"in the scholarly record. Confirm you are looking at the right one.")
     _emit(report, args)
     return report
 

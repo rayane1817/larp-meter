@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is a first-class target: the console encoding and path
+        # handling have both broken this tool before.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run the test suite
+        # The suite is fully offline — every registry and provider call is stubbed.
+        run: python -m unittest discover -s tests -t . -v
+      - name: Smoke-test the CLI
+        run: |
+          python larp-meter.py --version
+          python larp-meter.py --explain
+          python larp-meter.py --text "Founder building AI. MSc public health. Seeking investment." --no-save --json

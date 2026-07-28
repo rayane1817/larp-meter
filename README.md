@@ -1,122 +1,184 @@
-# LARP Meter v2 — Claim-vs-Evidence Auditor
+# LARP Meter v3 — Claim-vs-Evidence Auditor
 
-**Audit professional self-presentation (LinkedIn bios, pitch text, "About" pages) against verifiable substance. Quantify the gap between image and evidence.**
+**Audit professional self-presentation against verifiable substance, and check the checkable claims against public registries.**
 
-A due-diligence *triage* tool: it surfaces red flags worth investigating by hand. It does not render verdicts about people.
+A due-diligence *triage* instrument. It surfaces leads worth investigating by hand. It does not render verdicts about people, and it is built to say **"I don't know"** rather than guess.
+
+```bash
+python larp-meter.py --text "President @ DeepTech. MoU signed. Seeking 8-12M. MSc Public Health."
+python larp-meter.py "Jane Doe" --verify --name "Jane Doe"
+```
 
 ---
 
-## What's new in v2 (methodology)
+## What makes v3 different
 
-v1 counted keyword hits with substring matching and treated every flag it couldn't evaluate as "passed". v2 fixes the methodology from the ground up:
+v1 counted keywords. v2 fixed the counting. v3 stops trusting the text at all where a public registry can answer instead.
 
-| Problem in v1 | Fix in v2 |
-|---|---|
-| `"ai" in text` matched *said*, *email*, *airline* | Word-boundary regex matching; hyphen/space variants (`edge-AI` = `edge ai`) |
-| Absence of evidence counted as innocence → inflated GREEN | **Three-state flags**: TRIGGERED / PASSED / UNKNOWN. Undecidable flags reduce *evidence coverage*, never the risk score |
-| All 10 flags weighed equally | **Weighted scoring** — structural deception (self-referential partners ×2.0, credential mismatch ×1.5) outweighs stylistic signals (buzzwords ×1.0) |
-| Buzzword count triggered on any long text | **Normalized density** (occurrences per 100 words) + minimum distinct-term threshold |
-| Self-referential partner detection hardcoded specific org names | **Generic detection**: extracts orgs the subject *leads* and orgs they call *partners*, flags the overlap |
-| No notion of how much evidence the verdict rests on | **Evidence coverage %** — below 35 % coverage the tool refuses to score and returns `INSUFFICIENT DATA` |
-| Nothing measured "specific vs vague" | **Specificity index** — verifiable details (years, amounts, URLs, DOIs, patent IDs, named institutions) per 100 words |
-| ~250 lines of duplicated logic between modes | One `analyze()` engine shared by text, web, and file modes |
+### 1. Claims are verified, not just pattern-matched
 
-### Scoring model
+Identifiers found in a profile are checked against the registry that owns them:
+
+| Claim | Registry | Answers |
+|---|---|---|
+| DOI | Crossref | Does the paper exist? Is the subject an author? |
+| ORCID | orcid.org | Does the record exist, and whose is it? |
+| arXiv ID | arXiv API | Real preprint? Listed authors? |
+| GitHub repo | GitHub API | Exists? Stars, last push, **empty repo?** |
+| NCT number | ClinicalTrials.gov | Registered trial? Current status? |
+| Patent number | Google Patents | Real grant? Listed inventors? |
+| Institution | ROR | Is this a real organization? |
+
+**Existence is not attribution.** With `--name`, an artifact that exists but does not list the subject returns `MISMATCH` — a far stronger signal than a missing one, and the single most useful thing this tool produces:
 
 ```
-LARP score = 100 × (weight of TRIGGERED flags) / (weight of all DECIDED flags)
-coverage   = (weight of decided flags) / (total weight)
+Claim ledger  (registry lookups)
+  ✗ doi     10.1038/nature14539    MISMATCH
+    Paper "Deep learning" exists but does NOT list the subject (Yann LeCun, Yoshua Bengio, …)
+  ✗ github  acme/nonexistent-repo  NOT_FOUND
+    GitHub repository 'acme/nonexistent-repo' does not exist.
+```
+
+### 2. It works on every profession, not just tech
+
+Flags 1 and 2 used to be hardcoded to one archetype: a non-technical person claiming deep tech. A finance, medical or legal fabricator sailed through, and honest non-technical professionals were unscoreable.
+
+v3 uses a **domain taxonomy** (technology, science, medicine, finance, law, policy, business, marketing, design, education). Each domain carries claim markers, credential markers and role markers, plus an adjacency map so a physicist leading an AI venture is not treated as a fraud.
+
+Two fairness rules are built in:
+
+- **Credentials only count inside an education context.** Otherwise the sentence "we run a quantitative **finance** fund" reads as a finance qualification and clears the very flag it should trip.
+- **Only credential-gated domains can trigger a mismatch** (technology, science, medicine, finance, law). Marketing, design, business and policy are open-entry, so a "missing degree" there is not evidence of anything — flagging it would just punish self-taught people and career changers.
+
+### 3. Absence of evidence is never innocence
+
+Every flag returns `TRIGGERED`, `PASSED`, or **`UNKNOWN`**. Unknown flags are excluded from the score entirely and lower *evidence coverage* instead. Below 35% coverage the tool refuses to grade and returns `INSUFFICIENT DATA`.
+
+```
+LARP score = 100 × (weight of TRIGGERED flags) / (weight of DECIDED flags)
+coverage   = (weight of decided flags) / (total weight, 17.0)
 ```
 
 | Verdict | Condition |
 |---|---|
-| ⚪ INSUFFICIENT DATA | coverage < 35 % — refuse to score |
+| ⚪ INSUFFICIENT DATA | coverage < 35% — refuses to score |
 | 🟢 GREEN | score < 20 |
 | 🟡 YELLOW | 20–39 |
 | 🟠 ORANGE | 40–64 |
 | 🔴 RED | ≥ 65 |
 
-### The 10 flags (with weights)
+Results are also broken down **by dimension** — credentials, track record, relationships, rhetoric, validation — because one number hides where the problem actually is.
 
-| # | Flag | W | Detects |
-|---|---|---|---|
-| 1 | Education ≠ Claimed Domain | 1.5 | Non-technical degree + deep-tech expertise claims |
-| 2 | Experience ≠ Declared Title | 1.5 | "President @ AI startup" with only policy/advocacy history |
-| 3 | Self-Referential Partners | 2.0 | Own organizations listed as "partners" (circular validation) |
-| 4 | Buzzword Density | 1.0 | Hype language, normalized per 100 words |
-| 5 | Vague Partnerships Only | 1.0 | MoUs/NDAs/"in talks" instead of contracts, grants, revenue |
-| 6 | No Verifiable Output | 1.5 | "Building/developing" without any checkable artifact (DOI, patent no., repo, trial ID, certification) |
-| 7 | Fundraising Without Traction | 1.5 | Raising money with zero customers/revenue mentioned |
-| 8 | Unverifiable Credentials | 1.0 | Degree claimed without naming an institution |
-| 9 | Logo Wall Syndrome | 1.0 | ≥4 partner names, zero deep-collaboration evidence |
-| 10 | No Independent Validation | 1.0 | Big claims, zero third-party coverage |
+### 4. Web mode no longer depends on scraping
 
-Hard-evidence patterns that flip flag 6 to PASSED: DOIs, patent numbers (US/EP/WO), GitHub repos, arXiv IDs, ORCID, FDA/CE clearance, ClinicalTrials.gov registrations.
+Search engines now answer automated requests with anti-bot pages. Instead of one scraper, v3 runs a **provider chain** of authoritative key-free APIs, and treats HTML search as an optional bonus:
+
+- **Wikipedia** — independent encyclopedic coverage (real third-party validation, not a self-published bio)
+- **OpenAlex** — publication and citation record, with author-name matching so a prolific stranger isn't credited to your subject
+- **Crossref** — publications by author
+- **DuckDuckGo** — best-effort, frequently blocked, never required
+
+A provider that fails contributes nothing and is reported as unavailable. **A network failure is never treated as evidence against the subject.**
 
 ---
 
-## Install
+## The 12 flags
 
-Python 3.8+, stdlib only — no dependencies.
+| # | Flag | W | Dimension | Detects |
+|---|---|---|---|---|
+| 1 | Education ≠ Claimed Domain | 1.5 | credentials | Credentials in an unrelated field to the one claimed |
+| 2 | Experience ≠ Declared Title | 1.5 | credentials | Senior title with no role history in that domain |
+| 3 | Self-Referential Partners | 2.0 | relationships | Own organizations presented as independent "partners" |
+| 4 | Buzzword Density | 1.0 | rhetoric | Hype per 100 words, with a distinct-term threshold |
+| 5 | Vague Partnerships Only | 1.0 | relationships | MoUs and NDAs instead of contracts, grants, revenue |
+| 6 | No Verifiable Output | 1.5 | track record | "Building" with no checkable artifact anywhere |
+| 7 | Fundraising Without Traction | 1.5 | track record | Raising money with zero customers or revenue |
+| 8 | Unverifiable Credentials | 1.0 | credentials | Degree with no institution, or one absent from ROR |
+| 9 | Logo Wall Syndrome | 1.0 | relationships | Many partner names, no substantive joint work |
+| 10 | No Independent Validation | 1.0 | validation | Only self-controlled platforms; pure echo chamber |
+| 11 | **Contradicted Verifiable Claim** | 2.5 | track record | A registry actively refutes a specific claim |
+| 12 | **Timeline Implausibility** | 1.5 | credentials | Claimed durations that don't fit the stated dates |
+
+Flag 11 carries the heaviest weight because it is the only flag backed by an external authority rather than by reading tea leaves. Institution misses are deliberately *excluded* from it and handled by flag 8 at lower weight, since ROR indexes research organizations and a small or non-research school can be legitimately absent.
+
+---
+
+## Install & usage
+
+Python 3.8+, **zero dependencies**, stdlib only. Runs on Windows and POSIX.
 
 ```bash
 git clone https://github.com/rayane1817/larp-meter.git
 cd larp-meter
-python larp-meter.py --selftest   # verify the methodology tests pass
+python larp-meter.py --selftest     # 132 tests
+python larp-meter.py --explain      # full methodology
 ```
 
-## Usage
-
 ```bash
-# Text mode (most reliable) — paste a bio / About page / pitch
-python larp-meter.py --text "President @ DeepTech. MoU signed. Seeking 8-12M. MSc Public Health."
-
-# From a file
+# Text (most reliable)
+python larp-meter.py --text "<paste a bio>"
 python larp-meter.py --file bio.txt
 
-# Web-search mode (DuckDuckGo HTML endpoint, 7-day cache in cache/)
-python larp-meter.py "Jane Doe"
+# Web footprint via the provider chain, with registry verification
+python larp-meter.py "Jane Doe" --verify --name "Jane Doe"
 
-# Guided 10-question assessment
-python larp-meter.py --interactive
+# Read the top result pages too
+python larp-meter.py "Jane Doe" --deep
 
-# Machine-readable output / no report files
+# Machine-readable / reports
 python larp-meter.py --text "..." --json --no-save
+python larp-meter.py --file bio.txt --html report.html --md report.md
 
-# List past audits
+# Many subjects at once (.jsonl of {name,text} or name<TAB>text lines)
+python larp-meter.py --batch subjects.jsonl --csv summary.csv
+
+# Guided 12-question assessment, and past audits
+python larp-meter.py --interactive
 python larp-meter.py --list
 ```
 
-### Example output
+### Customising the keyword banks
 
-```
-  ────────────────────────────────────────────────────────
-  🔴 RED  |  LARP score: 92/100  |  evidence coverage: 100%
-  ────────────────────────────────────────────────────────
-  Strong LARP pattern: claims structurally unsupported by any verifiable evidence.
-  Specificity index: 1.59 verifiable details per 100 words (low — vague profile)
+Drop a `keywords.json` next to the tool (or point `$LARP_KEYWORDS` at one). A key replaces a bank; prefix it with `+` to extend one:
 
-  🔴 TRIGGERED (9):
-  [3] Self-Referential Partners  (weight 2.0)
-      Organization(s) led by the subject also appear as their 'partners': ...
-  ...
-  ❔ UNDECIDABLE (1) — not counted as passed:
-  ...
+```json
+{
+  "buzzwords": ["synergy", "paradigm shift", "web3-native"],
+  "+tech_claims": ["fusion", "neuromorphic"]
+}
 ```
 
-## Output files
+### Environment
+
+| Variable | Purpose |
+|---|---|
+| `OBSIDIAN_VAULT_PATH` | Write a Markdown note to `<vault>/research/` |
+| `LARP_OUTPUT` / `LARP_CACHE` | Relocate reports and cache |
+| `LARP_KEYWORDS` | Path to a keyword-bank override |
+| `GITHUB_TOKEN` | Raises the GitHub API rate limit during `--verify` |
+
+---
+
+## Output
 
 | Artifact | Location |
 |---|---|
 | JSON report | `output/YYYYMMDD_HHMMSS_<slug>.json` |
-| Obsidian note | `$OBSIDIAN_VAULT_PATH/research/YYYYMMDD-larp-<slug>.md` (only if the vault's `research/` folder exists) |
-| Search cache | `cache/*.json` (TTL 7 days) |
+| HTML report | `--html <path>` — self-contained, light/dark aware |
+| Markdown | `--md <path>`, plus the Obsidian vault if configured |
+| Batch CSV | `--csv <path>` |
+| Caches | `cache/` (search, 7 days) and `cache/verify/` (registries, 30 days) |
 
-## Limitations & ethics
+---
 
-- **Keyword heuristics, not semantics.** Longer, richer input → better results. A short bio will honestly return `INSUFFICIENT DATA` instead of a fake verdict.
-- **Web mode depends on search engines tolerating automated queries**; if results are empty, use `--text`.
-- **Use responsibly.** This tool is for due diligence on *public professional claims* (investors, hiring, partnerships). Flags are leads to verify by hand, not conclusions about a person. Don't publish raw outputs as accusations.
+## Limitations — read before acting on a report
+
+- **Heuristics, not comprehension.** Sarcasm, negation, quoting someone else, and non-English text will all fool it.
+- **It reads what it is given.** A profile that omits a real degree gets scored on the omission.
+- **ROR and OpenAlex skew academic.** Practitioners outside research have thinner registry footprints through no fault of their own; that is why absence lowers coverage instead of raising the score.
+- **A RED verdict is a prompt to investigate, not a finding of dishonesty.** The failure mode that matters here is accusing an honest person, which is why unknowns stay unknown and network failures are never evidence.
+
+Use it for due diligence on public professional claims. Don't publish its output as an accusation.
 
 ## License
 

@@ -1,0 +1,61 @@
+"""Weighted, coverage-aware scoring.
+
+The score is a ratio over *decided* flags only. Flags the evidence cannot
+settle are excluded from both numerator and denominator, and instead lower the
+coverage figure — so a thin profile produces "I don't know", not "looks clean".
+"""
+
+from . import TRIGGERED, PASSED
+from .flags import REGISTRY, FLAG_BY_ID, TOTAL_WEIGHT
+
+LEVELS = [
+    (20, "GREEN", "Claims and verifiable substance broadly align."),
+    (40, "YELLOW", "Some image-versus-substance gap. Verify the specifics before engaging."),
+    (65, "ORANGE", "Significant concerns across weighted flags. Deep due diligence required."),
+    (101, "RED", "Strong LARP pattern: claims are structurally unsupported by any verifiable evidence."),
+]
+
+MIN_COVERAGE = 0.35
+
+
+def score(results):
+    trig_w = sum(FLAG_BY_ID[i]["weight"] for i, r in results.items() if r.status == TRIGGERED)
+    pass_w = sum(FLAG_BY_ID[i]["weight"] for i, r in results.items() if r.status == PASSED)
+    decided_w = trig_w + pass_w
+    coverage = decided_w / TOTAL_WEIGHT if TOTAL_WEIGHT else 0.0
+    larp = round(100 * trig_w / decided_w) if decided_w else 0
+
+    if coverage < MIN_COVERAGE:
+        level = "INSUFFICIENT DATA"
+        summary = ("Not enough decidable evidence to score responsibly. Supply a longer text, "
+                   "or run web mode with --verify.")
+    else:
+        level, summary = next((lv, s) for cut, lv, s in LEVELS if larp < cut)
+
+    return {
+        "score": larp,
+        "coverage": round(coverage * 100),
+        "level": level,
+        "summary": summary,
+        "categories": category_scores(results),
+        "decided": sum(1 for r in results.values() if r.status in (TRIGGERED, PASSED)),
+        "triggered": sum(1 for r in results.values() if r.status == TRIGGERED),
+        "total_flags": len(REGISTRY),
+    }
+
+
+def category_scores(results):
+    """Per-dimension breakdown — one number hides where the problem actually is."""
+    buckets = {}
+    for spec in REGISTRY:
+        r = results.get(spec["id"])
+        if r is None or r.status not in (TRIGGERED, PASSED):
+            continue
+        b = buckets.setdefault(spec["category"], {"trig": 0.0, "dec": 0.0, "flags": 0})
+        b["dec"] += spec["weight"]
+        b["flags"] += 1
+        if r.status == TRIGGERED:
+            b["trig"] += spec["weight"]
+    return {cat: {"score": round(100 * v["trig"] / v["dec"]) if v["dec"] else None,
+                  "flags_decided": v["flags"]}
+            for cat, v in sorted(buckets.items())}

@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to keywords.json (or point $LARP_KEYWORDS here) to tune the banks. A key REPLACES that bank; a key prefixed with + EXTENDS it. Bank names: tech_edu, nontech_edu, degree_words, tech_claims, leadership_titles, tech_roles, policy_roles, buzzwords, vague_partnership, concrete_partnership, building_claims, traction, funding_ask, deep_collab, external_validation, press_outlets, self_published_domains.",
+
+  "+buzzwords": ["web3 native", "ai first", "category defining", "hyperscale"],
+  "+tech_claims": ["fusion", "neuromorphic", "synthetic biology"],
+  "+press_outlets": ["de tijd", "knack", "vrt nws", "heise"],
+  "+concrete_partnership": ["horizon europe", "innosuisse", "vlaio grant"]
+}

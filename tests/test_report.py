@@ -40,13 +40,34 @@ class TestCaveats(unittest.TestCase):
     def test_low_coverage_flagged_as_provisional(self):
         self.assertIn("provisional", " ".join(caveats(audit("Founder. Building things."))))
 
-    def test_clean_high_coverage_report_has_fewer_caveats(self):
-        rich = ("CTO at Marrow Robotics. MSc Electrical Engineering, Delft University of "
-                "Technology, 2015. Ten years of experience as an engineer. Patent US10123456. "
-                "40 customers, 2.1M revenue in 2024. Funded by a grant; contract with a port "
-                "authority. Featured in Reuters. Partnership with Orion Systems; we co-authored "
-                "a joint paper. Not fundraising.")
-        self.assertLess(len(caveats(audit(rich, verify=False))), len(caveats(audit())))
+    RICH = ("CTO at Marrow Robotics. MSc Electrical Engineering, Delft University of "
+            "Technology, 2015. Ten years of experience as an engineer. Patent US10123456. "
+            "40 customers, 2.1M revenue in 2024. Funded by a grant; contract with a port "
+            "authority. Featured in Reuters. Partnership with Orion Systems; we co-authored "
+            "a joint paper. Not fundraising.")
+
+    def test_high_coverage_report_drops_the_provisional_caveat(self):
+        self.assertFalse([c for c in caveats(audit(self.RICH)) if "provisional" in c])
+        self.assertTrue([c for c in caveats(audit()) if "provisional" in c])
+
+    def test_a_clean_unverified_verdict_is_marked_as_the_subjects_own_account(self):
+        """The most consequential thing a reader can misread. A well-written
+        fabrication passes text mode, so a clean unverified result must never
+        present itself as corroboration."""
+        report = audit(self.RICH)
+        self.assertIn(report["level"], ("GREEN", "YELLOW"))
+        self.assertTrue([c for c in caveats(report) if "own account" in c])
+
+    def test_an_ungraded_report_does_not_get_the_self_account_caveat(self):
+        """INSUFFICIENT DATA already says it cannot score; there are no passing
+        flags to qualify, so the extra note would just be noise."""
+        report = audit("Founder. Building things.")
+        self.assertEqual(report["level"], "INSUFFICIENT DATA")
+        self.assertFalse([c for c in caveats(report) if "own account" in c])
+
+    def test_the_caveat_is_dropped_once_an_outside_source_corroborates(self):
+        corroborated = audit(self.RICH, signals={"wikipedia_about_subject": ["Some Person"]})
+        self.assertFalse([c for c in caveats(corroborated) if "own account" in c])
 
     def test_caveats_never_raise_on_a_minimal_report(self):
         self.assertIsInstance(caveats({}), list)

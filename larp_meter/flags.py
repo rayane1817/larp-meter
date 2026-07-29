@@ -58,10 +58,17 @@ class AuditContext:
 REGISTRY = []
 
 
-def flag(fid, name, weight, category, question):
+def flag(fid, name, weight, category, question, floor=None):
+    """Register a flag.
+
+    `floor` marks a flag whose evidence is categorically stronger than the
+    rest: when it triggers, the verdict cannot come out better than that level,
+    however much unverified self-assertion passes elsewhere.
+    """
     def deco(fn):
         REGISTRY.append({"id": fid, "name": name, "weight": weight,
-                         "category": category, "question": question, "fn": fn})
+                         "category": category, "question": question,
+                         "floor": floor, "fn": fn})
         return fn
     return deco
 
@@ -377,7 +384,8 @@ def f_validation(ctx):
 
 # ── 11. Contradicted verifiable claim (new in v3) ────────────────────────
 @flag(11, "Contradicted Verifiable Claim", 2.5, TRACK_RECORD,
-      "Did a public registry actively refute a specific claim?")
+      "Did a public registry actively refute a specific claim?",
+      floor="ORANGE")
 def f_contradicted(ctx):
     # Hard identifiers only. An institution missing from ROR is ambiguous (the
     # registry is not exhaustive), so it is handled by flag 8 at a lower weight

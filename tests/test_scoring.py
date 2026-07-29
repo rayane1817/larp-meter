@@ -96,5 +96,43 @@ class TestScoreGating(unittest.TestCase):
         self.assertIn("n/a", render_html(r))
 
 
+class TestContradictionFloor(unittest.TestCase):
+    """A registry contradicting a claim is evidence about the world; the other
+    flags mostly read self-presentation. Without a floor, a fabricated profile
+    absorbed one contradiction under a pile of unverified assertions and still
+    came out GREEN — observed at GREEN 18/100 on a wholly invented bio citing a
+    nonexistent repository and a patent belonging to someone else."""
+
+    def _all_passed_except(self, fid):
+        results = {s["id"]: FlagResult(PASSED) for s in REGISTRY}
+        results[fid] = FlagResult(TRIGGERED)
+        return results
+
+    def test_a_contradiction_cannot_be_averaged_away(self):
+        verdict = score(self._all_passed_except(11))
+        self.assertLess(verdict["raw_score"], 20)        # numerically GREEN
+        self.assertEqual(verdict["level"], "ORANGE")     # but held
+        self.assertIn("Held at ORANGE", verdict["summary"])
+
+    def test_an_ordinary_flag_has_no_floor(self):
+        verdict = score(self._all_passed_except(4))
+        self.assertEqual(verdict["level"], "GREEN")
+
+    def test_the_floor_never_lowers_a_worse_verdict(self):
+        results = {s["id"]: FlagResult(TRIGGERED) for s in REGISTRY}
+        verdict = score(results)
+        self.assertEqual(verdict["level"], "RED")        # not pulled down to ORANGE
+
+    def test_only_flag_11_carries_a_floor(self):
+        floored = [s["id"] for s in REGISTRY if s.get("floor")]
+        self.assertEqual(floored, [11])
+
+    def test_the_floor_does_not_fabricate_a_score_below_the_coverage_gate(self):
+        """A single triggered flag is still too little evidence to grade."""
+        verdict = score({11: FlagResult(TRIGGERED)})
+        self.assertEqual(verdict["level"], "INSUFFICIENT DATA")
+        self.assertIsNone(verdict["score"])
+
+
 if __name__ == "__main__":
     unittest.main()

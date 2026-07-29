@@ -48,6 +48,17 @@ def caveats(report):
         out.append(f"{len(checkable)} identifier(s) could be checked against a public registry "
                    f"but were not — re-run with --verify.")
 
+    # The most important thing a reader can misunderstand. Nothing in text mode
+    # establishes that a claim is TRUE — only that the profile is internally
+    # consistent and specific. A fabricated bio that asserts the right things
+    # passes, and does so easily.
+    if (report.get("level") in ("GREEN", "YELLOW") and not report.get("verified")
+            and not (report.get("signals") or {}).get("wikipedia_about_subject")):
+        out.append("Nothing here was checked against an outside source: the passing flags rest on "
+                   "the subject's own account of themselves. A well-written fabrication passes "
+                   "this easily — treat a clean result as 'no internal contradictions found', "
+                   "not as corroboration.")
+
     if report.get("evidence_coverage_pct", 100) < 50:
         out.append(f"Only {report.get('evidence_coverage_pct')}% of the flag weight could be "
                    f"decided; treat the score as provisional.")

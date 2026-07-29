@@ -38,6 +38,7 @@ def score(results):
                    f"its thinness is worth noting — but thinness is not evidence of deception.")
     else:
         level, summary = next((lv, s) for cut, lv, s in LEVELS if larp < cut)
+        level, summary = _apply_floors(results, level, summary)
 
     return {
         # `scored` gates the number: a report can reach 100 on a single decided
@@ -54,6 +55,34 @@ def score(results):
         "triggered": sum(1 for r in results.values() if r.status == TRIGGERED),
         "total_flags": len(REGISTRY),
     }
+
+
+_SEVERITY_ORDER = ["GREEN", "YELLOW", "ORANGE", "RED"]
+
+
+def _apply_floors(results, level, summary):
+    """Stop a categorically strong signal being averaged away.
+
+    Most flags read self-presentation: they pass on the subject's own word. A
+    public registry contradicting a claim is different in kind, and without a
+    floor a fabricated profile could absorb one contradiction under a pile of
+    unverified assertions and still come out GREEN. Observed doing exactly
+    that: a wholly invented bio citing a nonexistent repository and a patent
+    belonging to someone else scored GREEN 18/100.
+    """
+    floored = [FLAG_BY_ID[i] for i, r in results.items()
+               if r.status == TRIGGERED and FLAG_BY_ID[i].get("floor")]
+    if not floored:
+        return level, summary
+
+    strongest = max(floored, key=lambda f: _SEVERITY_ORDER.index(f["floor"]))
+    if _SEVERITY_ORDER.index(strongest["floor"]) <= _SEVERITY_ORDER.index(level):
+        return level, summary
+
+    return strongest["floor"], (
+        f"Held at {strongest['floor']} by '{strongest['name']}': a public registry contradicts a "
+        f"specific claim. That is evidence about the world rather than about how the profile is "
+        f"written, so the rest of the profile reading well does not offset it.")
 
 
 def category_scores(results):

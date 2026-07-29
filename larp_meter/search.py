@@ -100,18 +100,16 @@ class WebSource:
         return text
 
 
-def gather(name, cache_dir, deep=False, progress=None, refresh=False):
-    """Gather a public footprint via the provider chain. Returns a Gathered bundle."""
+def make_fetcher(cache_dir, refresh=False, failures=None):
+    """A cached, polite fetcher. Returns "" on failure and records the reason.
+
+    Failures are never cached: storing an empty body on a network error turned a
+    blocked request into a permanent "nothing exists" for the cache lifetime.
+    """
     ws = WebSource(cache_dir)
-    failures = []
+    failures = failures if failures is not None else []
 
     def fetch(url, browser=False):
-        """Returns the body, or "" on failure. Failures are never cached.
-
-        Caching an empty body on a network error turned a blocked or throttled
-        request into a permanent "no third-party coverage exists" for the whole
-        cache lifetime — and flag 10 then read that silence as an echo chamber.
-        """
         if not refresh:
             cached = ws._cached("g:" + url)
             if cached is not None:
@@ -129,6 +127,15 @@ def gather(name, cache_dir, deep=False, progress=None, refresh=False):
         time.sleep(ws.delay)
         return body
 
+    return fetch
+
+
+def gather(name, cache_dir, deep=False, progress=None, refresh=False):
+    """Gather a public footprint via the provider chain. Returns a Gathered bundle."""
+    ws = WebSource(cache_dir)
+    failures = []
+
+    fetch = make_fetcher(cache_dir, refresh=refresh, failures=failures)
     bundle = providers.gather(name, fetch, progress=progress)
 
     if deep:

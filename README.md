@@ -5,8 +5,9 @@
 A due-diligence *triage* instrument. It surfaces leads worth investigating by hand. It does not render verdicts about people, and it is built to say **"I don't know"** rather than guess.
 
 ```bash
+python larp-meter.py --url https://linkedin.com/in/jane-doe --text "<paste the profile>"
+python larp-meter.py --url https://github.com/janedoe --verify
 python larp-meter.py --text "President @ DeepTech. MoU signed. Seeking 8-12M. MSc Public Health."
-python larp-meter.py "Jane Doe" --verify --name "Jane Doe"
 ```
 
 ---
@@ -124,7 +125,7 @@ Python 3.8+, **zero dependencies**, stdlib only. Runs on Windows and POSIX.
 ```bash
 git clone https://github.com/rayane1817/larp-meter.git
 cd larp-meter
-python larp-meter.py --selftest     # 274 tests
+python larp-meter.py --selftest     # 303 tests
 python larp-meter.py --explain      # full methodology
 ```
 
@@ -185,12 +186,35 @@ Drop a `keywords.json` next to the tool (or point `$LARP_KEYWORDS` at one). A ke
 
 ---
 
+## Audit a profile, not a name
+
+**A name is not an identifier.** Auditing a bare name searches for it, and a search cannot tell two people apart. Run on one real name, the tool pulled together two obituaries, a people-search page, a LinkedIn disambiguation directory, a social account and an unrelated researcher's publications — and scored all of it as a single individual.
+
+`--url` anchors the report to one account:
+
+```bash
+python larp-meter.py --url https://be.linkedin.com/in/jane-doe --text "<paste the profile>"
+python larp-meter.py --url https://github.com/janedoe --verify
+python larp-meter.py --url https://orcid.org/0000-0002-1825-0097
+```
+
+| Platform | What it yields |
+|---|---|
+| `linkedin.com/in/<name>` | Best effort. The public preview exposes the account holder's name, headline and the opening of the About section, but LinkedIn answers many requests with HTTP 999 or a login wall. When it refuses, the URL still fixes *whose* profile this is — paste the text with `--text`. |
+| `github.com/<user>` | A real API: account age, repositories, followers, bio. |
+| `orcid.org/<id>` | A real API: registered name and biography. |
+
+Directory, company, school and search URLs are **refused**, with an explanation. A LinkedIn `/pub/dir/` page is the very thing that proves a name is shared, so accepting it would reintroduce the bug this mode exists to fix.
+
+The anchor is honest about its limits: it identifies the profile, but any corroborating sources (Wikipedia, OpenAlex, Crossref) are still located **by name**, so those may belong to someone else. The report says so.
+
 ## Who this tool cannot assess
 
 Measured, not guessed. A matched-pair audit of the scoring produced these:
 
 - **A well-written fabrication passes text mode.** An entirely invented profile — fake company, fake patent number, nonexistent repository, invented press mention — scored **GREEN 0/100 at 68% coverage**. Nothing in text mode establishes that a claim is *true*, only that the profile is specific and internally consistent. `--verify` is what closes this: it caught the same profile's nonexistent repository and a patent number belonging to somebody else's soybean cultivar. **Treat an unverified GREEN as "no internal contradictions found", never as corroboration** — the report now says so itself.
 - **Trades and non-academic professions are out of scope.** A master plumber with fifteen years and 400 installations yields **0% evidence coverage**: every registry this tool consults is academic or corporate. It correctly returns INSUFFICIENT DATA rather than judging, but it has nothing useful to say about most of the working population.
+- **A bare name search cannot identify anyone.** Use `--url` to anchor the report to one account; without it, web mode may merge namesakes and says so.
 - **Private people look identical to absent ones.** Someone who keeps no public profile and someone with nothing to show produce the same thin footprint. Coverage drops and the tool declines to score — which is the honest outcome, but it means the instrument is least useful exactly where discretion is most normal.
 - **Registry absence skews academic.** ROR and OpenAlex index research organizations, so practitioners outside research have thinner footprints through no fault of their own. That is why absence lowers coverage instead of raising the score.
 

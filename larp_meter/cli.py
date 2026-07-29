@@ -9,13 +9,14 @@ import sys
 from pathlib import Path
 
 from . import __version__, TRIGGERED, PASSED, UNKNOWN
+from . import profiles
 from .audit import run_audit
 from .flags import REGISTRY, TOTAL_WEIGHT
 from .matching import load_banks
 from .report import (render_terminal, render_html, render_markdown, save_all,
                      score_text, LEVEL_ICON)
 from .scoring import LEVELS, MIN_COVERAGE
-from .search import gather
+from .search import gather, make_fetcher
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = Path(os.environ.get("LARP_OUTPUT", BASE_DIR / "output"))
@@ -101,6 +102,53 @@ def cmd_web(args, target):
                   f"in the scholarly record. Confirm you are looking at the right one.")
     _emit(report, args)
     return report
+
+
+def cmd_url(args):
+    """Audit a specific profile. The URL identifies WHICH person is assessed."""
+    try:
+        ref = profiles.parse_profile_url(args.url)
+    except profiles.UnsupportedProfileURL as exc:
+        print(f"  error: {exc}", file=sys.stderr)
+        return 2
+
+    if not args.json and not args.quiet:
+        print(f"\n  LARP METER v{__version__} — profile audit")
+        print(f"  {ref.platform}: {ref.url}")
+
+    fetch = make_fetcher(CACHE_DIR, refresh=args.refresh)
+    profile = profiles.read_profile(ref, fetch)
+    subject = args.name or profile.name or profiles.name_from_handle(ref.handle)
+
+    if not args.json and not args.quiet:
+        print(f"  subject: {subject}" + ("" if profile.reachable else "  (name derived from the URL)"))
+        if profile.note:
+            print(f"  note: {profile.note}")
+
+    # Anything the user pasted is the fuller account; the profile text supplements it.
+    pieces = [p for p in (profile.text, args.text) if p]
+    if args.file:
+        pieces.append(Path(args.file).read_text(encoding="utf-8", errors="replace"))
+    text = "\n".join(pieces)
+
+    if not text.strip():
+        print("\n  Nothing to assess: the platform served no profile text and none was pasted.")
+        print(f"  Open {ref.url} , copy the profile, and re-run:")
+        print(f"    python larp-meter.py --url {ref.url} --text \"<paste>\"")
+        return 1
+
+    signals = {"profile_anchor": ref.label, "profile_reachable": profile.reachable}
+    if profile.facts:
+        signals["profile_facts"] = profile.facts
+
+    report = run_audit(subject, text, mode=f"profile:{ref.platform}",
+                       source_urls=[ref.url], subject_name=subject,
+                       verify=args.verify, cache_dir=CACHE_DIR,
+                       progress=_progress(args), signals=signals)
+    report["subject_url"] = ref.url
+    report["profile_note"] = profile.note
+    _emit(report, args)
+    return 0
 
 
 def cmd_batch(args):
@@ -293,6 +341,8 @@ def build_parser():
     src.add_argument("--text", "-t", help="Analyze pasted bio/pitch/About text")
     src.add_argument("--file", "-f", help="Analyze text from a file")
     src.add_argument("--stdin", action="store_true", help="Analyze text piped on stdin")
+    src.add_argument("--url", help="Audit one specific profile (linkedin.com/in/<name>, "
+                                   "github.com/<user>, orcid.org/<id>) — identifies WHICH person")
     src.add_argument("--batch", help="Audit many subjects (.jsonl or name<TAB>text lines)")
     beh = p.add_argument_group("behaviour")
     beh.add_argument("--verify", action="store_true",
@@ -354,6 +404,8 @@ def _run(args):
         return cmd_list(args)
     if args.interactive:
         return cmd_interactive(args)
+    if args.url:
+        return cmd_url(args)
     if args.batch:
         return cmd_batch(args)
     if args.stdin:

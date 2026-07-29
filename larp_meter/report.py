@@ -32,6 +32,15 @@ def caveats(report):
         out.append(f"{signals['ambiguous_identity']} different people share this name in the "
                    f"scholarly record — confirm this report is about the right person.")
 
+    anchor = signals.get("profile_anchor")
+    if anchor:
+        out.append(f"Identity is anchored to {anchor}, so this report is about one specific "
+                   f"account rather than everyone sharing the name. Note that any corroborating "
+                   f"sources were still located BY NAME, so those may belong to someone else.")
+        if signals.get("profile_reachable") is False:
+            out.append("The platform served no profile text to an automated request, so only what "
+                       "you pasted was assessed.")
+
     shared = signals.get("shared_name_evidence") or {}
     if shared:
         out.append("This name is shared by more than one person — the search returned "

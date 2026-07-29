@@ -235,3 +235,75 @@ class TestCommandLine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSharedNameDetection(unittest.TestCase):
+    """Found by running the tool on a real name rather than a synthetic one.
+
+    The round-2 namesake guard asked "is this material about someone with this
+    name?" — which every namesake satisfies. A search for one real person
+    returned two obituaries, a people-search page, a LinkedIn disambiguation
+    directory, an Instagram account and an allergy researcher's publications,
+    and all of it was scored as a single individual.
+    """
+
+    from larp_meter import providers as _p
+
+    def _findings(self, *urls):
+        return [self._p.Finding(u, "Jan Fictief") for u in urls]
+
+    def test_an_obituary_alongside_a_live_profile_signals_a_shared_name(self):
+        reasons = self._p.shared_name_evidence(self._findings(
+            "https://www.legacy.com/us/obituaries/name/jan-fictief-obituary?id=1",
+            "https://example.org/about"))
+        self.assertIn("an obituary record", reasons)
+
+    def test_people_search_listings_signal_a_shared_name(self):
+        reasons = self._p.shared_name_evidence(self._findings("https://www.spokeo.com/Jan-Fictief"))
+        self.assertIn("a people-search listing", reasons)
+
+    def test_a_linkedin_directory_page_signals_a_shared_name(self):
+        reasons = self._p.shared_name_evidence(
+            self._findings("https://www.linkedin.com/pub/dir/jan/fictief"))
+        self.assertIn("a LinkedIn directory page listing multiple people", reasons)
+
+    def test_an_ordinary_linkedin_profile_does_not(self):
+        reasons = self._p.shared_name_evidence(
+            self._findings("https://www.linkedin.com/in/some-specific-person"))
+        self.assertEqual(reasons, {})
+
+    def test_a_clean_corpus_raises_nothing(self):
+        reasons = self._p.shared_name_evidence(self._findings(
+            "https://en.wikipedia.org/wiki/Ada_Lovelace", "https://doi.org/10.1000/x"))
+        self.assertEqual(reasons, {})
+
+    def test_the_report_warns_before_the_reader_acts(self):
+        from larp_meter.report import caveats
+        report = run_audit("John Doe", "Founder building AI hardware.", mode="web",
+                           signals={"shared_name_evidence": {"an obituary record": "u"}})
+        note = " ".join(caveats(report))
+        self.assertIn("shared by more than one person", note)
+        self.assertIn("A name is not an identifier", note)
+
+    def test_aggregators_are_not_third_party_validation(self):
+        """A people-search page exists for almost everyone and an obituary
+        aggregator indexes the dead; neither is editorial coverage."""
+        claimy = ("Founder and chief executive of Cindermark, building satellite hardware "
+                  "and machine learning models for orbital deployment across defence and "
+                  "commercial customers, leading an engineering team that has grown every "
+                  "year since the company was established in this sector.")
+        aggregators = ["https://www.spokeo.com/John-Doe",
+                       "https://www.legacy.com/obituaries/name/doe/john"]
+        r = run_audit("t", claimy, mode="web", source_urls=aggregators,
+                      signals={"search_ok": True})
+        self.assertEqual(next(f for f in r["flags"] if f["id"] == 10)["status"], TRIGGERED)
+
+    def test_real_press_still_validates(self):
+        claimy = ("Founder and chief executive of Cindermark, building satellite hardware "
+                  "and machine learning models for orbital deployment across defence and "
+                  "commercial customers, leading an engineering team that has grown every "
+                  "year since the company was established in this sector.")
+        r = run_audit("t", claimy, mode="web",
+                      source_urls=["https://www.reuters.com/article/x"],
+                      signals={"search_ok": True})
+        self.assertEqual(next(f for f in r["flags"] if f["id"] == 10)["status"], PASSED)

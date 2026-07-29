@@ -244,6 +244,18 @@ DEFAULT_BANKS = {
         "mit technology review", "wall street journal", "ars technica",
         "der spiegel", "le monde", "de standaard",
     ],
+    # Automated directories and record aggregators. They are neither the
+    # subject's own platform nor third-party editorial coverage: a people-search
+    # page exists for almost everyone and says nothing about standing. Counting
+    # them as "independent validation" let an obituary aggregator and a
+    # people-search listing satisfy the flag.
+    "aggregator_domains": [
+        "spokeo.com", "whitepages.com", "peoplefinders.com", "radaris.com",
+        "beenverified.com", "truepeoplesearch.com", "intelius.com", "mylife.com",
+        "rocketreach.co", "zoominfo.com", "signalhire.com", "411.com",
+        "legacy.com", "findagrave.com", "dignitymemorial.com", "echovita.com",
+        "tributearchive.com",
+    ],
     "self_published_domains": [
         "medium.com", "substack.com", "linkedin.com", "wordpress.com",
         "blogspot.com", "wixsite.com", "facebook.com", "x.com", "twitter.com",

@@ -355,7 +355,8 @@ def f_validation(ctx):
     markers = find_terms(ctx.text, b["external_validation"], skip_negated=True)
     outlets = find_terms(ctx.text, b["press_outlets"], skip_negated=True)
     independent = [u for u in ctx.source_urls
-                   if not host_matches(u, b["self_published_domains"])]
+                   if not host_matches(u, b["self_published_domains"])
+                   and not host_matches(u, b.get("aggregator_domains", []))]
     controlled = len(ctx.source_urls) - len(independent)
 
     # An encyclopedia article about the subject is unambiguous third-party coverage.

@@ -156,4 +156,8 @@ def gather(name, cache_dir, deep=False, progress=None, refresh=False):
     # written about this person" apart from "we could not ask".
     bundle.signals["search_failures"] = failures
     bundle.signals["search_ok"] = not failures or bool(bundle.providers_ok)
+
+    shared = providers.shared_name_evidence(bundle.findings)
+    if shared:
+        bundle.signals["shared_name_evidence"] = shared
     return bundle

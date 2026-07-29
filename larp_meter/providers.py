@@ -91,6 +91,44 @@ def _is_independent(url):
     return not host_matches(url, CONTROLLED_HOSTS)
 
 
+# Hosts whose presence means the NAME is shared, not that the subject is
+# notable. A name search cannot tell two people apart, so these are the only
+# cheap evidence that the corpus spans more than one human.
+_SHARED_NAME_HOSTS = {
+    "spokeo.com": "a people-search listing",
+    "whitepages.com": "a people-search listing",
+    "peoplefinders.com": "a people-search listing",
+    "radaris.com": "a people-search listing",
+    "truepeoplesearch.com": "a people-search listing",
+    "mylife.com": "a people-search listing",
+    "legacy.com": "an obituary record",
+    "findagrave.com": "a grave record",
+    "dignitymemorial.com": "an obituary record",
+    "echovita.com": "an obituary record",
+}
+
+
+def shared_name_evidence(findings):
+    """Reasons to believe several different people share this name.
+
+    Matching on the name alone cannot distinguish them: an obituary, a
+    people-search page and a live profile all contain it. Merging them into one
+    audit attributes a stranger's record — or a dead man's — to the subject.
+    """
+    reasons = {}
+    for f in findings:
+        host = urllib.parse.urlsplit(f.url or "").hostname or ""
+        host = host[4:] if host.startswith("www.") else host
+        for known, label in _SHARED_NAME_HOSTS.items():
+            if host == known or host.endswith("." + known):
+                reasons.setdefault(label, f.url)
+        # linkedin.com/pub/dir/<first>/<last> is literally a disambiguation page
+        # listing every member with that name.
+        if "linkedin.com" in host and "/pub/dir/" in (f.url or ""):
+            reasons.setdefault("a LinkedIn directory page listing multiple people", f.url)
+    return reasons
+
+
 class Provider:
     name = "provider"
     kind = "web"

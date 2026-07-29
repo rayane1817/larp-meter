@@ -32,6 +32,14 @@ def caveats(report):
         out.append(f"{signals['ambiguous_identity']} different people share this name in the "
                    f"scholarly record — confirm this report is about the right person.")
 
+    shared = signals.get("shared_name_evidence") or {}
+    if shared:
+        out.append("This name is shared by more than one person — the search returned "
+                   + ", ".join(sorted(shared))
+                   + ". A name is not an identifier: material about a different individual may "
+                     "have been read as the subject's. Re-run against a specific profile with "
+                     "--text before relying on any of this.")
+
     discarded = report.get("sources_discarded") or []
     if discarded:
         out.append(f"{len(discarded)} search result(s) were set aside as not clearly about the "

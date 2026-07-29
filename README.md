@@ -43,7 +43,9 @@ Claim ledger  (registry lookups)
 
 Flags 1 and 2 used to be hardcoded to one archetype: a non-technical person claiming deep tech. A finance, medical or legal fabricator sailed through, and honest non-technical professionals were unscoreable.
 
-v3 uses a **domain taxonomy** (technology, science, medicine, finance, law, policy, business, marketing, design, education). Each domain carries claim markers, credential markers and role markers, plus an adjacency map so a physicist leading an AI venture is not treated as a fraud.
+v3 uses a **domain taxonomy** (technology, science, medicine, finance, law, policy, business, marketing, design, education). Each domain carries claim markers, credential markers and role markers, plus a **directional** transfer map so a physicist leading an AI venture is not treated as a fraud.
+
+Transfer is deliberately one-way. A doctor moving into health policy is ordinary; a public-policy graduate claiming to deliver clinical treatment is not. An earlier symmetric version let exactly that through — naming a policy degree instead of an MBA was enough for a fabricated Chief Medical Officer profile to pass.
 
 Two fairness rules are built in:
 
@@ -122,7 +124,7 @@ Python 3.8+, **zero dependencies**, stdlib only. Runs on Windows and POSIX.
 ```bash
 git clone https://github.com/rayane1817/larp-meter.git
 cd larp-meter
-python larp-meter.py --selftest     # 247 tests
+python larp-meter.py --selftest     # 274 tests
 python larp-meter.py --explain      # full methodology
 ```
 

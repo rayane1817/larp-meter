@@ -190,25 +190,28 @@ DOMAINS = {
 # counts as a signal here; elsewhere it would just penalise self-taught people.
 CREDENTIAL_GATED = {TECHNOLOGY, SCIENCE, MEDICINE, FINANCE, LAW}
 
-# Neighbouring fields whose training legitimately transfers.
-_ADJACENT = {
-    TECHNOLOGY: {SCIENCE},
-    SCIENCE: {TECHNOLOGY, MEDICINE},
-    MEDICINE: {SCIENCE, POLICY},
-    FINANCE: {BUSINESS},
-    BUSINESS: {FINANCE, MARKETING},
-    MARKETING: {BUSINESS, DESIGN},
-    DESIGN: {MARKETING},
-    LAW: {POLICY},
-    POLICY: {LAW, MEDICINE},
-    EDUCATION: {SCIENCE},
+# Which claims a given training can back. DIRECTIONAL, deliberately: credential
+# transfer is not symmetric. A doctor moving into health policy is ordinary; a
+# public-policy graduate claiming to deliver clinical treatment is not, and a
+# symmetric map let exactly that through. Likewise a physicist can lead an
+# engineering venture, but an education degree does not make someone a
+# research scientist.
+#
+# Read as: SUPPORTS[training] = claims that training can legitimately support.
+SUPPORTS = {
+    TECHNOLOGY: {TECHNOLOGY, SCIENCE},
+    SCIENCE: {SCIENCE, TECHNOLOGY, MEDICINE, EDUCATION},
+    MEDICINE: {MEDICINE, SCIENCE, POLICY},
+    FINANCE: {FINANCE, BUSINESS},
+    LAW: {LAW, POLICY},
+    POLICY: {POLICY, LAW},
+    BUSINESS: {BUSINESS, FINANCE, MARKETING},
+    MARKETING: {MARKETING, BUSINESS, DESIGN},
+    DESIGN: {DESIGN, MARKETING},
+    EDUCATION: {EDUCATION},
 }
-ADJACENT = {d: set(v) for d, v in _ADJACENT.items()}
-for _d, _peers in _ADJACENT.items():          # make adjacency symmetric
-    for _p in _peers:
-        ADJACENT.setdefault(_p, set()).add(_d)
 for _d in DOMAINS:
-    ADJACENT.setdefault(_d, set())
+    SUPPORTS.setdefault(_d, {_d})
 
 
 # A credential only counts inside an educational context. Without this, a bare
@@ -292,11 +295,11 @@ def supporting_domains(text, facet, prof=None):
 
 
 def is_supported(claimed, supporters):
-    """Does any supporting domain match the claim, directly or as an adjacent field?"""
+    """Does any supporting domain back the claim, directly or by transfer?"""
     if claimed in supporters:
         return True, claimed
-    for d in supporters:
-        if d in ADJACENT.get(claimed, set()):
+    for d in sorted(supporters):
+        if claimed in SUPPORTS.get(d, {d}):
             return True, d
     return False, None
 

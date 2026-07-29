@@ -29,30 +29,71 @@ def term_re(term):
 # Reading a term as evidence when the text denies it inverts the finding.
 # "We have no customers and no revenue" previously satisfied the traction
 # check — clearing the very flag it should have tripped.
-NEGATORS = {
-    "no", "not", "never", "without", "none", "neither", "nor", "lack", "lacks",
-    "lacking", "dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent",
-    "hasnt", "havent", "cannot", "cant", "rather", "instead", "unlike",
-    "avoid", "avoids", "avoiding", "free", "zero", "0", "yet", "besides", "beyond",
+#
+# English negation scope is not uniform, and treating it as uniform suppressed
+# genuine evidence: "grew beyond 40 customers", "unlike competitors we have
+# revenue" and "our lack of debt helped revenue" were all read as denials,
+# which makes an honest profile score worse.
+#
+# Clause negators legitimately govern the rest of their clause, including
+# coordination ("I do not build technology or hardware").
+CLAUSE_NEGATORS = {
+    "no", "not", "never", "without", "none", "neither", "nor", "cannot", "cant",
+    "dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent", "hasnt",
+    "havent", "zero", "0",
 }
+# Local negators govern only the phrase immediately after them: "lack OF debt",
+# "rather THAN churn", "unlike COMPETITORS". What follows later in the sentence
+# is usually being asserted, often emphatically.
+LOCAL_NEGATORS = {
+    "lack", "lacks", "lacking", "rather", "instead", "unlike", "avoid", "avoids",
+    "avoiding", "free", "excluding", "besides",
+}
+# Deliberately absent: "yet" ("we have yet to lose a customer" is covered by the
+# clause set via its own verb, and a trailing "yet" negates nothing) and
+# "beyond" ("beyond 40 customers" means more of them, not none).
+
 _WORD_RE = re.compile(r"[\w']+")
-_CLAUSE_END_RE = re.compile(r"[.;:!?\n•|]")
-_NEG_LOOKBACK_TOKENS = 6
+_CLAUSE_END_CHARS = ".;:!?\n•|"
+_CLAUSE_LOOKBACK_TOKENS = 6
+_LOCAL_LOOKBACK_TOKENS = 2
+# Six tokens fit comfortably; the cap only bounds the scan on pathological
+# input. Scanning to the clause boundary was quadratic — on a long text with no
+# punctuation the whole prefix was re-tokenized for every single match, which
+# cost 19s on a 50k-character document.
+_MAX_LOOKBACK_CHARS = 200
 
 
 def is_negated(text, start):
     """Is the term at `start` denied by something earlier in its clause?
 
-    The window reaches back a few words rather than one, so that negation
-    distributes over coordination the way it does in English: in "I do not
-    build technology or hardware", *hardware* is negated too. It stops at the
-    clause boundary, so "no legacy systems at all, and we serve 40 customers"
-    leaves *customers* asserted.
+    Clause negators reach back several words, so negation distributes over
+    coordination the way it does in English. They stop at the clause boundary,
+    so "no legacy systems at all. We serve 40 customers" leaves *customers*
+    asserted. Local negators reach back only as far as the phrase they govern.
     """
-    boundary = max((m.end() for m in _CLAUSE_END_RE.finditer(text, 0, start)), default=0)
-    prefix = text[boundary:start].casefold().replace("'", "")
-    recent = _WORD_RE.findall(prefix)[-_NEG_LOOKBACK_TOKENS:]
-    return any(tok in NEGATORS for tok in recent)
+    boundary = 0
+    for ch in _CLAUSE_END_CHARS:
+        i = text.rfind(ch, 0, start)
+        if i >= boundary:
+            boundary = i + 1
+
+    window = max(boundary, start - _MAX_LOOKBACK_CHARS)
+    prefix = text[window:start].casefold().replace("'", "")
+    tokens_before = _WORD_RE.findall(prefix)
+    # A window that starts mid-word would leave a fragment that could itself
+    # look like a negator ("cannot" sliced into "not").
+    if tokens_before and window > boundary and window > 0 and (text[window - 1].isalnum()
+                                                              or text[window - 1] == "_"):
+        tokens_before = tokens_before[1:]
+
+    if any(tok in CLAUSE_NEGATORS for tok in tokens_before[-_CLAUSE_LOOKBACK_TOKENS:]):
+        return True
+    return any(tok in LOCAL_NEGATORS for tok in tokens_before[-_LOCAL_LOOKBACK_TOKENS:])
+
+
+# Kept for callers and tests that want the full vocabulary.
+NEGATORS = CLAUSE_NEGATORS | LOCAL_NEGATORS
 
 
 def _matches(text, term, skip_negated):
@@ -92,11 +133,15 @@ def find_non_overlapping(text, terms, skip_negated=False):
             spans.append((m.start(), m.end(), term))
     # Longest first, so "paradigm shift" claims the span before "paradigm".
     spans.sort(key=lambda s: (s[0], -(s[1] - s[0])))
-    taken, chosen = [], []
+    # Accepted spans are non-overlapping and in increasing start order, so the
+    # most recently accepted one has the largest end: comparing against it
+    # alone is sufficient. Scanning every accepted span was quadratic in the
+    # number of matches and dominated the cost on hype-heavy documents.
+    chosen, last_end = [], -1
     for start, end, term in spans:
-        if any(start < t_end and end > t_start for t_start, t_end in taken):
+        if start < last_end:
             continue
-        taken.append((start, end))
+        last_end = end
         chosen.append(term)
     distinct = list(dict.fromkeys(chosen))
     return distinct, len(chosen)

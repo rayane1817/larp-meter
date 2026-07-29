@@ -118,19 +118,50 @@ class TestFairness(unittest.TestCase):
 
 
 class TestTaxonomyIntegrity(unittest.TestCase):
-    def test_adjacency_is_symmetric(self):
-        for d, peers in dom.ADJACENT.items():
-            for p in peers:
-                self.assertIn(d, dom.ADJACENT[p], f"{d}->{p} is not symmetric")
+    def test_credential_transfer_is_directional(self):
+        """Symmetric transfer let a public-policy degree clear a claim to
+        deliver clinical treatment. Training flows from the more demanding
+        field to the applied one, not back."""
+        self.assertIn(dom.POLICY, dom.SUPPORTS[dom.MEDICINE])      # doctor -> health policy
+        self.assertNotIn(dom.MEDICINE, dom.SUPPORTS[dom.POLICY])   # policy grad -/-> clinician
+        self.assertIn(dom.TECHNOLOGY, dom.SUPPORTS[dom.SCIENCE])   # physicist -> engineering
+        self.assertIn(dom.EDUCATION, dom.SUPPORTS[dom.SCIENCE])    # scientist -> teaching
+        self.assertNotIn(dom.SCIENCE, dom.SUPPORTS[dom.EDUCATION])  # teacher -/-> scientist
+
+    def test_every_domain_supports_itself(self):
+        for name in dom.DOMAINS:
+            self.assertIn(name, dom.SUPPORTS[name])
+
+    def test_transfer_is_not_transitive(self):
+        """technology -> science -> medicine must not chain into
+        technology -> medicine."""
+        self.assertIn(dom.SCIENCE, dom.SUPPORTS[dom.TECHNOLOGY])
+        self.assertIn(dom.MEDICINE, dom.SUPPORTS[dom.SCIENCE])
+        supported, _via = dom.is_supported(dom.MEDICINE, {dom.TECHNOLOGY: ["engineering"]})
+        self.assertFalse(supported)
 
     def test_every_domain_has_all_facets(self):
         for name, spec in dom.DOMAINS.items():
             for facet in ("claims", "credentials", "roles"):
                 self.assertTrue(spec.get(facet), f"{name} missing {facet}")
 
-    def test_every_domain_has_an_adjacency_entry(self):
+    def test_every_domain_has_a_support_entry(self):
         for name in dom.DOMAINS:
-            self.assertIn(name, dom.ADJACENT)
+            self.assertIn(name, dom.SUPPORTS)
+
+    def test_a_non_qualifying_degree_cannot_clear_a_gated_claim(self):
+        """The evasion this closed: naming a policy degree instead of an MBA
+        made a fabricated Chief Medical Officer profile pass flag 1."""
+        text = ("Chief Medical Officer of Helix Diagnostics, delivering clinical treatment, "
+                "therapeutic diagnosis and patient care pathways. MSc Public Policy, "
+                "University of Ghent, 2011. Former policy officer and lobbyist.")
+        self.assertEqual(flag(text, 1)["status"], TRIGGERED)
+
+    def test_a_doctor_moving_into_policy_is_not_flagged(self):
+        text = ("Director general driving health policy reform and regulatory affairs. "
+                "Doctor of Medicine, University of Ghent, 2006. Fifteen years as a "
+                "consultant physician before moving into public affairs.")
+        self.assertNotEqual(flag(text, 1)["status"], TRIGGERED)
 
     def test_no_marker_is_shared_by_two_domains_in_the_same_facet(self):
         """Shared markers make domain attribution ambiguous and let claims cross-validate."""

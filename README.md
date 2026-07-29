@@ -108,10 +108,10 @@ A provider that fails contributes nothing and is reported as unavailable. **A ne
 | 8 | Unverifiable Credentials | 1.0 | credentials | Degree with no institution, or one absent from ROR |
 | 9 | Logo Wall Syndrome | 1.0 | relationships | Many partner names, no substantive joint work |
 | 10 | No Independent Validation | 1.0 | validation | Only self-controlled platforms; pure echo chamber |
-| 11 | **Contradicted Verifiable Claim** | 2.5 | track record | A registry actively refutes a specific claim |
+| 11 | **Contradicted Verifiable Claim** | 2.5 | track record | A registry actively refutes a specific claim — **floors the verdict at ORANGE** |
 | 12 | **Timeline Implausibility** | 1.5 | credentials | Claimed durations that don't fit the stated dates |
 
-Flag 11 carries the heaviest weight because it is the only flag backed by an external authority rather than by reading tea leaves. Institution misses are deliberately *excluded* from it and handled by flag 8 at lower weight, since ROR indexes research organizations and a small or non-research school can be legitimately absent.
+Flag 11 carries the heaviest weight, and a *floor*: when a registry contradicts a claim the verdict cannot come out better than ORANGE, however well the rest of the profile reads. Without that, a fabricated bio absorbed one contradiction under a pile of unverified assertions and still scored GREEN. It is the only flag backed by an external authority rather than by reading tea leaves. Institution misses are deliberately *excluded* from it and handled by flag 8 at lower weight, since ROR indexes research organizations and a small or non-research school can be legitimately absent.
 
 ---
 
@@ -122,7 +122,7 @@ Python 3.8+, **zero dependencies**, stdlib only. Runs on Windows and POSIX.
 ```bash
 git clone https://github.com/rayane1817/larp-meter.git
 cd larp-meter
-python larp-meter.py --selftest     # 212 tests
+python larp-meter.py --selftest     # 247 tests
 python larp-meter.py --explain      # full methodology
 ```
 
@@ -182,6 +182,17 @@ Drop a `keywords.json` next to the tool (or point `$LARP_KEYWORDS` at one). A ke
 | Caches | `cache/` (search, 7 days) and `cache/verify/` (registries, 30 days) |
 
 ---
+
+## Who this tool cannot assess
+
+Measured, not guessed. A matched-pair audit of the scoring produced these:
+
+- **A well-written fabrication passes text mode.** An entirely invented profile — fake company, fake patent number, nonexistent repository, invented press mention — scored **GREEN 0/100 at 68% coverage**. Nothing in text mode establishes that a claim is *true*, only that the profile is specific and internally consistent. `--verify` is what closes this: it caught the same profile's nonexistent repository and a patent number belonging to somebody else's soybean cultivar. **Treat an unverified GREEN as "no internal contradictions found", never as corroboration** — the report now says so itself.
+- **Trades and non-academic professions are out of scope.** A master plumber with fifteen years and 400 installations yields **0% evidence coverage**: every registry this tool consults is academic or corporate. It correctly returns INSUFFICIENT DATA rather than judging, but it has nothing useful to say about most of the working population.
+- **Private people look identical to absent ones.** Someone who keeps no public profile and someone with nothing to show produce the same thin footprint. Coverage drops and the tool declines to score — which is the honest outcome, but it means the instrument is least useful exactly where discretion is most normal.
+- **Registry absence skews academic.** ROR and OpenAlex index research organizations, so practitioners outside research have thinner footprints through no fault of their own. That is why absence lowers coverage instead of raising the score.
+
+Phrasing parity is enforced by tests: the same facts in plainer or non-native English must reach the same verdict, and institution names in German, Spanish or Swedish must score the same as their English equivalents.
 
 ## Limitations — read before acting on a report
 

@@ -112,9 +112,16 @@ NUMBER_WORDS = {
     "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
     "nineteen": 19, "twenty": 20, "twenty-five": 25, "thirty": 30, "forty": 40, "fifty": 50,
 }
+# Duration is stated many ways. Recognising only "N years of experience" meant
+# the same career read as less evidence when described in plainer or
+# non-native English ("spent eight years as a design engineer"), which pushed
+# otherwise identical profiles across the coverage floor into a different
+# verdict. Phrasing should not change what the tool can see.
 EXPERIENCE_RE = re.compile(
     r"\b(\d{1,2}|" + "|".join(sorted(NUMBER_WORDS, key=len, reverse=True)) + r")\+?\s*"
-    r"years?\s+(?:of\s+)?(?:experience|expertise)", re.I)
+    r"years?\s+(?:of\s+)?"
+    r"(?:experience|expertise|as\b|in\b|working|building|leading|developing|"
+    r"designing|managing|practising|practicing|teaching|researching)", re.I)
 YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\b")
 
 # A stated goal is not a falsified credential. "Full deployment is targeted for

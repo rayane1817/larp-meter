@@ -190,9 +190,19 @@ def f_self_referential(ctx):
 @flag(4, "Buzzword Density", 1.0, RHETORIC,
       "Is the language hype-heavy relative to its length?")
 def f_buzzwords(ctx):
-    if ctx.word_count < 25:
-        return FlagResult(UNKNOWN, "Text too short to measure density meaningfully.")
+    if not ctx.word_count:
+        return FlagResult(UNKNOWN, "No text to assess.")
     distinct, hits = find_non_overlapping(ctx.text, ctx.banks["buzzwords"], skip_negated=True)
+
+    # A hard length cliff made two versions of the same profile land on opposite
+    # sides of the coverage floor over a one-word difference. Density is only
+    # unreliable on a short text when there is hype in it to measure; if there
+    # is none, the absence is answer enough at any length.
+    if ctx.word_count < 25:
+        if not distinct:
+            return FlagResult(PASSED, "No hype language present.")
+        return FlagResult(UNKNOWN, "Text too short to judge whether the hype is disproportionate.")
+
     density = hits / ctx.word_count * 100
     if len(distinct) >= 4 and density >= 2.0:
         return FlagResult(

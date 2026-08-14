@@ -12,6 +12,7 @@ from . import __version__, TRIGGERED, PASSED, UNKNOWN
 from . import profiles
 from .audit import run_audit
 from .flags import REGISTRY, TOTAL_WEIGHT
+from .linkedin import is_linkedin_paste, parse_linkedin_paste, Profile
 from .matching import load_banks
 from .report import (render_terminal, render_html, render_markdown, save_all,
                      score_text, LEVEL_ICON)
@@ -60,15 +61,32 @@ def _progress(args):
     return report_progress
 
 
+def _maybe_normalise(text, quiet=False, json_mode=False):
+    """If *text* is a LinkedIn paste, normalise it.  Returns (text, signals, name)."""
+    if not is_linkedin_paste(text):
+        return text, {}, None
+    profile = parse_linkedin_paste(text)
+    normalised = profile.to_prose()
+    if not quiet and not json_mode:
+        print("  detected LinkedIn paste — normalising for analysis")
+    signals = {"profile_source": "linkedin-paste",
+               "structured_profile": profile.to_dict()}
+    return normalised, signals, profile.name
+
+
 def cmd_text(args, target, text):
-    # `target` is a UI label — "pasted-text", "stdin", a filename. Passing it
-    # as the subject's name made every genuine artifact a MISMATCH, because
-    # "pasted-text" tokenizes to a real-looking name that matches nothing.
-    if args.verify and not args.name and not args.quiet:
+    normalised, extra_signals, profile_name = _maybe_normalise(
+        text, quiet=args.quiet, json_mode=args.json)
+
+    subject_name = args.name or profile_name
+    mode = "text:linkedin" if extra_signals else "text"
+
+    if args.verify and not subject_name and not args.quiet:
         print("  note: --verify without --name checks that artifacts exist, but cannot check "
               "whether they belong to the subject. Pass --name for attribution.")
-    report = run_audit(target, text, mode="text", subject_name=args.name,
-                       verify=args.verify, cache_dir=CACHE_DIR, progress=_progress(args))
+    report = run_audit(target, normalised, mode=mode, subject_name=subject_name,
+                       verify=args.verify, cache_dir=CACHE_DIR, progress=_progress(args),
+                       signals=extra_signals)
     _emit(report, args)
     return report
 
@@ -125,8 +143,19 @@ def cmd_url(args):
         if profile.note:
             print(f"  note: {profile.note}")
 
+    signals = {"profile_anchor": ref.label, "profile_reachable": profile.reachable}
+
     # Anything the user pasted is the fuller account; the profile text supplements it.
-    pieces = [p for p in (profile.text, args.text) if p]
+    # If the pasted text is LinkedIn paste, normalise it so degree/institution bind.
+    pasted = args.text or ""
+    if pasted:
+        pasted, paste_signals, paste_name = _maybe_normalise(
+            pasted, quiet=args.quiet, json_mode=args.json)
+        signals.update(paste_signals)
+        if paste_name and not subject:
+            subject = paste_name
+
+    pieces = [p for p in (profile.text, pasted) if p]
     if args.file:
         pieces.append(Path(args.file).read_text(encoding="utf-8", errors="replace"))
     text = "\n".join(pieces)
@@ -136,8 +165,6 @@ def cmd_url(args):
         print(f"  Open {ref.url} , copy the profile, and re-run:")
         print(f"    python larp-meter.py --url {ref.url} --text \"<paste>\"")
         return 1
-
-    signals = {"profile_anchor": ref.label, "profile_reachable": profile.reachable}
     if profile.facts:
         signals["profile_facts"] = profile.facts
 
@@ -147,6 +174,37 @@ def cmd_url(args):
                        progress=_progress(args), signals=signals)
     report["subject_url"] = ref.url
     report["profile_note"] = profile.note
+    _emit(report, args)
+    return 0
+
+
+def cmd_from_json(args):
+    """Audit from a structured Profile JSON file."""
+    data = json.loads(Path(args.from_json).read_text(encoding="utf-8"))
+    profile = Profile.from_dict(data)
+    subject = args.name or profile.name or "unknown"
+    text = profile.to_prose()
+
+    if args.text:
+        text = text + "\n" + args.text
+    if args.file:
+        text = text + "\n" + Path(args.file).read_text(encoding="utf-8", errors="replace")
+
+    if not text.strip():
+        print("  error: the JSON profile produced no text to assess.", file=sys.stderr)
+        return 2
+
+    if not args.json and not args.quiet:
+        print(f"\n  LARP METER v{__version__} — structured profile audit")
+        print(f"  subject: {subject}  (source: {profile.source or 'json-import'})")
+
+    signals = {"profile_source": profile.source or "json-import",
+               "structured_profile": profile.to_dict()}
+
+    report = run_audit(subject, text, mode="structured",
+                       subject_name=subject, verify=args.verify,
+                       cache_dir=CACHE_DIR, progress=_progress(args),
+                       signals=signals)
     _emit(report, args)
     return 0
 
@@ -343,6 +401,9 @@ def build_parser():
     src.add_argument("--stdin", action="store_true", help="Analyze text piped on stdin")
     src.add_argument("--url", help="Audit one specific profile (linkedin.com/in/<name>, "
                                    "github.com/<user>, orcid.org/<id>) — identifies WHICH person")
+    src.add_argument("--from-json", dest="from_json", metavar="FILE",
+                     help="Audit a structured Profile JSON file (name, headline, "
+                          "experiences[], educations[], skills[])")
     src.add_argument("--batch", help="Audit many subjects (.jsonl or name<TAB>text lines)")
     beh = p.add_argument_group("behaviour")
     beh.add_argument("--verify", action="store_true",
@@ -406,6 +467,8 @@ def _run(args):
         return cmd_interactive(args)
     if args.url:
         return cmd_url(args)
+    if args.from_json:
+        return cmd_from_json(args)
     if args.batch:
         return cmd_batch(args)
     if args.stdin:

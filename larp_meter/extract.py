@@ -18,6 +18,25 @@ MISMATCH = "MISMATCH"        # artifact exists but the subject isn't attached to
 NOT_FOUND = "NOT_FOUND"      # registry says it does not exist
 UNCHECKABLE = "UNCHECKABLE"  # no network / no verifier / rate-limited
 
+# Traction subtypes are the object nouns of TRACTION_RE, lowercased.
+TRACTION_SUBTYPES = frozenset({
+    "customers", "clients", "users", "subscribers", "revenue", "arr", "mrr",
+    "employees", "units", "installations",
+})
+
+# Every subtype `extract_claims` can emit. verify.py checks its dispatch table
+# against this at import time. Renaming a subtype used to orphan its registry
+# in silence: the ROR institution check was dead from the moment "institution"
+# was split into "degree_institution"/"mentioned_institution" without updating
+# the verifier, so `--verify` made zero API calls for credentials and a wholly
+# invented university came back as a *satisfied* credential flag.
+EMITTED_SUBTYPES = frozenset({
+    "doi", "arxiv", "orcid", "github", "nct", "patent", "assertion",
+    "degree", "degree_institution", "mentioned_institution",
+    "leadership", "owned_org", "partner_org",
+    "claimed_experience_years", "year", "year_target",
+}) | TRACTION_SUBTYPES
+
 
 @dataclass
 class Claim:
@@ -56,15 +75,17 @@ SOFT_EVIDENCE = [
 # only the English spellings made the credential flag fire on how a university
 # happens to spell itself: "Technische Universität München" parsed as nothing.
 _INST_TYPES = (r"Universit\w*|Uniwersytet\w*|Universidad\w*|Universidade\w*|Institut\w*|"
-               r"Hochschule\w*|Polytechni\w*|Politecnico\w*|Colleg\w*|Colegio\w*|"
-               r"Escuela\w*|[EÉ]cole\w*|Akadem\w*|Academ\w*|School\w*")
+               r"Hochschule\w*|Fachhochschule\w*|Hogeschool\w*|"
+               r"Polytechni\w*|Politecnico\w*|Coll[eè]g\w*|Colegio\w*|"
+               r"Escuela\w*|[EÉ]cole\w*|Lyc[eé]e\w*|Facult[eé]\w*|Conservatoire\w*|"
+               r"Akadem\w*|Academ\w*|Gymnasi\w*|School\w*")
 
 # The prefix class excludes '.' so a sentence boundary cannot be swallowed
 # ("...in Wilrijk. Karolinska Institutet" must not parse as one name), and the
 # trailing \b stops "Institutet" being truncated to "Institute".
 _INSTITUTION_CORE = (
     r"(?:[A-Z][\w-]*\s+){0,3}(?:" + _INST_TYPES + r")"
-    r"(?:\s+(?:of|de|van|di|du|för)\s+[A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,2})?")
+    r"(?:\s+(?:of|de|des|der|van|voor|di|du|und|et|en|för|für)\s+[A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,2})?")
 
 INSTITUTION_RE = re.compile(r"\b(" + _INSTITUTION_CORE + r")\b")
 

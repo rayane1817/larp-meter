@@ -55,7 +55,11 @@ class TestDegreeExtraction(unittest.TestCase):
 
     def test_non_anglophone_institutions_are_recognised(self):
         for name in ("Technische Universitat Munchen", "Universidad de Sevilla",
-                     "Politecnico di Milano", "Ecole Polytechnique"):
+                     "Politecnico di Milano", "Ecole Polytechnique",
+                     "Hogeschool Odisee", "Hogeschool van Amsterdam",
+                     "Fachhochschule Aachen", "Fachhochschule für Technik",
+                     "Lycee Henri IV", "Conservatoire de Paris",
+                     "Gymnasium der Stadt", "Collège de France"):
             with self.subTest(name=name):
                 claims = ex.extract_claims(f"Studied at {name} for four years.")
                 found = ex.claims_by(claims, "degree", "mentioned_institution")

@@ -324,7 +324,17 @@ def f_credentials(ctx):
             f"research organizations, so a small or non-research institution may be absent "
             f"legitimately.",
             [f"{i.value} — {i.detail}" for i in fake[:3]])
-    return FlagResult(PASSED, f"Degree tied to a named institution ({institutions[0].value}).",
+    # "Named in the text" and "confirmed by a registry" are different claims,
+    # and this flag used to report both as the same PASSED. It read as
+    # corroboration while ROR had never been contacted.
+    confirmed = [i for i in institutions if i.status == ex.VERIFIED]
+    if confirmed:
+        return FlagResult(
+            PASSED,
+            f"Degree tied to an institution confirmed in ROR ({confirmed[0].value}).",
+            [i.detail for i in confirmed[:2] if i.detail])
+    return FlagResult(PASSED, f"Degree tied to a named institution ({institutions[0].value}), "
+                              f"not itself checked against a registry.",
                       [i.detail for i in institutions[:2] if i.detail])
 
 
@@ -426,7 +436,13 @@ def f_contradicted(ctx):
     if confirmed:
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their registries.",
                           [f"{c.subtype} {c.value}: {c.detail}" for c in confirmed[:4]])
-    return FlagResult(UNKNOWN, "Verification ran but every registry was unreachable — nothing decided.")
+    # Reaching here means nothing was refuted and nothing was attributed: the
+    # registries were unreachable, or they answered about existence only
+    # (a repository's owner, a trial's sponsor) which cannot confirm authorship.
+    return FlagResult(UNKNOWN,
+                      f"{len(checkable)} identifier(s) checked, but none could be attributed to the "
+                      f"subject — the registry was unreachable or publishes no authorship to compare "
+                      f"against. Existence alone is not confirmation.")
 
 
 # ── 12. Timeline implausibility (new in v3) ──────────────────────────────

@@ -27,7 +27,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from . import names
-from .extract import VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE
+from .extract import VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE, EMITTED_SUBTYPES
 
 VERIFY_TTL = 30 * 24 * 3600
 MAX_RESPONSE_BYTES = 2_000_000
@@ -108,6 +108,9 @@ class Verifier:
         self.timeout = timeout
         self.calls = 0
         self.network_failures = 0
+        # Claim subtypes no registry was asked about, so a report can show
+        # "never checked" as something other than "checked and clean".
+        self.skipped = {}
 
     # ── plumbing ────────────────────────────────────────────────────────
     def _cache_path(self, key):
@@ -255,16 +258,35 @@ class Verifier:
             pushed = (data.get("pushed_at") or "")[:10]
             archived = data.get("archived")
             empty = data.get("size", 0) == 0
-            claim.status = VERIFIED
-            claim.detail = (f"Repo exists: {stars} stars, last push {pushed or 'unknown'}"
-                            + (", archived" if archived else "")
-                            + (", EMPTY repository" if empty else ""))
-        else:
-            repos = data.get("public_repos", 0)
-            claim.status = VERIFIED
-            claim.detail = (f"GitHub user '{path}': {repos} public repos, "
-                            f"{data.get('followers', 0)} followers")
-        claim.source = url
+            owner = ((data.get("owner") or {}).get("login") or "").strip()
+            shape = (f"{stars} stars, last push {pushed or 'unknown'}"
+                     + (", archived" if archived else "")
+                     + (", EMPTY repository" if empty else ""))
+            # Owning a repository is not writing it, and citing an employer's or
+            # a dependency's repo is normal rather than dishonest. The owner
+            # login is the only name this payload carries and it cannot settle
+            # authorship either way, so existence is recorded WITHOUT being
+            # counted as attribution — reporting it as confirmation let a
+            # subject cite a stranger's famous repository and be credited with
+            # its 190k stars.
+            claim.status = UNCHECKABLE
+            claim.detail = (f"Repo '{path}' exists ({shape})"
+                            + (f", owned by '{owner}'" if owner else "")
+                            + ". Ownership does not establish authorship, so attribution "
+                              "was not checked.")
+            claim.source = url
+            return claim
+
+        # A user URL is a claim about an identity — the same question
+        # _attribute answers for ORCID. Only a published full name is
+        # comparable: a login is a handle, and a one-word display name cannot
+        # support a mismatch finding, so both fall through to UNCHECKABLE.
+        published = (data.get("name") or "").strip()
+        comparable = [published] if len(published.split()) >= 2 else []
+        repos = data.get("public_repos", 0)
+        self._attribute(claim, comparable,
+                        f"GitHub user '{path}' ({repos} public repos, "
+                        f"{data.get('followers', 0)} followers)", url)
         return claim
 
     def verify_arxiv(self, claim):
@@ -310,14 +332,28 @@ class Verifier:
             claim.source = url
             return claim
         try:
-            ident = json.loads(body)["protocolSection"]["identificationModule"]
-            status_mod = json.loads(body)["protocolSection"].get("statusModule", {})
+            section = json.loads(body)["protocolSection"]
+            ident = section["identificationModule"]
             title = ident.get("briefTitle", "untitled")
-            overall = status_mod.get("overallStatus", "status unknown")
+            overall = section.get("statusModule", {}).get("overallStatus", "status unknown")
+            sponsor = ((section.get("sponsorCollaboratorsModule") or {})
+                       .get("leadSponsor") or {}).get("name", "")
+            officials = [(o or {}).get("name", "") for o in
+                         ((section.get("contactsLocationsModule") or {})
+                          .get("overallOfficials") or [])]
         except Exception:
             return self._uncheckable(claim, "ClinicalTrials.gov record unparseable")
-        claim.status = VERIFIED
-        claim.detail = f'Registered trial "{title[:70]}" — {overall}'
+        # A trial's overall officials are its principal investigators, not a
+        # roster of everyone who worked on it, and the sponsor is an institution.
+        # Neither can refute a person's involvement, so this records existence
+        # and names the parties for a human to judge rather than asserting
+        # attribution the registry cannot support.
+        who = ", ".join([n for n in ([sponsor] + officials) if n][:4])
+        claim.status = UNCHECKABLE
+        claim.detail = (f'Registered trial "{title[:70]}" — {overall}'
+                        + (f" (sponsor/investigators: {who})" if who else "")
+                        + ". A trial record does not list every contributor, so attribution "
+                          "was not checked.")
         claim.source = url
         return claim
 
@@ -412,15 +448,22 @@ class Verifier:
         return claim
 
     # ── entry point ─────────────────────────────────────────────────────
+    # Keys MUST be subtypes extract_claims actually emits — see the guard below.
+    # `mentioned_institution` is deliberately absent: those are employers and
+    # venues, and ROR indexes research organizations, so an ordinary company's
+    # absence would manufacture a finding out of nothing.
     HANDLERS = {
         "doi": "verify_doi", "orcid": "verify_orcid", "github": "verify_github",
         "arxiv": "verify_arxiv", "nct": "verify_nct", "patent": "verify_patent",
-        "institution": "verify_institution",
+        "degree_institution": "verify_institution",
     }
 
     def verify_all(self, claims, progress=None):
         """Verify every claim that has a registry handler. Returns the same list."""
         checkable = [c for c in claims if c.subtype in self.HANDLERS]
+        for c in claims:
+            if c.subtype not in self.HANDLERS:
+                self.skipped[c.subtype] = self.skipped.get(c.subtype, 0) + 1
         for i, claim in enumerate(checkable, 1):
             if progress:
                 progress(i, len(checkable), claim)
@@ -430,6 +473,18 @@ class Verifier:
             except Exception as exc:  # a verifier bug must not sink the audit
                 self._uncheckable(claim, f"verifier error: {type(exc).__name__}")
         return claims
+
+
+# A registry no claim can reach is worse than one that is missing: it counts as
+# coverage in the README and in --explain while checking nothing at all, and the
+# flag reading its result can only ever see UNCHECKED. Fail loudly at import
+# rather than let that drift back in.
+_ORPHANED = set(Verifier.HANDLERS) - EMITTED_SUBTYPES
+if _ORPHANED:
+    raise RuntimeError(
+        "Verifier.HANDLERS dispatches on subtypes extract_claims never emits: "
+        f"{sorted(_ORPHANED)}. A renamed subtype has orphaned its registry — "
+        "update HANDLERS and extract.EMITTED_SUBTYPES together.")
 
 
 def summarize(claims):

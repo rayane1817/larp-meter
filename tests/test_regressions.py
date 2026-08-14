@@ -105,7 +105,7 @@ class TestInstitutionMatching(unittest.TestCase):
             "names": [{"value": "Karolinska Institutet", "types": ["ror_display"]}],
             "locations": [{"geonames_details": {"country_name": "Sweden"}}]}]})
         v = StubVerifier({"api.ror.org": (body, True)})
-        claim = Claim(kind="degree", subtype="institution", value="Karolinska Institute")
+        claim = Claim(kind="degree", subtype="degree_institution", value="Karolinska Institute")
         v.verify_institution(claim)
         self.assertEqual(claim.status, VERIFIED)
 
@@ -113,7 +113,7 @@ class TestInstitutionMatching(unittest.TestCase):
         body = json.dumps({"items": [{
             "id": "x", "names": [{"value": "Institute of Advanced Studies"}], "locations": []}]})
         v = StubVerifier({"api.ror.org": (body, True)})
-        claim = Claim(kind="degree", subtype="institution",
+        claim = Claim(kind="degree", subtype="degree_institution",
                       value="Institute of Advanced Fictional Studies")
         v.verify_institution(claim)
         self.assertEqual(claim.status, NOT_FOUND)

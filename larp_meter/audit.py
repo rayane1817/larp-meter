@@ -75,7 +75,11 @@ def run_audit(target, text, mode="text", source_urls=None, subject_name=None,
         "signals": signals,
         "sources": source_urls,
         "verifier_stats": (
-            {"api_calls": verifier.calls, "network_failures": verifier.network_failures}
+            {"api_calls": verifier.calls,
+             "network_failures": verifier.network_failures,
+             # Which claim classes no registry was asked about. Without this a
+             # reader cannot tell a clean check from one that never ran.
+             "skipped_subtypes": dict(sorted(verifier.skipped.items()))}
             if verifier else None),
     }
 

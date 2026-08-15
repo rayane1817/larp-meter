@@ -15,8 +15,17 @@ happened to contain a DOI or ORCID.
 
 These tests run the real CLI command functions, with only the network layer
 stubbed, and check that the registry evidence actually lands in the report.
+Terminal output is captured, not left to hit the real stdout: cmd_* is
+normally only reached via main(), which calls cli._fix_console() first to
+force a UTF-8-safe stream. Calling cmd_* directly, as these tests do, skips
+that, and a console whose default encoding cannot represent the report's own
+glyphs (the ASCII-incompatible code page pytest/unittest hit on the Windows
+CI runners) would otherwise crash the test on the report's own bullet glyph
+rather than on anything this file is trying to check.
 """
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -59,6 +68,11 @@ def _stub_fetcher(mapping, calls=None):
     return make_fetcher
 
 
+def _silent():
+    """Swallow whatever a cmd_* call prints, on any platform's console encoding."""
+    return contextlib.redirect_stdout(io.StringIO())
+
+
 class TestTextModeReachesTheRegistry(unittest.TestCase):
     def test_text_mode_with_verify_and_name_queries_openalex_and_wikipedia(self):
         """Flag 6 must be able to see an independent scholarly record even when
@@ -68,7 +82,7 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
             report = cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         flag6 = next(f for f in report["flags"] if f["id"] == 6)
         self.assertEqual(flag6["status"], "PASSED")
@@ -85,7 +99,7 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({}, calls=calls)
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
             cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         self.assertFalse(any("duckduckgo" in u for u in calls))
 
@@ -97,7 +111,7 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--text", BIO_NO_IDENTIFIERS, "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY}, calls=calls)
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
             cmd_text(args, "pasted-text", BIO_NO_IDENTIFIERS)
         self.assertEqual(calls, [])
 
@@ -110,7 +124,7 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"openalex.org": OPENALEX_AMBIGUOUS_BODY})
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
             report = cmd_text(args, "Wei Wang", "Wei Wang works in materials science.")
         self.assertEqual(report["signals"]["ambiguous_identity"], 2)
 
@@ -122,7 +136,7 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--text", BIO_NO_IDENTIFIERS, "--name", "Ada Lovelace", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY}, calls=calls)
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
             cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         self.assertEqual(calls, [])
 
@@ -140,8 +154,9 @@ class TestFromJsonModeReachesTheRegistry(unittest.TestCase):
                 "--from-json", str(path), "--verify", "--quiet", "--no-save",
             ])
             fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
-            with mock.patch("larp_meter.cli.make_fetcher", fetcher):
-                # cmd_from_json prints and saves; capture the report via cli internals.
+            with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+                # cmd_from_json returns an exit code, not the report — capture
+                # what it hands to _emit instead.
                 import larp_meter.cli as cli_mod
                 captured = {}
                 orig_emit = cli_mod._emit
@@ -164,7 +179,7 @@ class TestFromJsonModeReachesTheRegistry(unittest.TestCase):
                 "--from-json", str(path), "--verify", "--quiet", "--no-save",
             ])
             fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY}, calls=calls)
-            with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+            with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
                 cmd_from_json(args)
         self.assertEqual(calls, [])
 
@@ -187,7 +202,7 @@ class TestBatchTextModeReachesTheRegistry(unittest.TestCase):
             fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
             try:
                 with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
-                     mock.patch("larp_meter.cli.OUTPUT_DIR", Path(tmp) / "output"):
+                     mock.patch("larp_meter.cli.OUTPUT_DIR", Path(tmp) / "output"), _silent():
                     cmd_batch(args)
             finally:
                 cli_mod.save_all = orig_save_all
@@ -197,18 +212,18 @@ class TestBatchTextModeReachesTheRegistry(unittest.TestCase):
 
 class TestUrlModeReachesTheRegistry(unittest.TestCase):
     def test_url_mode_queries_openalex_for_the_named_subject(self):
-        import larp_meter.cli as cli_mod
         args = build_parser().parse_args([
             "--url", "https://github.com/adalovelace", "--name", "Ada Lovelace",
             "--text", BIO_NO_IDENTIFIERS, "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY,
                                  "api.github.com": ""})
+        import larp_meter.cli as cli_mod
         captured = {}
         orig_emit = cli_mod._emit
         cli_mod._emit = lambda report, a: captured.setdefault("report", report)
         try:
-            with mock.patch("larp_meter.cli.make_fetcher", fetcher):
+            with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
                 cmd_url(args)
         finally:
             cli_mod._emit = orig_emit

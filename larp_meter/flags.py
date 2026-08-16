@@ -9,12 +9,14 @@ UNKNOWN is a first-class outcome: a flag we cannot decide must never be scored
 as if the subject passed it.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
 from . import TRIGGERED, PASSED, UNKNOWN
 from . import extract as ex
 from . import domains as dom
+from . import names
 from .matching import (find_terms, count_occurrences, find_non_overlapping,
                        host_matches, load_banks)
 
@@ -478,6 +480,85 @@ def f_timeline(ctx):
     if parsed and years:
         return FlagResult(PASSED, "Claimed durations are consistent with the dates given.")
     return FlagResult(UNKNOWN, "Not enough dated detail to test the timeline.")
+
+
+# ── 13. Self-applied doctoral title without a matching credential ────────
+# Longer alternatives first: with "Prof" tried before "Professor", Python's re
+# would still backtrack to the longer one when the short match's lookahead
+# fails, but ordering it this way makes the intent readable without relying
+# on that.
+_DOCTORAL_HONORIFIC_RE = re.compile(r"(?<!\w)(?:Professor|Prof|Dr)\.?(?=\s)")
+
+# Full, unambiguous doctoral-degree PHRASES that DEGREE_RE's own level
+# vocabulary does not cover. Deliberately excludes bare abbreviations (MD,
+# EdD, DBA, DPhil, PsyD, DSc): "MD" collides with the Maryland postal
+# abbreviation and similar short tokens too often to scan a whole profile
+# for safely — a real physician whose bio never spells out "Doctor of
+# Medicine" or "MD" set off from their own name will not be recognised here.
+# That is a narrower, deliberate gap; the alternative (matching bare "MD"
+# anywhere in the text) risks the opposite and worse failure — accusing an
+# honest person of a title they do hold.
+_SUPPLEMENTARY_DOCTORATE_RE = re.compile(
+    r"\bDoctor\s+of\s+(?:Medicine|Education|Business Administration|Psychology|Philosophy)\b",
+    re.I)
+
+_DOCTORATE_MARKERS = ("phd", "ph.d", "doctorate", "doctor")
+
+
+@flag(13, "Self-Applied Doctoral Title Without a Matching Credential", 1.5, CREDENTIALS,
+      "Is 'Dr.'/'Prof.' self-applied to a name with no doctorate anywhere in the stated education?")
+def f_title_inflation(ctx):
+    if not ctx.subject_name:
+        return FlagResult(UNKNOWN, "No subject name given, so a self-applied title cannot be tied "
+                                   "to anyone in particular. Pass --name.")
+    name_tokens = names.tokens(ctx.subject_name)
+    if not name_tokens:
+        return FlagResult(UNKNOWN, "Subject name has no usable tokens to anchor a title claim to.")
+
+    # A title only counts as SELF-applied when it sits next to the subject's
+    # own name. "Grants coordinated by Dr. Schilt" must not be read as the
+    # subject calling themselves Dr., however confident the surrounding text.
+    claimed_near = None
+    for m in _DOCTORAL_HONORIFIC_RE.finditer(ctx.text):
+        # Confined to the rest of the same line: a raw character window can
+        # bleed past the name into the next field ("Dr. Jane Doe\nPresident
+        # of...") and quote a truncated, unrelated word as if it were part
+        # of the title claim.
+        line_end = ctx.text.find("\n", m.end())
+        tail = ctx.text[m.end(): line_end if line_end != -1 else len(ctx.text)][:60]
+        if any(re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", names.normalize(tail))
+               for t in name_tokens):
+            claimed_near = f"{m.group(0)} {tail.strip()}"
+            break
+
+    if not claimed_near:
+        return FlagResult(UNKNOWN, "No 'Dr.'/'Prof.' title is self-applied to the subject's own "
+                                   "name; nothing to check.")
+
+    degrees = ex.claims_by(ctx.claims, "degree", "degree")
+    has_doctorate = (
+        any(marker in d.value.casefold() for d in degrees for marker in _DOCTORATE_MARKERS)
+        or bool(_SUPPLEMENTARY_DOCTORATE_RE.search(ctx.text)))
+
+    if has_doctorate:
+        return FlagResult(PASSED, f"Self-applied title ('{claimed_near}') is supported by a "
+                                  f"stated doctorate.")
+    # Absence of a listed doctorate is not the same as absence of education —
+    # only the second is undecidable. A profile that describes real education
+    # in real detail and conspicuously stops short of a doctorate, while the
+    # subject addresses themselves as Dr./Prof. regardless, is a contradiction
+    # sourced entirely from the subject's own text — no registry required.
+    if not degrees:
+        return FlagResult(
+            UNKNOWN,
+            f"Self-applies '{claimed_near}', but no education is described anywhere in the text — "
+            f"not enough to judge whether the title is supported.")
+    return FlagResult(
+        TRIGGERED,
+        f"Self-applies '{claimed_near}', but the entire stated education "
+        f"({', '.join(d.value for d in degrees[:3])}) contains no doctorate — the highest "
+        f"credential listed does not support the title claimed.",
+        [d.value for d in degrees[:4]])
 
 
 FLAG_BY_ID = {f["id"]: f for f in REGISTRY}

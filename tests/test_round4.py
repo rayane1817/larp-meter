@@ -190,7 +190,7 @@ class TestCommandLine(unittest.TestCase):
                                "--no-save", "--json"])
         self.assertEqual(code, 0)
         report = json.loads(out)
-        self.assertEqual(len(report["flags"]), 12)
+        self.assertEqual(len(report["flags"]), 13)
         self.assertIn("level", report)
 
     def test_missing_file_is_a_message_not_a_traceback(self):

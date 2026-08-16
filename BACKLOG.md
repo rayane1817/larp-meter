@@ -11,6 +11,78 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ---
 
+## Shipped since the original review (not from the 63 findings above)
+
+### Flag 13 — Self-Applied Doctoral Title Without a Matching Credential
+
+Built from a strategic discussion (2026-08-16, same-day interactive session,
+not a nightly run) about a specific real-world archetype: a subject who
+self-presents as "Dr. [Name]" while their own stated education lists nothing
+past Master's/CAS level. Design goal was explicitly to generalize past that
+one case — see the discussion for the full four-heuristic architecture this
+was drawn from (circular entity referencing, academic discipline mismatch,
+title inflation, absence-of-identifiers-as-signal). Title inflation was
+picked to build first because it needs **zero external registry calls** — it
+is pure internal-consistency checking against the subject's own text, which
+makes it the safest and cheapest of the four to get right.
+
+**How it works:** finds "Dr."/"Prof."/"Professor" anchored to the subject's
+own name tokens (`names.tokens`, so diacritics/particles are already
+handled) — critically, NOT anchored to any other name in the text, so a
+title attached to a named collaborator or advisor is never misread as the
+subject's own. Cross-references the extracted `degree` claims (and a small
+supplementary phrase list — see below) for a doctorate. Weight 1.5,
+CREDENTIALS category, no `floor` — this is pattern evidence sourced from the
+subject's own text, not a registry contradiction, and deliberately cannot
+push the verdict past what flag 11's registry-contradiction floor can.
+
+**Deliberately incomplete, documented rather than silently gapped:**
+`DEGREE_RE` (extract.py) has no level token for MD, EdD, DBA, DPhil, PsyD or
+DSc at all — a real physician's "MD" is invisible to the whole tool today,
+not just this flag. The supplementary phrase list here only recognises the
+full, unambiguous spelled-out forms ("Doctor of Medicine", "Doctor of
+Education", etc.) and deliberately does NOT scan for the bare abbreviations.
+Reason: "MD" collides with the Maryland postal abbreviation and similar
+short tokens too often to scan a whole free-text profile for safely — a
+false negative here (missing a real doctor's degree) is a far smaller harm
+than a false positive (accusing an honest physician of title inflation)
+would be. A real physician whose bio only ever writes "MD" and never spells
+out "Doctor of Medicine" will not be recognised by this flag. Next step, if
+picked up: a narrower, name-anchored trailing-credential pattern ("{subject
+name}, MD") the same way the leading-honorific detection is anchored, rather
+than a whole-text scan for the bare abbreviation.
+
+**Verified against the actual motivating profile**, not just synthetic
+fixtures: run against a reconstruction of the real archetype's stated
+education (BASc Physiotherapy, MBA Healthcare Management, MSc European
+Public Health, Advanced European Bioethics — no doctorate anywhere) with
+"Dr." self-applied to the name → correctly `TRIGGERED`. Mutation-tested:
+removing the name-anchor check, forcing `has_doctorate` to always be False,
+and removing the "no education at all" guard were each tried in isolation —
+all three were caught by the test suite (1, 3, and 1 failures respectively;
+none survived silently). 9 tests in `tests/test_flags.py::TestTitleInflationFlag`,
+including explicit counter-fixtures per the fairness-regression discipline
+from the strategy discussion: a real PhD holder passes, a real MD (spelled
+out) passes, a title attached to someone OTHER than the subject does not
+trigger, a legitimately networked person with several small real titles and
+no self-applied "Dr." stays UNKNOWN rather than false-triggering, and no
+title claimed at all is UNKNOWN (not PASSED) — matching flag 7's "the flag
+does not apply" convention rather than reading absence as a clean bill of
+health.
+
+**Not built from this discussion, still open:** circular entity referencing
+(needs a company-registry lookup to be safe — see the existing "no company
+registry" finding below), academic discipline mismatch for named
+collaborators (deliberately the most dangerous of the four — risks libeling
+a third party via OpenAlex disambiguation error, see
+`openalex-disambiguation-limits` — recommended to ship unscored as a report
+caveat, never as a flag, if built at all), and the `INSUFFICIENT DATA`
+message strengthening for high-jargon/zero-coverage profiles (cheapest of
+all four, purely a caveat-string change, no new false-accusation surface —
+recommended as the actual next pick-up if continuing this thread).
+
+---
+
 ## CRITICAL (15)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says

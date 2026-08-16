@@ -56,7 +56,7 @@ class TestReportShape(unittest.TestCase):
         json.loads(json.dumps(self.report))
 
     def test_all_flags_present_with_valid_status(self):
-        self.assertEqual(len(self.report["flags"]), 12)
+        self.assertEqual(len(self.report["flags"]), 13)
         for f in self.report["flags"]:
             self.assertIn(f["status"], (TRIGGERED, PASSED, UNKNOWN))
             self.assertTrue(f["description"], f"flag {f['id']} has no justification")

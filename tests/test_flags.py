@@ -154,10 +154,79 @@ class TestTimelineFlag(unittest.TestCase):
         self.assertEqual(status_of("I build robots and enjoy it a great deal.", 12), UNKNOWN)
 
 
+class TestTitleInflationFlag(unittest.TestCase):
+    """Flag 13. One positive fixture proving it fires on the archetype it was
+    built for is not enough — every case here that must NOT fire is exactly
+    as load-bearing as the one that must, per the discipline that v1's
+    hard-coded flag was supposed to teach: a heuristic that only has a
+    positive test is a heuristic nobody checked for false accusations."""
+
+    def test_title_without_a_doctorate_triggers(self):
+        """The motivating case: a self-applied 'Dr.' with an education list
+        that stops at Master's level."""
+        text = ("Dr. Anke Verstraeten, President of Example AG.\n\n"
+                "Education: BASc Physiotherapy, MBA Healthcare Management, "
+                "MSc European Public Health.")
+        self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), TRIGGERED)
+
+    def test_no_title_claimed_is_unknown_not_passed(self):
+        """No title claimed means the flag does not apply — matches the
+        'not visibly fundraising' pattern of flag 7, not a clean bill of
+        health, since there is nothing here to have gotten right."""
+        text = "Anke Verstraeten, President of Example AG. MSc European Public Health."
+        self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), UNKNOWN)
+
+    def test_title_with_a_phd_passes(self):
+        text = "Dr. Ada Lovelace holds a PhD in Mathematics from Cambridge."
+        self.assertEqual(status_of(text, 13, subject_name="Ada Lovelace"), PASSED)
+
+    def test_title_with_doctor_of_medicine_passes(self):
+        """The supplementary phrase list, not DEGREE_RE, has to catch this —
+        DEGREE_RE has no MD-level token at all."""
+        text = "Dr. Jane Okafor is a practicing physician (Doctor of Medicine, Lagos)."
+        self.assertEqual(status_of(text, 13, subject_name="Jane Okafor"), PASSED)
+
+    def test_title_claimed_with_no_education_at_all_is_unknown(self):
+        """Absence of a doctorate is a finding; absence of ANY education
+        information is not — matches flag 8's discipline exactly."""
+        text = "Dr. Marcus Vane is a visionary leader transforming the industry."
+        self.assertEqual(status_of(text, 13, subject_name="Marcus Vane"), UNKNOWN)
+
+    def test_another_persons_title_is_not_the_subjects(self):
+        """The core safety property: a title attached to someone ELSE named
+        in the text — a named collaborator, an advisor — must never be read
+        as the subject calling themselves Dr. This is what keeps the flag
+        from becoming a second copy of the v1 mistake, just aimed at whoever
+        happens to be quoted nearby."""
+        text = ("Jan Peeters, coordinated by Dr. Maria Santos at the regional "
+                "institute. MSc Public Administration.")
+        self.assertEqual(status_of(text, 13, subject_name="Jan Peeters"), UNKNOWN)
+
+    def test_no_subject_name_is_unknown(self):
+        """Without a name to anchor to, a title anywhere in the text cannot
+        be attributed to anyone in particular."""
+        text = "Dr. Someone, President of Example AG. MBA Healthcare Management."
+        self.assertEqual(status_of(text, 13), UNKNOWN)
+
+    def test_professor_title_recognised_alongside_doctor(self):
+        text = "Prof. Kwame Mensah, PhD in Physics, University of Ghana."
+        self.assertEqual(status_of(text, 13, subject_name="Kwame Mensah"), PASSED)
+
+    def test_a_legitimate_networked_professional_does_not_falsely_trigger(self):
+        """Adjacent-but-honest counter-fixture: someone with several small,
+        real titles and no doctorate, who simply never calls themselves Dr.
+        This must stay UNKNOWN (no title claimed) rather than being swept up
+        by a heuristic tuned too broadly."""
+        text = ("Anke Verstraeten, Secretary of the Regional History Society; "
+                "Chairman, Community Sailing Trust; Advisory Committee member, "
+                "Patient Alliance Europe. BASc Physiotherapy.")
+        self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), UNKNOWN)
+
+
 class TestRobustness(unittest.TestCase):
     def test_every_flag_survives_empty_text(self):
         results = evaluate(ctx_for(""))
-        self.assertEqual(len(results), 12)
+        self.assertEqual(len(results), 13)
         for fid, r in results.items():
             self.assertIn(r.status, (TRIGGERED, PASSED, UNKNOWN), fid)
             self.assertNotIn("evaluator error", r.description, f"flag {fid} crashed")

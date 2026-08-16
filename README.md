@@ -95,6 +95,8 @@ Search engines now answer automated requests with anti-bot pages. Instead of one
 
 A provider that fails contributes nothing and is reported as unavailable. **A network failure is never treated as evidence against the subject.**
 
+Wikipedia and OpenAlex are also queried from `--text`, `--file`, `--from-json` and `--url` mode whenever `--verify --name` is given, not only from a bare-name web audit — a pasted bio with no DOI or ORCID in it still gets checked against a real scholarly and encyclopedic record. Crossref and DuckDuckGo stay web-mode-only: DuckDuckGo returns hits for the *name*, not the subject, and mixing its results into a text audit's evidence would credit the subject with material never confirmed to be theirs.
+
 ---
 
 ## The 12 flags

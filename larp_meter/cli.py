@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__, TRIGGERED, PASSED, UNKNOWN
 from . import profiles
+from . import providers
 from .audit import run_audit
 from .flags import REGISTRY, TOTAL_WEIGHT
 from .linkedin import is_linkedin_paste, parse_linkedin_paste, Profile
@@ -74,6 +75,33 @@ def _maybe_normalise(text, quiet=False, json_mode=False):
     return normalised, signals, profile.name
 
 
+def _subject_registry_signals(subject_name, args, progress=None):
+    """Subject-anchored registry evidence for the paths that start from text.
+
+    Only cmd_web and the web branch of cmd_batch ever called the provider
+    chain. A subject who pastes their own bio — the ordinary way this tool is
+    used — got no registry contact at all, even under --verify --name, unless
+    their bio happened to contain a DOI or an ORCID: OpenAlex and Wikipedia
+    already know how to look someone up BY NAME and already gate on
+    names.name_matches (providers.py), but nothing outside web mode ever
+    called them. DuckDuckGo is deliberately excluded here: it returns hits
+    for the NAME, not the subject, and folding its results into a text
+    audit's source list would treat material never confirmed to be about the
+    subject as if it were.
+    """
+    fetch = make_fetcher(CACHE_DIR, refresh=args.refresh)
+    bundle = providers.gather(subject_name, fetch,
+                              providers=(providers.Wikipedia, providers.OpenAlex),
+                              progress=progress)
+    return bundle.signals
+
+
+def _warn_ambiguous(signals, args):
+    if signals.get("ambiguous_identity") and not args.json and not args.quiet:
+        print(f"  ⚠ {signals['ambiguous_identity']} different people share this name "
+              f"in the scholarly record. Confirm you are looking at the right one.")
+
+
 def cmd_text(args, target, text):
     normalised, extra_signals, profile_name = _maybe_normalise(
         text, quiet=args.quiet, json_mode=args.json)
@@ -84,6 +112,10 @@ def cmd_text(args, target, text):
     if args.verify and not subject_name and not args.quiet:
         print("  note: --verify without --name checks that artifacts exist, but cannot check "
               "whether they belong to the subject. Pass --name for attribution.")
+    if args.verify and subject_name:
+        extra_signals = {**extra_signals,
+                         **_subject_registry_signals(subject_name, args, _progress(args))}
+        _warn_ambiguous(extra_signals, args)
     report = run_audit(target, normalised, mode=mode, subject_name=subject_name,
                        verify=args.verify, cache_dir=CACHE_DIR, progress=_progress(args),
                        signals=extra_signals)
@@ -168,6 +200,10 @@ def cmd_url(args):
     if profile.facts:
         signals["profile_facts"] = profile.facts
 
+    if args.verify and subject:
+        signals.update(_subject_registry_signals(subject, args, _progress(args)))
+        _warn_ambiguous(signals, args)
+
     report = run_audit(subject, text, mode=f"profile:{ref.platform}",
                        source_urls=[ref.url], subject_name=subject,
                        verify=args.verify, cache_dir=CACHE_DIR,
@@ -201,6 +237,10 @@ def cmd_from_json(args):
     signals = {"profile_source": profile.source or "json-import",
                "structured_profile": profile.to_dict()}
 
+    if args.verify and subject and subject != "unknown":
+        signals.update(_subject_registry_signals(subject, args, _progress(args)))
+        _warn_ambiguous(signals, args)
+
     report = run_audit(subject, text, mode="structured",
                        subject_name=subject, verify=args.verify,
                        cache_dir=CACHE_DIR, progress=_progress(args),
@@ -229,8 +269,12 @@ def cmd_batch(args):
     for i, (name, text) in enumerate(entries, 1):
         print(f"\n[{i}/{len(entries)}] {name}")
         if text:
+            signals = {}
+            if args.verify and name and name != "unknown":
+                signals = _subject_registry_signals(name, args)
+                _warn_ambiguous(signals, args)
             report = run_audit(name, text, mode="batch-text", subject_name=name,
-                               verify=args.verify, cache_dir=CACHE_DIR)
+                               verify=args.verify, cache_dir=CACHE_DIR, signals=signals)
         else:
             bundle = gather(name, CACHE_DIR, deep=args.deep, refresh=args.refresh)
             report = run_audit(name, bundle.corpus, mode="batch-web", source_urls=bundle.urls,
@@ -372,6 +416,12 @@ def cmd_explain(args):
     not list the subject returns MISMATCH, which is weighted more heavily than a
     missing artifact. A network failure returns UNCHECKABLE and is never treated
     as evidence against the subject.
+
+    With --name, --verify also asks OpenAlex and Wikipedia whether the subject
+    has an independent scholarly or encyclopedic record, even when the text
+    itself names no identifier — this runs in every mode, not just web search.
+    Several people sharing the name is reported as a caveat, never resolved
+    silently to one of them.
 
   LIMITS
     Keyword and pattern heuristics, not semantics. Sarcasm, negation and

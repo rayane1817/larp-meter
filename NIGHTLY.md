@@ -163,3 +163,255 @@ does, since the next run will likely try to extend it:
    the LinkedIn-paste review (`linkedin.py`, newest and least-reviewed) are
    both still untouched by any run so far, per the standing instructions'
    priority list.
+
+---
+
+## 2026-08-16 (nightly run)
+
+### What I did
+
+Fixed two CRITICAL fairness bugs in `larp_meter/names.py`, both confirmed live
+against the running code before touching anything (BACKLOG.md's own warning —
+"every adversarial verification agent ran out of budget" — turned out to be
+justified caution, not false alarm: both reproduced exactly as described).
+
+1. **Surname-first naming order.** `name_matches`'s one-token fallback only
+   ever checked the LAST token of the subject's name as a possible surname.
+   `name_matches('Zhang Wei', ['W. Zhang'])` returned `False` — a real
+   Chinese, Korean, Vietnamese or Hungarian researcher whose registry record
+   abbreviates their given name gets `MISMATCH` -> flag 11 TRIGGERED -> verdict
+   floored at ORANGE, purely because their culture writes the family name
+   first. Fixed by accepting a match at EITHER end of the subject's name.
+
+   This is not a free lunch: accepting the first token too means a shared
+   GIVEN name ("Jan" in "Jan Vermeulen" vs "Jan Peeters") now also sits at an
+   end, and that's a different-person false-positive the suite already had a
+   named regression test for (`test_one_shared_token_is_not_a_match` in
+   `test_mutation_guards.py`). Fixed that by only accepting the end-match when
+   the SAME candidate string's other words are consistent with an
+   abbreviation (bare initials, particles, or the subject's own tokens) —
+   not a full unrelated word. That test still passes unmodified.
+
+   A single token matching in the MIDDLE of a 3+-part name (Hispanic
+   double-surname truncation: "Jose Ramirez Ortega" publishing as "J.
+   Ramirez") now returns `None` (UNCHECKABLE) instead of `False` — too weak a
+   signal to call either way.
+
+2. **Non-decomposable Latin letters and script mismatches.** `normalize()`
+   only strips NFKD combining marks, which does nothing for ø, ł, đ, ð, þ,
+   æ, ı, ħ, ŋ — so `name_matches('Bjorn Odegard', ['Bjørn Ødegård'])`
+   returned `False`. Added an explicit fold table. Also: a Cyrillic-script
+   candidate against a Latin-script subject name (or vice versa) now returns
+   `None` instead of a token-search `False` — normalize() doesn't
+   transliterate, so "no characters in common" there is a tool limitation,
+   not evidence of a mismatch. Also collapsed inner hyphens/apostrophes so
+   "Al-Sayed"/"Alsayed" compare equal, without breaking "Smith-Jones"
+   double-barrel matching on either half.
+
+   **Caught my own regression before committing:** the hyphen-collapse fix
+   only applied to `mine` (via `tokens()`), not to the candidate/blob side of
+   the comparison, so `name_matches('Ahmed Al-Sayed', ['Ahmed Alsayed'])` was
+   `True` but the reverse, `name_matches('Ahmed Alsayed', ['Ahmed
+   Al-Sayed'])`, was `False`. An asymmetric fold is exactly the kind of bug
+   this project's whole design exists to prevent — it would produce a false
+   MISMATCH depending on which side of the pair happened to type the hyphen.
+   Fixed by symmetrizing: both the blob search and the per-candidate word
+   split now check the hyphen-collapsed reading too. Regression test added
+   (`test_attached_name_match_is_symmetric`) specifically for this.
+
+   **Left unfixed, flagged explicitly in BACKLOG.md:** true transliteration
+   spelling variance ("Petrov" vs "Petroff" for the same Cyrillic name under
+   different romanization schemes). That needs a phonetic/transliteration
+   equivalence table — a much bigger, fuzzier piece of work than a fold
+   table, and not something to bolt on as a quick heuristic. Next run should
+   scope it properly if picked up: probably a Soundex/metaphone-style
+   comparison gated tightly enough not to conflate unrelated names.
+
+Both fixes verified through the REAL dispatch path, not just the `names`
+module in isolation — `tests/test_verify.py` gained
+`test_family_name_first_author_is_not_falsely_mismatched`, which goes through
+`Verifier.verify_doi` with a stubbed Crossref response, exactly the code path
+`verify_all` actually calls. This project has a documented history of tests
+validating a code path production couldn't reach (the ROR/HANDLERS bug from
+several commits ago), so I made a point of not repeating that shape here:
+`names.name_matches` has exactly one implementation and both `verify.py`'s
+`_attribute` and `providers.py` call it directly — there's no local
+reimplementation to drift out of sync with, so the fix reaches production by
+construction, not by luck.
+
+**Mutation-tested my own diff** before writing this up: inverted the
+script-mismatch guard, inverted the `at_an_end` check, and disabled the
+leftover-word compatibility check one at a time, and confirmed the test suite
+fails on each (29, 11, and 2 failures respectively). All three mutations
+caught; none survived silently.
+
+14 new tests in `tests/test_names.py`, 1 new end-to-end test in
+`tests/test_verify.py`. Full suite: 372 tests, all green.
+
+**Turned out incomplete — see the 2026-08-16 review entry directly below.**
+`names.name_matches` gained a third return value (`None` = unanswerable) as
+the whole point of this fix, but the one place that actually decides a
+verdict from it, `verify.py`'s `_attribute`, was never updated to read it —
+"there's no local reimplementation to drift out of sync with" was true of
+`name_matches` itself, but missed that `_attribute`'s *consumption* of the
+result was its own separate place to get wrong, and did.
+
+### BACKLOG.md updates
+
+Marked two CRITICAL findings resolved, with verification notes:
+- "Attribution assumes the surname is the last token..." -> `[FIXED]`
+- "normalize() folds only combining marks..." -> `[PARTIALLY FIXED]`
+  (transliteration variance explicitly still open — see above)
+
+I did NOT touch any other BACKLOG.md entry. Everything else in there is
+still exactly as unverified as the file's own header says.
+
+### What I did NOT get to (highest priority for next run)
+
+**The core gap is still open: verification is claim-anchored, not
+subject-anchored.** This is the single biggest lever in the codebase (see
+BACKLOG.md's first CRITICAL entry, and the task brief's own framing) and I
+did not touch it this cycle — the names.py fairness bugs were smaller, more
+certain, and directly requested by the "audit for fairness" lens, so I took
+the sure thing over starting something I could not finish and verify
+end-to-end tonight.
+
+`providers.py` already has most of the honest, hard-won infrastructure this
+needs: `OpenAlex.search()` and `Crossref.search()` search by subject name
+(not by identifier), already gate on `name_matches` (not truthiness), and
+already surface `ambiguous_identity` when multiple researchers share a name.
+The problem is entirely architectural: this only runs from `cli.py`'s web/batch
+modes (`gather()` at cli.py:97, cli.py:235), its output lands in
+`ctx.signals` as opaque dicts, and it never produces a `Claim` or reaches
+`verify_all`. A profile with heavy prose claims and zero identifiers still
+gets `checkable = []` and INSUFFICIENT DATA, regardless of mode.
+
+**Update from the same-night review: this specific gap (the "only runs from
+web/batch modes" half of it) was independently closed by PR #1
+(`nightly/2026-08-15`, merged tonight alongside this one) — `cli.py` now
+calls the provider chain from every text-based mode too. The rest of this
+paragraph — deriving `Claim`s from provider signals and adding a
+reconciliation step — is still fully open.**
+
+Next run, if picking this up: read the task brief's OpenAlex section again
+first — it documents hard-won, LIVE-measured constraints (USD rate limiting
+at ~100 searches per window with no key, 59.8% of author entities are
+single-work splits, only 7.3% carry an ORCID, and — critically — an ORCID on
+the entity does NOT certify a clean cluster; one measured entity had 2470
+works across 863 institutions merged into a single ID). Any subject-anchored
+probe has to treat a "no match" as a candidate set for human judgement, never
+a standalone negative finding, especially for common East Asian names. Don't
+re-derive these constraints from scratch or trust training-data assumptions
+about the API — re-verify against a live request if it's been a while.
+
+Concretely, a good next slice: wire OpenAlex/Crossref name-search into
+`Verifier` as a second dispatch path (`PROBES: subject_name -> probe()`,
+distinct from `HANDLERS: subtype -> handler(claim)`), have it run whenever
+`subject_name` is set regardless of mode, and have `verify_all` return
+evidence records alongside claims rather than only mutating claim status in
+place. Do NOT try to make this produce a `MISMATCH`-strength verdict on day
+one — start by making the "0 works found for a researcher claiming 40
+papers" case visible in the report at all, even as an UNKNOWN-with-evidence
+line. That's the gap the task brief calls out explicitly: today there is no
+code path that can print that sentence.
+
+### Other things I noticed but did not verify
+
+- `larp_meter/linkedin.py` (533 lines, newest module, added in commit
+  909718b) is explicitly called out in the task brief as least-reviewed and I
+  did not get to it this cycle. Worth a red-team pass next time: it's the
+  parser for pasted LinkedIn profiles, which is a very different input shape
+  (headers, section breaks, no prose) than the free-text bios the rest of the
+  test suite exercises.
+- I did not re-verify any of the still-open (non-[FIXED]) BACKLOG.md entries
+  beyond the two I fixed. In particular the CRITICAL "no reverse path" entry
+  (line ~16) and its five near-duplicate variants further down are all still
+  exactly as unverified as before — don't assume repetition across the file
+  means independent confirmation; they came from the same review run and
+  overlap heavily.
+
+---
+
+## 2026-08-16 (same-day human review — not a nightly run)
+
+A separate session (interactive, not the autonomous cron) reviewed both open
+PRs from the two entries above before merging either to `master`. Recording
+this here because it changes what "confirmed" means for one of tonight's
+fixes, and because both PRs are now on `master`, not open branches — the
+"where to pick up" pointers above that said "still open" as of their own
+commit are otherwise stale the moment you read this.
+
+### What the review found
+
+**PR #1** (subject-anchored OpenAlex/Wikipedia wiring): held up. Re-ran its
+365 tests in a clean, isolated worktree (not layered on top of anything
+else) and re-derived its core safety property independently by reading
+`flags.py` directly — both `f_output` (flag 6) and `f_validation` (flag 10)
+return on the new signal before ever reaching a `TRIGGERED` branch, so an
+absent record changes nothing and a present one can only help. No changes
+needed. Merged as-is.
+
+**PR #2** (names.py fairness fixes): the fixes themselves held up under
+independent adversarial tracing — but the PR was incomplete in a way its own
+test suite could not catch, because the gap was in a file the PR never
+touched. `name_matches` returning `None` for "unanswerable" is the entire
+point of this fix, but the only place a verdict actually gets decided from
+that return value, `verify.py`'s `_attribute`, still had `elif match: VERIFIED
+/ else: MISMATCH` — and `None` is exactly as falsy as `False` in Python, so
+it fell straight into `else`. Reproduced live through the real `verify_doi`
+dispatch: "Jose Ramirez Ortega", citing his own genuine DOI where Crossref
+credits "J. Ramirez" — precisely the Hispanic-surname case this PR's own
+`TestMiddleTokenIsUnanswerable` was written to protect — came back
+`MISMATCH`, floored at ORANGE by flag 11. Same failure for a Cyrillic
+record against a Latin subject name.
+
+This is the third instance in this repository of the same bug shape: **a
+component gets fixed and unit-tested correctly in isolation, but the one
+place production actually consumes its output doesn't get updated to match,
+and nothing in the test suite exercises that seam.** (The other two: the
+ROR/HANDLERS dead-code bug, and `verify_github`/`verify_nct` setting
+`VERIFIED` on existence alone before an earlier session's fix.) Worth
+naming explicitly as a standing review question for every future PR: *does
+anything downstream of this change need to learn about the new value you're
+now capable of returning?*
+
+Fixed with an explicit `match is None` branch in `_attribute`, two new
+regression tests going through the real dispatch (`test_verify.py`:
+`test_unanswerable_name_comparison_is_not_a_mismatch`,
+`test_non_latin_registry_record_is_not_a_mismatch`), and confirmed by
+mutating the fix back out and watching both new tests fail. Pushed to the PR
+branch before merging, so the merged history includes the complete, working
+fix — not the PR as originally opened.
+
+### State after this review
+
+- Both PRs merged to `master`. **374 tests green on `master` right now** —
+  this is the number that matters; the per-PR counts quoted above (365, 372)
+  were each measured against a different, now-superseded base.
+- No open `nightly/*` branches remain.
+- The core gap (subject-anchored verification producing an actual
+  `CONTRADICTED`/reconciliation verdict, not just PASSED/UNKNOWN) is still
+  fully open, exactly as both entries above describe. Nothing tonight
+  attempted it.
+- `linkedin.py` still has not had a dedicated red-team pass. Still the
+  top item on that front.
+- Mutation-testing `scoring.py` (the `MIN_COVERAGE`/`_apply_floors` boundary
+  cases flagged in the 2026-08-15 entry) is still undone.
+
+### Where to pick up next
+
+Same three items the 2026-08-15 entry named, in the same order — nothing
+about tonight's review changes that priority list, it only closes out the
+two PRs that were sitting unmerged when it started:
+
+1. Mutation-test `scoring.py`, `flags.py` (the two files that haven't had a
+   dedicated pass yet; `names.py` and `verify.py` got one tonight).
+2. The real reverse path: derived `Claim`s + a reconciliation step, gated
+   behind the affiliation/`years`-array corroboration work the OpenAlex
+   research section above describes. Do not skip straight to a
+   contradiction verdict.
+3. Red-team `linkedin.py` — still untouched by any run.
+
+Plus the standing review question this session is adding: when you fix a
+function to newly return a value it never returned before, grep every
+caller, not just the ones your own PR happened to touch.

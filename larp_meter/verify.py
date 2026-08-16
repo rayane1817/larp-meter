@@ -183,6 +183,19 @@ class Verifier:
             claim.status = UNCHECKABLE
             claim.detail = (f"{label} exists, but the registry published no names to compare "
                             f"against — attribution cannot be checked here.")
+        elif match is None:
+            # `elif match:` used to fall through to MISMATCH here, because
+            # `None` is as falsy as `False` — the exact conflation this
+            # docstring's "three outcomes" warns against. name_matches
+            # returns None for a middle-token surname or a non-Latin script
+            # it cannot compare, deliberately distinct from "no": treating
+            # that as a mismatch libelled a Hispanic/Lusophone author cited
+            # by only their first surname, and anyone whose record is held
+            # in a script this tool cannot read, on the tool's own strongest
+            # and most damaging verdict.
+            claim.status = UNCHECKABLE
+            claim.detail = (f"{label} exists, but attribution could not be determined from the "
+                            f"published names ({shown}) — neither confirmed nor refuted.")
         elif match:
             claim.status = VERIFIED
             claim.detail = f"{label} exists and lists the subject ({shown})."

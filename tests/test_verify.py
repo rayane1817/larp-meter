@@ -86,6 +86,22 @@ class TestAttribution(unittest.TestCase):
         v.verify_doi(claim)
         self.assertEqual(claim.status, NOT_FOUND)
 
+    def test_family_name_first_author_is_not_falsely_mismatched(self):
+        """Regression, exercised through the real verify_doi dispatch rather
+        than names.name_matches in isolation: an honest researcher whose
+        family name comes first ('Zhang Wei', abbreviated by Crossref as
+        'W. Zhang') used to fall through to MISMATCH -- floored at ORANGE by
+        flag 11 -- purely because the surname-position check only ever
+        looked at the LAST token of the subject's name."""
+        body = json.dumps({"message": {
+            "title": ["A Sparse Attention Kernel for Edge Inference"],
+            "author": [{"given": "W.", "family": "Zhang"},
+                       {"given": "M.", "family": "Chen"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Zhang Wei")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1145/xyz")
+        v.verify_doi(claim)
+        self.assertEqual(claim.status, VERIFIED)
+
 
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):

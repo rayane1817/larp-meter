@@ -13,6 +13,68 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Mutation-testing sweep: `scoring.py` (2026-08-16, same interactive session)
+
+12 hand-authored mutations across every decision point in `score()`,
+`_apply_floors()` and `category_scores()` — status comparisons, the two
+division-by-zero guards, the `MIN_COVERAGE` threshold, the `LEVELS` cut
+values, the floor eligibility check, the floor tie-break, and the
+category-bucket exclusion filter. Each mutation applied to a scratch copy,
+full suite run, reverted before the next one — see
+`tests/test_scoring.py` for the pinning tests these produced.
+
+**6 of 12 survived the first pass** — the full suite stayed green with the
+mutated logic in place, meaning nothing exercised that exact behavior.
+Two were the boundaries flagged as suspect going in and turned out to be
+real gaps, not false alarms:
+
+- `coverage >= MIN_COVERAGE` (line 28): nothing pinned coverage landing
+  **exactly** on 0.35. A `>=` → `>` mutation survived untouched.
+- `larp < cut` in the `LEVELS` lookup (line 40): nothing pinned a score
+  landing **exactly** on 20, 40, or 65. A `<` → `<=` mutation survived —
+  every profile scoring precisely at a cut would have silently
+  reclassified into the wrong severity band.
+
+Two more were real but lower-severity — they change what the report SAYS,
+not what verdict it reaches:
+
+- `_apply_floors`' `<=` vs `<` tie-break (line 79): at an exact tie
+  between the naturally-computed level and the floor, the `level` value is
+  identical either way — only whether the summary reads "Held at ORANGE
+  by..." or the ordinary weighted-score text differs. That's why it
+  survived: every existing test asserts on `level`, and `level` doesn't
+  move at a tie.
+- `decided_flags` in the INSUFFICIENT DATA message (line 29): drops
+  PASSED from its own count without touching `scored`/`level`/`score` at
+  all, so "Only 1 of 13 flags could be decided" could say 1 when 3 were
+  actually decided, and nothing would notice.
+
+One more, `category_scores`' UNKNOWN-exclusion filter, meant an UNKNOWN
+result's weight could dilute a category's decided-weight denominator
+without ever having been decided, both understating the category score
+and inflating `flags_decided`.
+
+All five are now pinned in `tests/test_scoring.py` (11 new tests). **404
+tests green, all mutations now caught on re-sweep.** `scoring.py` itself
+needed zero production changes — every survivor was a genuine, real
+behavior with no test asserting it, not an actual bug in the current
+logic.
+
+**One mutation deliberately left uncovered, on purpose, not an oversight:**
+the `TOTAL_WEIGHT` zero-division guard (`coverage = decided_w /
+TOTAL_WEIGHT if TOTAL_WEIGHT else 0.0`, line 25). `TOTAL_WEIGHT` is a
+module-level constant computed at import time from `REGISTRY`, which is
+populated exclusively by the `@flag(...)` decorators in `flags.py` — there
+is no code path in this codebase that can make it zero without editing
+`flags.py` itself to remove every flag. Testing it would mean monkeypatching
+`REGISTRY`/`TOTAL_WEIGHT` to simulate a state the program can never actually
+reach. Left as a defensive guard, consistent with the rest of the codebase's
+style, not promoted to a pinned behavior.
+
+`flags.py` and most of `verify.py` still have not had a dedicated mutation
+pass — this covered `scoring.py` only, per the specific request that
+started it.
+
 ### Flag 13 — Self-Applied Doctoral Title Without a Matching Credential
 
 Built from a strategic discussion (2026-08-16, same-day interactive session,

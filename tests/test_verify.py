@@ -102,6 +102,38 @@ class TestAttribution(unittest.TestCase):
         v.verify_doi(claim)
         self.assertEqual(claim.status, VERIFIED)
 
+    def test_unanswerable_name_comparison_is_not_a_mismatch(self):
+        """`_attribute` had `elif match: VERIFIED / else: MISMATCH` — the exact
+        two-outcome conflation its own docstring warns against. name_matches
+        can return None (unanswerable), and None is exactly as falsy as
+        False, so it fell straight into the else branch. A Hispanic surname
+        published under only its first half ('J. Ramirez' for 'Jose Ramirez
+        Ortega') was reported as contradicting its own author's paper --
+        floored at ORANGE by flag 11, the tool's strongest verdict, on a
+        citation that was entirely genuine."""
+        body = json.dumps({"message": {
+            "title": ["Some Paper"], "author": [{"given": "J.", "family": "Ramirez"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Jose Ramirez Ortega")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertEqual(claim.status, UNCHECKABLE)
+        self.assertNotEqual(claim.status, MISMATCH)
+
+    def test_non_latin_registry_record_is_not_a_mismatch(self):
+        """Same conflation, via the script-mismatch branch of name_matches:
+        a record held in Cyrillic cannot be compared to a Latin subject name
+        by a tool that folds diacritics but does not transliterate. That is
+        a limit of what the tool can read, not evidence of a different
+        author, and must not resolve to the accusation."""
+        body = json.dumps({"message": {
+            "title": ["Some Paper"],
+            "author": [{"given": "Михаил", "family": "Иванов"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Mikhail Ivanov")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertEqual(claim.status, UNCHECKABLE)
+        self.assertNotEqual(claim.status, MISMATCH)
+
 
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):

@@ -425,6 +425,8 @@ def f_contradicted(ctx):
     mismatched = [c for c in checkable if c.status == ex.MISMATCH]
     confirmed = [c for c in checkable if c.status == ex.VERIFIED]
     if refuted or mismatched:
+        # A refuted identifier doesn't exist, full stop — that is independent
+        # of whose name was given. This must fire regardless of --name.
         bits = []
         if refuted:
             bits.append(f"{len(refuted)} identifier(s) do not exist in the relevant registry")
@@ -436,6 +438,20 @@ def f_contradicted(ctx):
             "single signal this tool can produce.",
             [f"{c.subtype} {c.value}: {c.detail}" for c in (refuted + mismatched)[:5]])
     if confirmed:
+        if not ctx.subject_name:
+            # Without a name, `_attribute` deliberately marks every EXISTING
+            # artifact VERIFIED — correct for flag 6, which only asks
+            # whether something checkable exists. It is not correct here:
+            # this flag's own language claims the registry "confirmed" the
+            # subject, which cannot be true when attribution was never
+            # checked. Before this guard, citing any real DOI/repo/patent
+            # that belonged to someone else — no crafting required, just
+            # omitting --name — produced "All N checked identifier(s)
+            # confirmed by their registries" on the heaviest flag here.
+            return FlagResult(
+                UNKNOWN,
+                f"{len(confirmed)} identifier(s) exist, but no --name was given so attribution was "
+                f"never checked — existence alone is not confirmation. Re-run with --name.")
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their registries.",
                           [f"{c.subtype} {c.value}: {c.detail}" for c in confirmed[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the

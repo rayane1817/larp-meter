@@ -125,11 +125,44 @@ class TestContradictionFlag(unittest.TestCase):
 
     def test_passes_when_all_confirmed(self):
         text = "Our published work: 10.1038/s41586-020-2649-2."
-        c = ctx_for(text, verified=True)
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
         for claim in c.claims:
             if claim.subtype == "doi":
                 claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
         self.assertEqual(evaluate(c)[11].status, PASSED)
+
+    def test_verified_without_a_name_is_not_confirmation(self):
+        """Without --name, _attribute marks every EXISTING artifact VERIFIED
+        by design (verify.py's own docstring: correct for flag 6, which only
+        asks whether something checkable exists). This flag's own language
+        claims the registry 'confirmed' the subject — that must not fire
+        when attribution was never actually checked. Before this guard,
+        citing any real DOI/repo/patent that belonged to someone else, with
+        no --name at all, produced a PASSED 'confirmed by their registries'
+        on the heaviest flag in the registry — no crafting required, just
+        an omitted flag. This test used to pass with the OLD (buggy)
+        behaviour because ctx_for() never set subject_name at all — the
+        original version of test_passes_when_all_confirmed was accidentally
+        exercising this exact bug rather than a real confirmation."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True)  # no subject_name
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists (Ashish Vaswani)."
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertNotIn("confirmed", result.description.casefold())
+
+    def test_refuted_identifier_triggers_even_without_a_name(self):
+        """A refuted identifier doesn't exist at all — that's independent of
+        whose name was given, and must not be swallowed by the no-name
+        guard that protects the CONFIRMED branch."""
+        text = "Our published work: 10.1038/fake-doi-here."
+        c = ctx_for(text, verified=True)  # no subject_name
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.NOT_FOUND, "Crossref has no record of this DOI."
+        self.assertEqual(evaluate(c)[11].status, TRIGGERED)
 
     def test_unreachable_registries_decide_nothing(self):
         text = "Our published work: 10.1038/s41586-020-2649-2."

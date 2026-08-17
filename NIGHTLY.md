@@ -603,3 +603,29 @@ brief's explicit requirement after touching a pipeline file:
 4. The BACKLOG.md MAJOR/MODERATE/MINOR tiers (46 findings after dedup) are
    still completely unverified — no run has touched anything below
    CRITICAL yet.
+
+### Post-PR: fixed a pre-existing Python 3.8 CI break, not tonight's own
+
+Once PR #3 was open, CI came back red on `ubuntu-latest, 3.8` and
+`windows-latest, 3.8` (both green on 3.10/3.12). Root cause:
+`tests/test_scoring.py`'s `test_floor_worse_than_natural_level_does_apply_and_names_itself`
+used `{...} | {11: ...}` to merge two dicts — the `|` merge operator on
+plain `dict`s is Python 3.9+ only. That line was introduced in `79f6cf8`
+(the `scoring.py` mutation-testing sweep, already on `master` before
+tonight's branch), not by tonight's changes — confirmed via `git blame`
+before touching anything. Since this repo's own CI matrix (`tests.yml`)
+treats Python 3.8 as an explicitly supported target (stdlib-only, zero
+dependencies), and the fix is a one-line, risk-free, behaviourally
+identical substitution (`{**a, **b}`, compatible back to 3.5), fixed it
+forward in this PR rather than leaving it red and waiting — see the
+drive-to-green PR-ownership rule for a failure that's real but did not
+originate in this PR's own diff. Left a one-line note on the PR explaining
+why a third, seemingly-unrelated commit is in there.
+
+**Worth remembering for future runs:** the local dev loop everyone has been
+using (`python -m unittest discover ...`) runs whatever Python is on the
+box — 3.11 in this session, per the `__pycache__/*.cpython-311.pyc` files —
+never 3.8. A 3.8-incompatible construct can sit on `master` invisibly until
+someone's PR happens to trigger the full CI matrix. If a future run adds
+syntax newer than 3.8 (`|` dict-merge, `match` statements, walrus in
+comprehensions in some contexts, etc.), local green does not mean CI green.

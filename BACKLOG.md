@@ -143,6 +143,124 @@ message strengthening for high-jargon/zero-coverage profiles (cheapest of
 all four, purely a caveat-string change, no new false-accusation surface —
 recommended as the actual next pick-up if continuing this thread).
 
+### `linkedin.py` red-team pass, first dedicated review of the module (2026-08-17, nightly)
+
+Not from the original 63 findings — the standing brief has called this module
+out as least-reviewed since it was added, and it had never had a red-team
+pass. Two real bugs found and fixed, both reproduced live before touching
+anything, both with a failing test written first:
+
+1. **A short description sentence with a comma was misread as a location and
+   silently deleted.** `_parse_experiences` treated the first line after a
+   date/duration as a location whenever it was short and contained a comma.
+   `to_prose()` never renders `exp.location` at all, so a genuine achievement
+   like "Led cross-functional team of 12, shipped v2 platform." vanished
+   from everything the extractors and flags ever see — not mislabelled,
+   *gone*. This is a real-content-loss bug against an honest profile: their
+   actual accomplishment claim never reached scoring. Fixed by replacing the
+   comma-only heuristic with `_looks_like_location()`, which requires the
+   line to have no digits, no closing sentence punctuation, and (when
+   matched by comma rather than a remote/hybrid/area keyword) every
+   comma-separated part to read as Title-Case place-name words. Verified the
+   fix doesn't regress the case it exists to handle (`"Antwerp, Belgium"`,
+   `"San Francisco Bay Area"` both still classified as locations).
+
+2. **`Profile.to_prose()` never rendered `profile.name` at all — a
+   self-applied "Dr."/"Prof." title in the LinkedIn display name was
+   completely invisible to flag 13.** Found while running the required
+   end-to-end CLI check after the fix above, not from a code-reading pass:
+   a hand-written "Dr. Marcus Vane" LinkedIn-paste fixture with no
+   doctorate in the stated education did not trigger flag 13, when the
+   equivalent plain-prose text does (per `tests/test_flags.py`'s existing
+   `TestTitleInflationFlag`). Root cause: `to_prose()` builds its output from
+   `headline`/`about`/`experiences`/`educations`/`skills` and never touches
+   `name`. Flag 13 anchors its "Dr."/"Prof." search to the subject's own name
+   tokens inside `ctx.text` — if the honorific-bearing name never reaches
+   that text, the flag has nothing to find, no matter how blatant the title
+   inflation. This is the cheapest possible evasion of flag 13: it costs a
+   fabricator nothing but typing "Dr." in front of their own LinkedIn display
+   name, which is exactly how a real LinkedIn profile with a self-applied
+   title actually looks pasted in. Fixed by rendering `self.name + "."` as
+   the first line of `to_prose()` when present. Verified against both
+   directions: the fabricated case now reaches flag 13 TRIGGERED end-to-end
+   (`extract_claims` → `evaluate`), and a plain name with no title
+   (`LINKEDIN_PASTE`'s "Jan Fictief") still produces the same claims as
+   before — no new false-positive surface from adding the name line.
+
+6 new tests in `tests/test_linkedin.py` (`TestLocationMisclassification`,
+`TestNameSurvivesNormalisation`), each written to fail against the
+pre-fix code first. Full suite: 422 tests green (up from 404 at the start
+of the night, +18 counting the flags.py mutation-testing pass below).
+
+**Not otherwise covered by this pass:** this was a fix-what-you-find pass
+during the required end-to-end CLI check, not an exhaustive line-by-line
+red-team of every regex in the module (`_DEGREE_LEVEL_RE`'s English-only
+vocabulary, the institution-is-always-line-one assumption, `is_linkedin_paste`
+firing on a plain CV that happens to use "Experience"/"Education" as bare
+section headers). Worth a dedicated pass if picked up again — see "Where to
+pick up next" in NIGHTLY.md.
+
+### Mutation-testing sweep: `flags.py` (2026-08-17, nightly)
+
+Completes the four-file mutation-testing requirement from the standing
+brief (`scoring.py` and `flag13`'s own diff were swept 2026-08-16 same-day
+interactive; `names.py` and `verify.py`'s `_attribute` seam were swept
+2026-08-16 nightly). `flags.py` had never had a dedicated pass.
+
+13 hand-authored mutations across boundary comparisons and guard conditions
+in flags 3–13 (flags 1/2 are pure domain-matching logic with no bare
+numeric/boolean comparisons to mutate the same way). Each applied to a
+scratch copy, full suite run, reverted before the next one.
+
+**12 of 13 survived the first pass** — only the flag-3 (self-referential
+partners) `if overlap:` inversion was caught by the existing suite. All 12
+survivors are real, previously-unpinned gaps — not false alarms — and are
+now pinned as regression tests in `tests/test_flags.py`, re-confirmed
+individually as CAUGHT after the tests were added:
+
+- Boundary-only gaps (verdict is correct today but was resting on no test
+  pinning the exact cut value — same shape as the `scoring.py` sweep's
+  `MIN_COVERAGE`/`LEVELS` findings): flag 4's `density >= 2.0` and
+  `len(distinct) >= 4` (buzzword density), flag 4's `word_count < 25`
+  short-text carve-out, flag 5's `len(vague) >= 2` and `len(vague) >
+  len(concrete)` tie-break, flag 9's `len(distinct) >= 4` (logo wall), flag
+  10's `word_count >= 40`, flag 12's `claimed > available + 3` slack and
+  `y > ctx.now_year` future-date check.
+- Two are real behavioral gaps with actual accusation/evasion consequence,
+  not just untested boundaries:
+  - **Flag 11's `if refuted or mismatched:` survived as `if refuted:`.**
+    This is the tool's only severity-floor flag. A claim that exists but is
+    MISMATCHED (registry record exists, lists someone else) with nothing
+    separately NOT_FOUND would silently fall through to the generic
+    "nothing could be attributed" UNKNOWN branch instead of TRIGGERED,
+    dropping the ORANGE floor for exactly the case flag 11 exists to catch.
+    No existing test constructed a MISMATCH-only scenario — every test used
+    NOT_FOUND. Now pinned.
+  - **Flag 6's `hard = [c for c in artifacts if c.subtype != "assertion"]`
+    survived with the filter dropped.** `assertion` claims come from
+    SOFT_EVIDENCE phrases like "peer-reviewed" that carry no identifier any
+    registry could look up. Counting them as "hard" output means a
+    fabricator who writes identifier-free output language PASSES the flag
+    built to catch exactly that — this is the same evasion shape as this
+    file's top CRITICAL finding ("vagueness beats the tool"), just one flag
+    deep instead of architecture-wide. Now pinned.
+  - **Flag 8's `i.status == ex.NOT_FOUND` survived as `== ex.UNCHECKED`.**
+    No test in `tests/test_flags.py` exercised flag 8's TRIGGERED branch
+    through `evaluate()` at all — every flag-8 test here only reaches
+    PASSED/UNKNOWN. This is the same dead-registry-check shape that
+    disabled the ROR institution check for months (see the `[FIXED]`
+    entries below): the TRIGGERED branch existed and worked when called
+    directly, but nothing proved `evaluate()` could actually reach it with
+    a real NOT_FOUND status. Now pinned with a test that goes through
+    `evaluate()`, not `verify_institution()` directly.
+
+11 new tests in `tests/test_flags.py`. `flags.py` itself needed zero
+production changes — every survivor was a genuine, real behavior with no
+test asserting it, not an actual bug in the current logic (same conclusion
+as the `scoring.py` sweep). All four files in the standing brief's
+mutation-testing requirement (`scoring.py`, `names.py`, `flags.py`,
+`verify.py`) have now had at least one dedicated pass.
+
 ---
 
 ## CRITICAL (15)

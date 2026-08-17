@@ -415,3 +415,191 @@ two PRs that were sitting unmerged when it started:
 Plus the standing review question this session is adding: when you fix a
 function to newly return a value it never returned before, grep every
 caller, not just the ones your own PR happened to touch.
+
+---
+
+## 2026-08-17 (nightly run)
+
+### Open-PR check (do this first, every night)
+
+`git fetch origin` + a live PR search against `rayane1817/larp-meter` at the
+start of this run: **no open `nightly/*` PRs.** The two PRs from
+2026-08-15/16 were both merged (per the 2026-08-16 human-review entry
+above); nothing has been opened since. Branched fresh from `origin/master`
+tip (`79f6cf8`) for tonight's work — clean slate, no merge-order risk.
+
+### Running backlog tally (15 CRITICAL findings)
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open** — unchanged by tonight's
+work. Tonight's fixes (below) were both found during tonight's own red-team
+pass, not from the original 63-finding review, so they don't move this
+tally; they're filed under BACKLOG.md's "Shipped since the original review"
+section instead, same convention as the `scoring.py` sweep and flag 13.
+Still-open CRITICALs, unchanged: the core reverse-path gap (top finding,
+its near-duplicates, and the `--verify` badge-suppression finding), and
+"Any identifier appearing anywhere in the text is treated as a personal
+authorship claim" (never investigated by any run so far — worth a look
+next).
+
+### What I did
+
+Picked two connected pieces of work, both scoped small and both finished
+and verified end-to-end tonight — no second speculative feature started:
+
+**1. Red-team pass on `linkedin.py`** — the module the standing brief has
+flagged as least-reviewed since three nights ago, and no run had touched it
+until tonight. Found and fixed two real bugs, both reproduced live with a
+failing test written first, watched fail, then fixed:
+
+- A short post-date description sentence with a comma in it ("Led
+  cross-functional team of 12, shipped v2 platform.") was misread as a
+  location by `_parse_experiences`, and since `to_prose()` never renders
+  `exp.location` at all, the sentence didn't just get mislabelled — it
+  silently vanished from everything the extractors and flags ever see.
+  Real content loss against an honest profile's actual achievements. Fixed
+  with a tighter `_looks_like_location()` heuristic (no digits, no closing
+  sentence punctuation, Title-Case comma parts) that still recognises real
+  locations like "Antwerp, Belgium" and "San Francisco Bay Area".
+- **`Profile.to_prose()` never rendered `profile.name` at all**, which
+  meant a self-applied "Dr."/"Prof." title in a LinkedIn display name —
+  the cheapest possible way to trigger flag 13, costing a fabricator
+  nothing but typing four characters in their own profile's name field —
+  was completely invisible to that flag for every LinkedIn-paste subject.
+  Found this one not by reading the code but by doing the standing
+  brief's own required step: running the CLI end-to-end on a hand-written
+  "should be flagged" LinkedIn-paste sample after fix #1, and noticing
+  flag 13 stayed silent on a blatant "Dr. Marcus Vane, MBA only" fixture
+  that the equivalent plain-prose text (already covered by
+  `TestTitleInflationFlag`) correctly triggers. Fixed by rendering
+  `self.name + "."` as the first prose line when present. Verified in both
+  directions: the fabricated case now reaches flag 13 TRIGGERED through
+  the real `extract_claims` → `evaluate` path, and a plain name with no
+  title still produces byte-identical claims to before (no new
+  false-positive surface).
+
+Both fixes plus 6 new regression tests are in `tests/test_linkedin.py`
+(`TestLocationMisclassification`, `TestNameSurvivesNormalisation`). Full
+BACKLOG.md write-up with more detail is under "linkedin.py red-team pass"
+in the "Shipped since the original review" section.
+
+**2. Mutation-tested `flags.py`** — mandatory every cycle per the standing
+brief, and the one file of the four (`scoring.py`, `names.py`, `flags.py`,
+`verify.py`) that had never had a dedicated pass. 13 hand-authored
+mutations across every bare numeric/boolean comparison in flags 3–13
+(flags 1/2 are pure domain-matching with nothing of that shape to mutate).
+Each applied to a scratch copy of `larp_meter/flags.py`, full suite run,
+reverted before the next one — never left mutated code sitting in the
+working tree between mutations.
+
+**12 of 13 survived the first pass.** Only flag 3's `if overlap:` inversion
+was caught by the existing suite. All 12 survivors are real, previously
+unpinned behaviors — nine are exact-boundary gaps (the same shape as the
+`scoring.py` sweep's `MIN_COVERAGE`/`LEVELS` findings: verdict is correct
+today, but no test pins the exact cut value itself). Three are more than
+cosmetic:
+
+- Flag 11 (the tool's only severity-floor flag) had `if refuted or
+  mismatched:` survive as `if refuted:` — no test constructed a
+  MISMATCH-only scenario (registry record exists, lists someone else, but
+  nothing separately NOT_FOUND); every existing test used NOT_FOUND. Under
+  the mutation, a pure attribution mismatch would silently fall through to
+  a generic UNKNOWN instead of TRIGGERED, dropping the ORANGE floor for
+  exactly the case flag 11 exists to catch.
+- Flag 6 had its `c.subtype != "assertion"` filter survive with the filter
+  dropped — `assertion` claims (SOFT_EVIDENCE phrases like "peer-reviewed")
+  carry no identifier any registry could check. Without the filter they'd
+  count as "independently checkable output", which is the exact "vagueness
+  beats the tool" evasion this file's top CRITICAL finding describes,
+  reproduced one flag deep.
+- Flag 8 had `i.status == ex.NOT_FOUND` survive as `== ex.UNCHECKED` — no
+  test in `tests/test_flags.py` reached flag 8's TRIGGERED branch through
+  `evaluate()` at all (every existing flag-8 test only reaches
+  PASSED/UNKNOWN). Same shape as the ROR/HANDLERS dead-code bug this repo
+  hit before: the TRIGGERED branch worked when called directly, nothing
+  proved `evaluate()` could actually reach it.
+
+All 12 are now pinned in `tests/test_flags.py` (11 new tests — one test
+covers both the density and distinct-count boundary for flag 4 at once) and
+individually re-confirmed CAUGHT by re-running each mutation after adding
+its test. `flags.py` itself needed zero production changes — every
+survivor was a genuine untested behavior, not an actual bug, matching the
+`scoring.py` sweep's own conclusion. **All four files in the standing
+brief's mutation-testing requirement now have at least one dedicated pass.**
+
+### Verification
+
+Ran the full suite after each change (not just at the end): 408 green after
+the linkedin.py location fix, 422 green after the name fix and the flags.py
+pinning tests (up from 404 at the start of the night). Then ran the CLI
+end-to-end on three hand-written LinkedIn-paste samples, per the standing
+brief's explicit requirement after touching a pipeline file:
+
+- A verbose but honest paste with a real institution and a DOI I made up on
+  the spot — which, by accident, turned out to belong to a real, unrelated
+  NumPy paper. Correctly came back ORANGE, flag 11 TRIGGERED, floored by
+  the MISMATCH — a useful accidental confirmation that the full
+  paste-normalise-extract-verify-score pipeline still reaches ROR and
+  Crossref correctly end-to-end after tonight's changes.
+- A clean, uneventful paste (Hungarian surname-first name, on purpose, to
+  touch the 2026-08-16 names.py fairness fix too) — no flags TRIGGERED,
+  INSUFFICIENT DATA on thin content, no false positives.
+- The fabricated "Dr. Marcus Vane" sample described above — this is what
+  surfaced the name/to_prose bug in the first place, and after the fix
+  correctly reaches RED with 6 flags TRIGGERED including flag 13.
+
+### What I learned
+
+- "Run the CLI end-to-end on a should-pass and a should-fail sample" is not
+  a formality — it found a real bug tonight (the `to_prose()` name gap)
+  that no amount of re-reading the diff for fix #1 would have surfaced,
+  because the bug wasn't in the code I'd just changed. It was adjacent,
+  latent, and only visible once real fixture text went through the whole
+  pipeline.
+- The `flags.py` mutation sweep found far more survivors (12/13) than the
+  `scoring.py` sweep did (6/12) or the targeted `names.py`/`verify.py`
+  passes. Read that as "flags.py's test suite tests outcomes on the
+  fixtures that were written, not boundaries or alternate paths through
+  the logic" rather than "flags.py is unusually buggy" — none of the 12
+  were an actual bug in current behavior, all were untested-but-correct
+  behavior. Worth remembering when scoping how much time a mutation pass
+  on a given file might need: the flag battery, being 13 independent
+  functions each with several branches, has more surface than a single
+  scoring function.
+- Constructing exact-boundary test fixtures (density == 2.0 at exactly 200
+  words with exactly 4 distinct buzzwords, timeline slack == exactly 3
+  years) is mechanical but takes real trial-and-error against the actual
+  bank/regex data — used a scratch Python REPL to compute word counts and
+  hit counts before writing each fixture into the test file, rather than
+  guessing and iterating inside the test suite itself. Faster and avoids
+  leaving miscounted fixtures behind.
+
+### Where to pick up next
+
+1. **The core gap is still the core gap**: subject-anchored verification
+   producing derived Claims + a reconciliation step (CONTRADICTED for a
+   *quantitative* mismatch), gated behind the OpenAlex
+   affiliation/`years`-array corroboration work described earlier in this
+   file. Nothing tonight touched it — same reason as every prior run: it's
+   large, needs the disambiguation groundwork first, and a small verified
+   change beats a large unverified one.
+2. **`linkedin.py` still has more surface than tonight's pass covered.**
+   This was a fix-what-you-find pass triggered by the required end-to-end
+   check, not an exhaustive line-by-line read. Untouched and worth a
+   dedicated look: `_DEGREE_LEVEL_RE`/`_DEGREE_FIELD_RE` are English-only
+   (a French "Licence en Droit" or German "Diplom-Ingenieur" degree won't
+   bind to its institution the way an MSc does — a fairness gap, not an
+   evasion one, since it just loses signal rather than manufacturing an
+   accusation); `_parse_educations` assumes the institution is always the
+   first line of the group, which matches LinkedIn's current UI but is
+   worth a live re-check if it's been a while (LinkedIn's markup changes);
+   and `is_linkedin_paste`'s signal-scoring could plausibly misfire on an
+   ordinary CV that uses bare "Experience"/"Education" as section headers
+   (a very common resume format) — not verified live this cycle, just
+   flagged as untested.
+3. **"Any identifier appearing anywhere in the text is treated as a
+   personal authorship claim"** (CRITICAL, near the end of BACKLOG.md) has
+   never been investigated by any run. Worth checking next, alongside the
+   remaining open CRITICALs.
+4. The BACKLOG.md MAJOR/MODERATE/MINOR tiers (46 findings after dedup) are
+   still completely unverified — no run has touched anything below
+   CRITICAL yet.

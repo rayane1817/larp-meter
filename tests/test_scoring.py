@@ -243,7 +243,7 @@ class TestFloorTieBreak(unittest.TestCase):
     def test_floor_worse_than_natural_level_does_apply_and_names_itself(self):
         """The non-tie case, for contrast: when the floor is strictly worse
         than the natural level, the floor DOES apply and says so."""
-        verdict = score({s["id"]: FlagResult(PASSED) for s in REGISTRY} | {11: FlagResult(TRIGGERED)})
+        verdict = score({**{s["id"]: FlagResult(PASSED) for s in REGISTRY}, 11: FlagResult(TRIGGERED)})
         self.assertEqual(verdict["level"], "ORANGE")
         self.assertIn("Held at ORANGE", verdict["summary"])
 

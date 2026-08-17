@@ -256,6 +256,174 @@ class TestTitleInflationFlag(unittest.TestCase):
         self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), UNKNOWN)
 
 
+class TestMutationSurvivorsFlags(unittest.TestCase):
+    """Regression tests closing gaps found by a mutation sweep of flags.py.
+
+    Each test below corresponds to a mutation that the suite did NOT catch —
+    the mutated code passed every existing test. A surviving mutation means
+    the behaviour was real but unasserted, so each of these was written to
+    fail on the mutated code and pass on the restored code.
+    """
+
+    # ── flag 11: the heaviest flag, weight 2.5, floor=ORANGE ────────
+    def test_a_mismatched_identifier_is_a_contradiction(self):
+        """Mutation `if refuted or mismatched:` -> `if refuted:` survived.
+
+        Nothing covered MISMATCH reaching flag 11 -- only NOT_FOUND. Yet
+        MISMATCH is the classic fabricator case: the artifact is real, it
+        just isn't theirs. Losing it would have silently dropped exactly
+        the signal this flag exists to raise, on the tool's strongest
+        verdict."""
+        c = ctx_for("Our work: 10.1038/s41586-020-2649-2.",
+                    verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status = ex.MISMATCH
+                claim.detail = "Paper exists but does NOT list the subject."
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, TRIGGERED)
+        self.assertIn("do not list the subject", result.description)
+
+    # ── flag 12: timeline, a fairness-critical flag ─────────────────
+    def test_the_current_year_is_not_a_future_date(self):
+        """Mutation `y > ctx.now_year` -> `y >= ctx.now_year` survived.
+
+        Anyone stating the current year as a past fact ('started in 2026'
+        written during 2026) would be accused of an impossible timeline --
+        a false accusation triggered by nothing but the calendar."""
+        c = ctx_for("2 years of experience in robotics. Started in 2026.")
+        c.now_year = 2026
+        self.assertEqual(evaluate(c)[12].status, PASSED)
+
+    def test_career_slack_is_exactly_three_years(self):
+        """Mutation `claimed > available + 3` -> `claimed > available`
+        survived. The slack exists because a career can predate the
+        earliest date a bio happens to mention; removing it accuses
+        honest people whose bios simply don't list their first job.
+        Pinned at the exact boundary: 20 claimed against 17 available
+        is the largest gap the slack still permits."""
+        c = ctx_for("20 years of experience in robotics. Founded the lab in 2009.")
+        c.now_year = 2026          # 2026-2009 = 17 available, +3 slack = 20
+        self.assertEqual(evaluate(c)[12].status, PASSED)
+
+        beyond = ctx_for("21 years of experience in robotics. Founded the lab in 2009.")
+        beyond.now_year = 2026     # one year past what the slack allows
+        self.assertEqual(evaluate(beyond)[12].status, TRIGGERED)
+
+    # ── flag 8: only a real lookup may contradict ───────────────────
+    def test_an_unverified_run_cannot_contradict_an_institution(self):
+        """Mutation dropping the `if ctx.verified` guard survived, because
+        without a verify pass an institution claim's status stays UNCHECKED
+        and the fake-list is empty either way -- the guard is unreachable
+        defensively in production. It still encodes a load-bearing
+        invariant ('only an actual registry lookup can contradict'), so it
+        is pinned here against a future change that sets NOT_FOUND without
+        a verification pass having run."""
+        c = ctx_for("MSc Physics, Fictional University.", verified=False)
+        for claim in c.claims:
+            if claim.subtype == "degree_institution":
+                claim.status = ex.NOT_FOUND
+        self.assertNotEqual(evaluate(c)[8].status, TRIGGERED)
+
+    # ── flag 4: buzzword density boundaries ─────────────────────────
+    def _buzz_text(self, distinct_words, total_words):
+        filler = ("the team ships code on a regular basis every week "
+                  "without fail and also ")
+        pad = (filler * 40).split()[:total_words - len(distinct_words.split())]
+        return distinct_words + " " + " ".join(pad)
+
+    def test_density_of_exactly_two_per_hundred_words_triggers(self):
+        """Mutation `density >= 2.0` -> `density > 2.0` survived: nothing
+        landed density exactly on the threshold."""
+        text = self._buzz_text("synergy paradigm disruption visionary", 200)
+        self.assertEqual(len(text.split()), 200)
+        self.assertEqual(status_of(text, 4), TRIGGERED)
+
+    def test_three_distinct_buzzwords_is_below_the_variety_floor(self):
+        """Mutation `len(distinct) >= 4` -> `>= 3` survived. High density
+        alone must not trigger: the flag requires variety AND rate, so a
+        text repeating a few stock phrases is not condemned as hype."""
+        text = "synergy paradigm disruption. " + "we ship code weekly. " * 12
+        self.assertEqual(status_of(text, 4), PASSED)
+
+    # ── flag 5: vague vs concrete partnerships ──────────────────────
+    def test_equal_vague_and_concrete_terms_do_not_trigger(self):
+        """Mutation `len(vague) > len(concrete)` -> `>=` survived. A
+        profile with as many concrete terms as vague ones is not
+        'overwhelmingly non-binding' and must not be flagged."""
+        text = "We signed an MoU and an NDA. We also have a grant and a contract in place."
+        self.assertEqual(status_of(text, 5), PASSED)
+
+    def test_a_single_vague_term_alone_does_not_trigger(self):
+        """Mutation `and` -> `or` in the trigger condition survived. One
+        MoU mentioned in passing is not a pattern of non-binding deals."""
+        text = "We signed an MoU last year and have been building steadily since then."
+        self.assertEqual(status_of(text, 5), PASSED)
+
+    # ── flag 9: logo wall boundary ──────────────────────────────────
+    def test_three_partners_is_below_the_logo_wall_threshold(self):
+        """Mutation `len(distinct) >= 4` -> `>= 3` survived. Naming a few
+        genuine partners is ordinary; the flag targets a wall of logos."""
+        text = ("Partnership with Orion Systems. Partnership with Caldera Group. "
+                "Collaboration with Ridgeway Institute.")
+        self.assertEqual(status_of(text, 9), PASSED)
+
+    # ── flag 10: independent validation ─────────────────────────────
+    def test_a_short_bio_is_not_condemned_for_lacking_press(self):
+        """Mutation `ctx.word_count >= 40` -> `>= 0` survived. A one-line
+        bio has no room to cite press coverage; treating that silence as
+        'zero third-party validation' punishes brevity, not deception."""
+        self.assertEqual(status_of("Founder building quantum satellites for a living.", 10),
+                         UNKNOWN)
+
+    # ── flag 6: scholarly record must actually contain works ────────
+    def test_an_empty_scholarly_record_is_not_verifiable_output(self):
+        """Mutation dropping `and scholar.get("works")` survived. An
+        OpenAlex entity that resolves but lists zero works is not evidence
+        of output -- passing on it would be the same 'existence is not
+        attribution' error the verify layer is built to avoid."""
+        c = ctx_for("We are building a next generation platform. Patent pending.",
+                    signals={"openalex": {"works": 0, "citations": 0, "display_name": "X"}})
+        self.assertEqual(evaluate(c)[6].status, TRIGGERED)
+
+    # ── flag 2: both a title AND a domain are required ──────────────
+    def test_a_title_without_a_claimed_domain_is_undecidable(self):
+        """Mutation `not titles or not claimed` -> `and` survived. With
+        `and`, a title-holder who names no domain no longer bails out
+        early; execution falls through to `is_supported(None, roles)` and
+        the open-entry escape hatch, and the flag reports PASSED -- a
+        clean bill of health on a question it never actually tested.
+
+        The fixture matters here: a subject with NO prior roles hits the
+        second guard (`if not roles`) and returns UNKNOWN either way, so
+        it cannot distinguish the two. This one has a title and real
+        roles but no claimed domain, which is the only shape that
+        separates them (verified: UNKNOWN originally, PASSED mutated)."""
+        text = "I am the CEO. I worked as a policy officer and a board member for years."
+        self.assertEqual(status_of(text, 2), UNKNOWN)
+
+    # ── evaluate(): one broken flag must not sink the audit ─────────
+    def test_a_crashing_flag_is_contained_and_reported(self):
+        """Mutation narrowing `except Exception` survived because no flag
+        in the suite ever raises. The guard is what keeps a single broken
+        evaluator from destroying an entire audit, so it is pinned with a
+        flag that deliberately raises."""
+        from larp_meter.flags import REGISTRY
+
+        def boom(ctx):
+            raise ValueError("deliberate")
+
+        spec = {"id": 999, "name": "Exploding", "weight": 1.0, "category": "rhetoric",
+                "question": "?", "floor": None, "fn": boom}
+        REGISTRY.append(spec)
+        try:
+            results = evaluate(ctx_for("Some ordinary profile text here."))
+        finally:
+            REGISTRY.remove(spec)
+        self.assertEqual(results[999].status, UNKNOWN)
+        self.assertIn("evaluator error", results[999].description)
+
+
 class TestRobustness(unittest.TestCase):
     def test_every_flag_survives_empty_text(self):
         results = evaluate(ctx_for(""))

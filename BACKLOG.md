@@ -13,6 +13,68 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Mutation-testing sweep: `flags.py` (2026-08-16, same interactive session)
+
+33 hand-authored mutations across all 13 flags plus `evaluate()` — every
+guard, boundary, compound condition and status filter. Same harness
+discipline as the `scoring.py` sweep below: each mutation applied to a
+pristine copy, full suite run, reverted before the next.
+
+**13 of 33 survived the first pass.** Three deliberate controls (the
+guards added earlier the same day — flag 11's no-name check, flag 13's
+name-anchoring and no-education guards) were all caught, confirming the
+harness actually discriminates rather than reporting noise.
+
+The two most serious survivors were both on verdict-changing paths:
+
+- **`if refuted or mismatched:` → `if refuted:` survived** on flag 11 —
+  the heaviest flag (weight 2.5, `floor="ORANGE"`). Nothing in the suite
+  covered a `MISMATCH` claim reaching flag 11; only `NOT_FOUND` was
+  tested. `MISMATCH` is the *classic* fabricator case — the artifact is
+  real, it just isn't theirs — so losing it would have silently dropped
+  exactly the signal this flag exists to raise, on the tool's strongest
+  verdict. This is the same blind spot family as the github/nct and
+  `--name` attribution bugs fixed earlier today.
+- **`claimed > available + 3` → `claimed > available` survived** on flag
+  12. The three-year slack exists because a career can predate the
+  earliest date a bio happens to mention; removing it makes the tool
+  accuse honest people whose bios simply don't list their first job. Now
+  pinned at the exact boundary (20 claimed against 17 available is the
+  largest gap the slack still permits) plus one year beyond it.
+
+Three more were fairness-relevant: the current year being treated as a
+"future" date (flag 12 — would accuse anyone writing this year's date as
+a past fact), the 40-word floor on flag 10 (would condemn a one-line bio
+for not citing press), and an OpenAlex entity resolving with **zero
+works** counting as verifiable output on flag 6 (the same "existence is
+not attribution" error the verify layer is built to avoid).
+
+The rest were unasserted boundaries: buzzword density at exactly 2.0 and
+the 4-distinct variety floor, the vague/concrete strict comparison and
+its `and`/`or`, the logo-wall 4-partner threshold, flag 8's
+`ctx.verified` guard, flag 2's `or` guard, and `evaluate()`'s per-flag
+exception guard (which survived only because no flag in the suite ever
+raises — now pinned with one that deliberately does).
+
+One fixture needed correcting mid-sweep and is worth recording as a
+method note: the first attempt at flag 2's test used a subject with a
+title but no prior roles, which returns UNKNOWN via a *second* guard
+(`if not roles`) regardless of the mutation — so it passed without
+discriminating anything. A test that passes but does not separate the
+mutated code from the original proves nothing. The corrected fixture (a
+title plus real roles but no claimed domain) was verified to give
+UNKNOWN originally and PASSED mutated before being committed.
+
+**Result: 33/33 caught on re-sweep, 0 survivors. 417 tests green.**
+`flags.py` itself needed zero production changes — every survivor was
+real, intended behaviour with no test asserting it, not a bug in the
+current logic.
+
+`verify.py` is now the only one of the four named files without a
+dedicated mutation pass.
+
+---
+
 ### Mutation-testing sweep: `scoring.py` (2026-08-16, same interactive session)
 
 12 hand-authored mutations across every decision point in `score()`,

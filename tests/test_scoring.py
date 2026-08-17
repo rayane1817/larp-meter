@@ -243,7 +243,14 @@ class TestFloorTieBreak(unittest.TestCase):
     def test_floor_worse_than_natural_level_does_apply_and_names_itself(self):
         """The non-tie case, for contrast: when the floor is strictly worse
         than the natural level, the floor DOES apply and says so."""
-        verdict = score({s["id"]: FlagResult(PASSED) for s in REGISTRY} | {11: FlagResult(TRIGGERED)})
+        # Built by mutation rather than `a | b`: the dict-merge operator is
+        # 3.9+, and pyproject declares requires-python >= 3.8 with a 3.8 row
+        # in the CI matrix. It parses fine on 3.8 and fails at runtime, so
+        # neither a syntax check nor a local run on a newer interpreter
+        # catches it.
+        results = {s["id"]: FlagResult(PASSED) for s in REGISTRY}
+        results[11] = FlagResult(TRIGGERED)
+        verdict = score(results)
         self.assertEqual(verdict["level"], "ORANGE")
         self.assertIn("Held at ORANGE", verdict["summary"])
 

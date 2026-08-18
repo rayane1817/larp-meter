@@ -415,3 +415,181 @@ two PRs that were sitting unmerged when it started:
 Plus the standing review question this session is adding: when you fix a
 function to newly return a value it never returned before, grep every
 caller, not just the ones your own PR happened to touch.
+
+---
+
+## 2026-08-18 (nightly run)
+
+### Open PR check (do this before anything else, every night)
+
+**PR #3, `nightly/2026-08-17`, is open and unmerged** — "Nightly 2026-08-17:
+linkedin.py red-team fixes + flags.py mutation-testing pass". Draft, not
+approved. All 6 CI check-runs (ubuntu/windows x 3.8/3.10/3.12) are
+`completed`/`success` — the `get_status` combined-status API reports
+`pending`/`total_count: 0` because this repo's checks are GitHub Actions
+check-runs, not legacy commit statuses; that field is not meaningful here
+and next run should use `get_check_runs`, not `get_status`, to read CI.
+Not acting on this PR tonight per the standing instructions — noting it
+for the human and branching fresh from `origin/master`'s tip instead.
+
+**State-drift the human should know about:** `master` is not simply "PR #1
++ PR #2 + whatever's on the open PR branches" any more. Between PR #3
+being opened and tonight, three commits landed **directly on `master`**,
+authored by the repo owner (`rayane1817`, not a nightly session):
+`efbd6c2` (flag 13), `79f6cf8` (a `scoring.py` mutation-testing sweep —
+the exact item the 2026-08-16 entries above listed as "still open"; it
+is not anymore), and `d958ce0` (a **second, independent** `flags.py`
+mutation-testing sweep, on top of the one already merged from
+2026-08-16). PR #3's own branch separately contains a `flags.py`
+mutation-testing commit (`9c2f37e`) done against the *older* base —
+so there are now two unmerged flags.py mutation-testing efforts (one on
+`master` already, one sitting on PR #3) that will very likely produce
+overlapping or literally duplicate test names when PR #3 is eventually
+merged. Not mine to resolve — flagging it so whoever merges PR #3 checks
+for duplicate `flags.py` pinning tests rather than being surprised by a
+merge conflict there. This is exactly the "unmerged nights may conflict
+at merge time" risk the standing instructions warn about, now realized.
+
+### Running backlog tally
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open**, of the 15 CRITICAL
+findings — unchanged from PR #3's own count. Re-counted directly against
+`BACKLOG.md`'s `## CRITICAL (15)` section on `origin/master`'s current tip
+(not from the PR #3 body, which was measured against an older base):
+FIXED = the institution-dead-code trio (x2 duplicate write-ups),
+GitHub/ClinicalTrials existence-vs-attribution (x2 duplicate write-ups),
+GitHub-only-registry-with-no-attribution, ClinicalTrials-investigator-
+fields, and the surname-first-token fix = 8. PARTIALLY FIXED = the
+non-Latin-script/non-decomposable-letters fold (transliteration variance
+still open) = 1. Still open = the core "one-way, claim-anchored funnel"
+finding and its three near-duplicate write-ups further down the file,
+plus "citing no identifiers disables the entire verification half" and
+"any identifier anywhere in the text is treated as a personal authorship
+claim" = 6. Tonight's work did not change this count — see below.
+
+### What I did
+
+Picked the mandatory mutation-testing pass as tonight's primary item,
+targeting `verify.py` — the last of the standing brief's four named files
+(`scoring.py`, `names.py`, `flags.py`, `verify.py`) without a *dedicated*
+broad sweep. (`scoring.py` and `flags.py` both got real sweeps now, per
+the state-drift note above; `names.py` still only has spot-checks from the
+surname-order fix, not a full pass — see "where to pick up" below.)
+
+Six hand-authored mutations, each applied to a scratch copy of
+`larp_meter/verify.py`, full 417-test suite run after each, file restored
+before the next: dropping HTTP 410 from `_get`'s not-found tuple,
+dropping the `wanted and` guard in `verify_institution`'s subset match,
+narrowing `_is_ambiguous_acronym`'s `<= 5` boundary, dropping the
+single-character filter in `_significant_tokens`, and turning `verify_arxiv`'s
+`or` into `and` in its error-page detection.
+
+**All six survived the first pass** — every one exposed a real gap where
+some `verify.py` behavior had no test pinning it, not an actual live bug
+(production code needed zero changes). Full detail and the reasoning for
+each is now in `BACKLOG.md` under "Mutation-testing sweep: `verify.py`
+(2026-08-18, nightly run)" rather than duplicated here — worth a read for
+the two that matter most:
+
+- The `verify_institution` guard is the closest thing to a real bug found
+  tonight: without `wanted and ...`, a claim value that decomposes to
+  nothing but stopwords is a subset of *any* ROR hit, so it would come
+  back VERIFIED regardless of what the registry actually returned —
+  manufacturing coverage from an empty query, the exact failure mode
+  the standing brief's "never manufacture coverage" line warns against.
+- The `verify_arxiv` `or`/`and` mutation is the one with real accusation
+  risk if it ever regressed live: under the mutation, an arXiv error page
+  that only carries one of the two error tells fell through to
+  `_attribute` and came back **MISMATCH** against a stubbed author name —
+  a false contradiction on the tool's strongest verdict, purely from an
+  error-page detector losing redundancy it was deliberately given.
+
+All six pinned in `tests/test_mutation_guards.py` (`M36`-`M40b`): a new
+`TestInstitutionMatchGuards` class, a new `TestArxivErrorSignalsAreIndependent`
+class, and one addition to the existing `TestRegistryAnswerVsSilence`.
+Each new test individually re-verified: fails against its mutation, passes
+against the restored file. **417 -> 423 tests, green throughout.**
+
+Ran the CLI end-to-end (offline, no `--verify` — no production code
+changed tonight, so this was a sanity check rather than a required
+verification) on a clean sample (YELLOW, 23, flag 6 the only TRIGGERED —
+expected, no identifiers to verify offline) and a heavily fabricated one
+("Dr. Marcus Vane... 40 years of published, peer-reviewed research...").
+The fabricated sample came back **INSUFFICIENT DATA** — flags 4 and 10
+TRIGGERED, nothing else decidable. This is not a regression from tonight;
+it is a live, first-hand demonstration of the standing brief's own "known
+core gap" framing ("vagueness beats the tool") on a sample built to
+exercise exactly that. Confirms the gap is still exactly as real and as
+unaddressed as the brief describes — recording the concrete numbers here
+in case a future run wants a ready-made repro fixture rather than writing
+a new one.
+
+### BACKLOG.md: confirmed / refuted
+
+Did not investigate any of the six still-open CRITICAL findings tonight —
+the mutation-testing pass was scoped to `verify.py`'s own internal
+correctness, not to the architectural reverse-path gap those six describe.
+Added one new entry under "Shipped since the original review" documenting
+tonight's sweep (see above); did not touch any of the 15 CRITICAL
+write-ups themselves. The tally above is a re-count for accuracy, not new
+verification work.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: 2026-08-16 (interactive session) + confirmed present on
+  `master` as of tonight (`79f6cf8`). Done.
+- `flags.py`: 2026-08-16 (interactive session, merged) **and** two more
+  independent sweeps since — one pushed directly to `master` (`d958ce0`,
+  outside any nightly run) and one on PR #3's still-open branch
+  (`9c2f37e`). Done, arguably over-done — see the state-drift note above.
+- `verify.py`: **tonight (2026-08-18)**. Done — 6/6 mutations found real
+  gaps, all now pinned.
+- `names.py`: only spot-checks from the 2026-08-16 surname-order/
+  unanswerable-name fix (3 targeted mutations on that specific diff, not
+  a broad sweep). **Still the one file of the four without a dedicated
+  pass.**
+
+### What I learned
+
+- `pull_request_read`'s `get_status` method reports the legacy combined
+  commit-status API, which this repo's Actions-based CI does not
+  populate — it will always read `pending`/`total_count: 0` here
+  regardless of real CI state. Use `get_check_runs` instead.
+- A human pushing directly to `master` between nightly runs is allowed
+  (only the nightly session is bound by the branch/PR-only rule) but it
+  means "no open `nightly/*` branches" is not the same claim as "master's
+  history since the last night I read is exactly what I'd expect" — worth
+  re-diffing `origin/master` against the last entry's stated tip, not just
+  checking for open PRs, before assuming you know the starting state.
+- Every mutation this cycle survived on a file that already had solid
+  targeted regression tests around its known historical bugs
+  (surname-order, unanswerable-name, existence-vs-attribution). The
+  survivors were all in code paths adjacent to those fixes but never
+  themselves deliberately attacked: boundary values, the less-common of
+  two OR'd conditions, an HTTP status code sitting next to the one that
+  got a real test. Worth remembering as a search heuristic: after a
+  targeted bug fix earns its own regression test, the surrounding
+  boundaries and sibling conditions in the same function are exactly
+  where the next survivor tends to hide.
+
+### Where to pick up next
+
+1. **Mutation-test `names.py`** — the one file of the four still without a
+   dedicated broad sweep, only spot-checks tied to a specific fix. Good
+   candidates going in, unverified: the fold-table boundary cases in
+   `normalize()` (which non-Latin-script codepoints are and are not
+   covered), the "leftover-word compatibility check" mentioned in the
+   2026-08-16 entry above, and the middle-token-vs-end-token boundary in
+   the surname matcher.
+2. **The real reverse path** (still the single biggest lever, per every
+   prior entry and the standing brief itself) — untouched again tonight.
+   Do the affiliation/`years`-array corroboration work before any
+   contradiction verdict, exactly as every prior entry has said.
+3. **Red-team `linkedin.py`** — PR #3 (still open, unmerged) already did a
+   first pass here and found two real bugs (see its description). Once
+   PR #3 is merged, a second pass targeting what it didn't cover would be
+   the natural next step; until then, don't duplicate PR #3's own
+   unmerged work.
+4. When PR #3 merges: check `tests/test_flags.py` for duplicate/overlapping
+   pinning tests between its `9c2f37e` mutation-testing commit and
+   `master`'s `d958ce0` — flagged above, not resolved tonight.

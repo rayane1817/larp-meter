@@ -15,7 +15,7 @@ import urllib.request
 from larp_meter import TRIGGERED, PASSED, UNKNOWN, names
 from larp_meter import extract as ex
 from larp_meter.audit import run_audit
-from larp_meter.extract import Claim, NOT_FOUND, UNCHECKABLE
+from larp_meter.extract import Claim, VERIFIED, NOT_FOUND, UNCHECKABLE
 from larp_meter.verify import Verifier
 from tests.test_verify import StubVerifier
 
@@ -93,6 +93,32 @@ class TestRegistryAnswerVsSilence(unittest.TestCase):
         self.assertEqual(claim.status, NOT_FOUND)
         self.assertEqual(v.network_failures, 0, "a 404 is an answer, not a failure")
 
+    def test_a_410_is_also_an_answer_and_means_not_found(self):
+        """M36. `_get` treats 404 and 410 as the same signal — a registry
+        saying 'gone' is exactly as much an answer as 'never existed' — but
+        the tuple `(404, 410)` survived a mutation dropping the second code
+        entirely with the whole suite still green, because nothing exercised
+        the real HTTPError branch with anything but 404 or 5xx. Dropping 410
+        would silently reclassify a permanently-removed record as an
+        unreachable registry: `network_failures` climbs and the claim comes
+        back UNCHECKABLE instead of NOT_FOUND, understating what the registry
+        actually told us."""
+        def gone(*a, **k):
+            raise urllib.error.HTTPError("https://api.crossref.org/works/x", 410,
+                                         "Gone", {}, None)
+
+        real = urllib.request.urlopen
+        urllib.request.urlopen = gone
+        try:
+            v = Verifier(tempfile.mkdtemp(), subject_name="Ada Lovelace")
+            claim = Claim(kind="artifact", subtype="doi", value="10.1000/withdrawn")
+            v.verify_doi(claim)
+        finally:
+            urllib.request.urlopen = real
+
+        self.assertEqual(claim.status, NOT_FOUND)
+        self.assertEqual(v.network_failures, 0, "a 410 is an answer, not a failure")
+
     def test_a_500_is_not_an_answer(self):
         """The other side of the same branch: a server error must not be read
         as the registry saying 'no such record'."""
@@ -135,6 +161,86 @@ class TestRegistryAnswerVsSilence(unittest.TestCase):
         self.assertEqual(claim.status, UNCHECKABLE)
         self.assertNotEqual(claim.status, NOT_FOUND)
         self.assertEqual(v.network_failures, 1)
+
+
+class TestInstitutionMatchGuards(unittest.TestCase):
+    """verify_institution's `wanted <= have` subset check is the one thing
+    standing between a fabricated institution and a false VERIFIED — ROR's
+    own query endpoint is fuzzy and returns hits for almost anything."""
+
+    def test_an_all_stopword_claim_cannot_be_verified_by_vacuous_subset(self):
+        """M37. `wanted` is the set of significant words in the CLAIM. When a
+        garbled extraction leaves nothing but stopwords, `wanted` is empty —
+        and an empty set is a subset of every registry hit, so the guard
+        exists specifically to stop that from reading as a match. Dropping
+        the `wanted and ...` half of the condition survived the whole suite:
+        nothing had ever fed verify_institution a claim this thin. Without
+        the guard, ANY institution in ROR's fuzzy results would satisfy an
+        empty query and come back VERIFIED — manufacturing coverage for a
+        claim that named nothing at all."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/00cv9y106",
+            "names": [{"value": "Ghent University", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "Belgium"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Of The")
+        v.verify_institution(claim)
+        self.assertNotEqual(claim.status, VERIFIED)
+
+    def test_ambiguous_acronym_boundary_is_inclusive_at_five_characters(self):
+        """M38. `_is_ambiguous_acronym` uses `<= 5`; a five-letter acronym
+        ('UCLAN', 'IIT-B'-style bare strings) is exactly as ambiguous as a
+        shorter one, but nothing pinned the boundary itself — only 'MIT'
+        (3 chars) was ever tried, so `<= 5` narrowing to `< 5` left the
+        suite green while silently dropping the ambiguity caveat for every
+        5-character acronym."""
+        from larp_meter.verify import _is_ambiguous_acronym
+        self.assertTrue(_is_ambiguous_acronym("UCLAN"))
+
+    def test_single_character_fragments_are_not_significant_tokens(self):
+        """M39. Real registry entries and claims alike can decompose into
+        single-letter fragments around initials and ampersands ('A&M' ->
+        'a', 'm'). `_significant_tokens` filters anything shorter than two
+        characters for exactly this reason — without it, an institution
+        whose name happens to share stray single letters with an unrelated
+        ROR entry could pick up spurious overlap toward the 'nearest listed
+        name' hint, or spurious membership in `wanted`/`have` sets that were
+        never actually about the same word."""
+        from larp_meter.verify import _significant_tokens
+        self.assertEqual(_significant_tokens("A & M"), set())
+        self.assertIn("texas", _significant_tokens("Texas A & M University"))
+
+
+class TestArxivErrorSignalsAreIndependent(unittest.TestCase):
+    """arXiv serves a bad-id error as a 200 OK Atom feed. The check for it
+    ORs two independent tells (the `api/errors` id and the 'Error' title)
+    on purpose — each is sufficient on its own, because either one drifting
+    out of sync with the other must not turn an error page into an
+    attributed paper."""
+
+    def _entry(self, entry_id, title):
+        return (f"<feed xmlns='http://www.w3.org/2005/Atom'><entry>"
+                f"<id>{entry_id}</id><title>{title}</title>"
+                f"<author><name>Someone Else</name></author></entry></feed>")
+
+    def test_the_error_id_alone_is_enough(self):
+        """M40a. `or` collapsed to `and` still passes the existing test, which
+        always supplies both tells together. A title arXiv happens to phrase
+        differently on a future error page must not defeat this on its own."""
+        body = self._entry("http://arxiv.org/api/errors#bad_id", "Bad Request")
+        v = StubVerifier({"arxiv.org": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="arxiv", value="9999.99999")
+        v.verify_arxiv(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+
+    def test_the_error_title_alone_is_enough(self):
+        """M40b. The other half of the same OR: an id that does not happen to
+        contain 'api/errors' must not be required alongside the title."""
+        body = self._entry("http://arxiv.org/abs/9999.99999v1", "Error")
+        v = StubVerifier({"arxiv.org": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="arxiv", value="9999.99999")
+        v.verify_arxiv(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
 
 
 class TestYearExtraction(unittest.TestCase):

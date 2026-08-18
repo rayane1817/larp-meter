@@ -207,6 +207,67 @@ recommended as the actual next pick-up if continuing this thread).
 
 ---
 
+### Mutation-testing sweep: `verify.py` (2026-08-18, nightly run)
+
+`verify.py` was the last of the four files named in the standing brief
+(`scoring.py`, `names.py`, `flags.py`, `verify.py`) without a dedicated
+broad sweep — `names.py` and `verify.py`'s `_attribute` had only been
+spot-checked around specific fixes (the surname-order and unanswerable-name
+bugs), never mutated systematically end to end. Six hand-authored mutations
+across `_get`'s HTTPError handling, `verify_institution`'s subset-match
+guard, `_is_ambiguous_acronym`'s boundary, `_significant_tokens`' length
+filter, and `verify_arxiv`'s error-page detection. Each applied to a
+scratch copy, full 417-test suite run, reverted before the next.
+
+**All six survived the first pass** — production code needed zero changes;
+every survivor was a genuine untested behavior, not an actual bug in the
+current logic:
+
+- Dropping HTTP 410 ("Gone") from the `(404, 410)` not-found tuple in `_get`
+  survived: only 404 had a real-dispatch test (`test_a_404_is_an_answer...`
+  in `test_mutation_guards.py`); 410 would have silently become a network
+  failure — an unreachable-registry claim in place of the real "removed
+  record" answer the registry gave.
+- `verify_institution`'s `if wanted and wanted <= have:` — dropping the
+  `wanted and` half survived, and this is the most serious of the six: an
+  empty `wanted` set (a claim value that decomposes to nothing but
+  stopwords, e.g. a garbled extraction) is a subset of every registry hit
+  by definition, so without the guard ANY institution ROR returns would
+  satisfy the query and come back VERIFIED. That is exactly the
+  "manufacture coverage" failure mode the standing brief warns against,
+  just reached through a different door than the ones it names.
+- `_is_ambiguous_acronym`'s `<= 5` boundary survived narrowing to `< 5` —
+  only a 3-character acronym ("MIT") had ever been tried, so a 5-character
+  one silently losing its ambiguity caveat went unnoticed. Cosmetic
+  (affects the caveat text, not the VERIFIED status), but a real gap.
+- `_significant_tokens`' `len(t) > 1` filter survived being dropped —
+  single-letter fragments from ampersands/initials ("A & M" -> "a", "m")
+  would count as significant, adding noise to the token-overlap match and
+  to the "nearest listed name" hint.
+- `verify_arxiv`'s error-page detection, `"api/errors" in entry_id or
+  title.casefold() == "error"`, survived `or` -> `and`. The existing
+  regression test (`test_arxiv_error_feed_is_not_a_mismatch`) always
+  supplies both tells at once, so it can't see that they've stopped being
+  independent. This is the one with real teeth if it ever regressed live:
+  under the mutation, a title-only error page fell all the way through to
+  `_attribute` and came back **MISMATCH** against the stubbed author name —
+  a false contradiction on the tool's strongest verdict, from what was
+  purely a mismatch between the two signals arXiv happens to send today.
+
+All six now pinned in `tests/test_mutation_guards.py` (`TestInstitutionMatchGuards`,
+`TestArxivErrorSignalsAreIndependent`, plus one addition to the existing
+`TestRegistryAnswerVsSilence`), individually re-confirmed CAUGHT on re-sweep.
+**423 tests green.** `flags.py` and `scoring.py` had already been swept on
+prior nights (the entries above, plus a further independent flags.py pass
+pushed directly by the repo owner between nights — see NIGHTLY.md's
+2026-08-18 entry for the collision this caused with the still-open
+nightly/2026-08-17 PR). `names.py` remains the one file of the four with
+no *dedicated* broad sweep of its own — only the spot-checks from the
+surname-order/unanswerable-name fix. Worth doing properly next time this
+lens comes up.
+
+---
+
 ## CRITICAL (15)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says

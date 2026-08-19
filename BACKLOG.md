@@ -137,6 +137,93 @@ style, not promoted to a pinned behavior.
 pass — this covered `scoring.py` only, per the specific request that
 started it.
 
+### Mutation-testing sweep: `names.py` (2026-08-19, nightly run)
+
+The `flags.py` sweep above closes with "`verify.py` is now the only one of
+the four named files without a dedicated mutation pass" — but no
+`names.py` sweep exists anywhere in this file or in `git log`. What
+actually happened on 2026-08-16 was the surname-order and diacritics
+fairness *fixes*, each landing with targeted regression tests for the bug
+being fixed — real and valuable, but not a systematic sweep of every
+comparison in the file. That closing line was wrong; this entry is the
+first real one. (`verify.py` did get its dedicated sweep since, in the
+still-open `nightly/2026-08-18` PR — see NIGHTLY.md's running tally for
+current merge state.)
+
+13 hand-authored mutations across every boundary and guard in `names.py`:
+both `len(t) > 1` significant-token filters in `tokens()`, the `not mine`
+and `not usable` early-return guards, the `mine_is_latin != blob_is_latin`
+script-gate, the mononym `len(mine) == 1` branch, the `len(present) >= 2`
+confident-match threshold, the `len(present) == 1` single-token branch,
+the `or` between `parts[0] == matched` and `parts[-1] == matched`, the
+`matched not in words` continue-guard, the `extra` word length filter, the
+`all(...)` consistency check on `extra`, and dropping the
+hyphen-collapsed `blob_variants` entry. Same harness discipline as the two
+sweeps above: each mutation applied to a scratch copy, full suite run,
+reverted before the next.
+
+**5 of 13 survived the first pass.** One turned out to be an equivalent
+mutant on inspection (see below); the other four are real gaps, all on
+the accusation-risk side the module's own docstring exists to prevent:
+
+- Both `len(t) > 1` filters in `tokens()` (the "no bare initials" guard):
+  loosening to `len(t) > 0` lets a bare single-letter given-name initial
+  with no period (e.g. the subject typing their own name as "A Zhu") into
+  the significant-token set. `tokens("A Zhu")` stops being the length-1
+  mononym set `{"zhu"}` and becomes `{"a", "zhu"}`; a full candidate
+  record "Zhu Wei" then satisfies only one of two required tokens instead
+  of the one-token mononym rule, flipping a correct match into MISMATCH.
+  Measured live: `name_matches("A Zhu", ["Zhu Wei"])` goes `True` → `False`.
+- The `not mine` guard (subject name absent or reduces to nothing but
+  particles/honorifics, e.g. `""` or `"Dr."`): every existing test for
+  this guard pairs it with a Latin-script candidate, where a *different*
+  guard six lines later (the script-mismatch check) also independently
+  returns `None` — masking whether the guard actually under test does
+  anything. Deleting it outright passed the full suite. Paired against a
+  non-Latin candidate instead (nothing left to coincidentally catch it):
+  `name_matches("", ["Михаил Иванов"])` and `name_matches("Dr.", [...])`
+  both go `None` → `False` with the guard gone — an empty or
+  honorific-only subject name would be reported as *not* matching a real
+  registry record, an accusation built from having nothing to compare at
+  all.
+- The `not usable` guard (registry returned zero candidates), same
+  masking problem in reverse: paired with a non-Latin *subject* name
+  (equally "not Latin" as an empty blob, so the script-mismatch guard
+  doesn't fire either), `name_matches("Михаил Иванов", [])` goes `None` →
+  `False` with the guard gone. This one lands disproportionately on
+  non-Western names specifically — a Latin-script subject's empty-blob
+  case is always masked by the script-mismatch guard first, but a
+  non-Latin subject's is not, so the "no candidates ever means MISMATCH,
+  never UNCHECKABLE" bug would only ever bite the names this project's
+  fairness audits exist to protect.
+
+The fifth survivor, `all(w in mine for w in extra)` → `any(...)` on the
+single-token branch's per-candidate consistency check, was investigated
+and found to be an **equivalent mutant**: `present` (which gates whether
+this branch is even reached with exactly one token) is built by searching
+the *same* `blob` that `extra`'s words are drawn from, for every token in
+`mine` — so any `extra` word that is also `in mine` would, by
+construction, already have been found in `blob` and counted into
+`present`, contradicting the `len(present) == 1` precondition for reaching
+this branch at all. A 200,000-case random differential fuzzer (comparing
+the `all` and `any` variants directly, not through the test suite) found
+zero diverging inputs, consistent with that analysis. Not pinned — a test
+asserting current behavior here would not be verifying anything a future
+change could actually break.
+
+All four real survivors are now pinned in `tests/test_names.py`
+(`TestBareInitialIsNotASignificantToken`,
+`TestEmptyInputsStayUnanswerableAgainstNonLatinData`), individually
+reconfirmed to fail on their mutation and pass on the restored file. **417
+→ 421 tests, green.** `names.py` itself needed zero production changes —
+every real survivor was already correct, untested behavior, not a bug in
+the current logic.
+
+With this sweep, three of the four named files (`scoring.py`, `flags.py`,
+`names.py`) have had a dedicated mutation pass on `master`. `verify.py`'s
+sweep exists only on the still-open `nightly/2026-08-18` branch — it will
+be the fourth once that PR merges.
+
 ### Flag 13 — Self-Applied Doctoral Title Without a Matching Credential
 
 Built from a strategic discussion (2026-08-16, same-day interactive session,

@@ -415,3 +415,224 @@ two PRs that were sitting unmerged when it started:
 Plus the standing review question this session is adding: when you fix a
 function to newly return a value it never returned before, grep every
 caller, not just the ones your own PR happened to touch.
+
+---
+
+## 2026-08-19 (nightly run)
+
+### Open PRs at the start of this run — for the human's visibility, not acted on
+
+Two `nightly/*` PRs are open and unmerged against `master`, both draft,
+both from prior nightly runs, neither touched tonight (per the standing
+instruction — branched fresh from `origin/master`'s tip instead):
+
+- **PR #3** (`nightly/2026-08-17`, base since moved — see below):
+  `linkedin.py` red-team fixes (two real bugs: a comma in a post-date
+  description sentence misread as a location and silently dropped; a
+  self-applied "Dr."/"Prof." LinkedIn display name never rendered into
+  prose, so flag 13 couldn't see it) + a `flags.py` mutation-testing
+  sweep. 422 tests at time of opening. CI status reads `pending`/0 check
+  runs via the GitHub API — worth the human confirming whether checks are
+  actually configured on this repo before assuming CI ran.
+- **PR #4** (`nightly/2026-08-18`): a `verify.py` mutation-testing sweep
+  (six mutations, all survived, all real — including one with genuine
+  false-MISMATCH risk in `verify_arxiv`'s error-page detector). 423 tests
+  at time of opening. Same CI-status caveat as PR #3.
+- **Base-branch drift, already flagged by PR #4's own body:** three
+  commits landed directly on `master` between nights (not from a nightly
+  run) — including a `flags.py` mutation-testing sweep that duplicates
+  the one PR #3 already carries on its own branch. Whoever merges PR #3
+  should expect a collision there. Tonight's branch is based on current
+  `master` (`7699b72`), which already has both of those direct commits
+  (`scoring.py` and `flags.py` sweeps) — see below, this matters for the
+  backlog tally.
+
+### Backlog tally (15 CRITICAL findings, BACKLOG.md line ~210)
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open** — unchanged from the
+last several entries. Tonight's work didn't touch a BACKLOG.md finding
+(mutation-testing is a standing requirement, not a backlog item); no
+tally movement expected or claimed.
+
+### What I did
+
+Picked up the explicit top-of-list item from PR #4's own closing note:
+**`names.py` mutation-testing**, the last of the four files
+(`scoring.py`, `flags.py`, `names.py`, `verify.py`) the standing brief
+names as required. Small and independent by construction — this only
+ever adds tests, touches no production code, and doesn't depend on either
+open PR.
+
+Worth flagging first: the repo's own documentation trail on this was
+wrong. The `flags.py` sweep write-up (BACKLOG.md, 2026-08-16) claims
+"`verify.py` is now the only one of the four named files without a
+dedicated mutation pass" — implying `names.py` was already done by then.
+It wasn't. What happened 2026-08-16 was the surname-order and diacritics
+*fairness fixes*, each landing with targeted tests for the specific bug
+found — real, but not a systematic sweep of every comparison in the file.
+I found and noted this discrepancy in BACKLOG.md's new section rather
+than silently working around it, since the next reader would otherwise
+reasonably (and wrongly) conclude `names.py` was covered.
+
+Ran 13 hand-authored mutations across every boundary and guard in
+`names.py` (both `len(t) > 1` token filters, the `not mine`/`not usable`
+guards, the script-match gate, the mononym/confident-match/single-token
+length thresholds, the `parts[0]/parts[-1]` `or`, the `matched not in
+words` guard, the `extra`-word filter and its `all(...)` consistency
+check, and the hyphen-collapsed `blob_variants` entry) — same
+scratch-copy-run-revert harness as the two earlier sweeps.
+
+**5 of 13 survived. 4 are real, all accusation-risk:**
+
+1. `tokens()`'s "no bare initials" filter (`len(t) > 1` → `len(t) > 0`,
+   both occurrences): a subject-typed bare initial with no period (e.g.
+   "A Zhu") stops being the length-1 mononym set `{"zhu"}` and becomes
+   `{"a", "zhu"}`, which a genuine full-name record like "Zhu Wei" no
+   longer satisfies under the mononym rule. Live: `name_matches("A Zhu",
+   ["Zhu Wei"])` goes `True` → `False`.
+2. The `not mine` guard (empty/particle-only subject name): every
+   existing test for this guard happens to pair it with a Latin-script
+   candidate, where a *different*, later guard (the script-mismatch
+   check) independently also returns `None` — so the suite never actually
+   exercised whether this specific guard does anything. Deleting it
+   outright still passed the full suite. Pairing with a non-Latin
+   candidate instead (nothing left to coincidentally catch it) exposes
+   it: `name_matches("", ["Михаил Иванов"])` and `name_matches("Dr.",
+   [...])` both go `None` → `False` with the guard gone.
+3. The `not usable` guard (zero registry candidates), the mirror-image
+   masking problem: paired with a non-Latin *subject* name this time (an
+   empty blob is "not Latin" too, so the script guard doesn't fire),
+   `name_matches("Михаил Иванов", [])` goes `None` → `False`. This one is
+   worth naming specifically as a fairness finding, not just a coverage
+   gap: a Latin-script subject's own empty-candidate case is *always*
+   masked by the script guard firing first, but a non-Latin subject's
+   never is — so this exact bug, if it existed, would land exclusively on
+   the non-Western names this project's fairness audits exist to protect.
+4. (The `all(...)` → `any(...)` mutation on the per-candidate consistency
+   check survived too, but turned out to be an **equivalent mutant** —
+   `present`'s construction guarantees any `extra` word also in `mine`
+   would already have been counted into `present`, contradicting the
+   `len(present) == 1` precondition for reaching that branch. Confirmed
+   with a 200,000-case random differential fuzzer against both variants
+   directly: zero diverging inputs. Not pinned — there is nothing a
+   future change could break that a test here would catch.)
+
+All four real survivors pinned in `tests/test_names.py` two new test
+classes (`TestBareInitialIsNotASignificantToken`,
+`TestEmptyInputsStayUnanswerableAgainstNonLatinData`), each individually
+reconfirmed to fail on its mutation and pass on the restored file (not
+just checked once at the end — see the transcript's per-mutation
+subprocess runs). **417 → 421 tests, green.** `names.py` itself needed
+zero production changes — every real survivor was already-correct,
+merely untested behavior.
+
+Full mutation-by-mutation detail is in BACKLOG.md under "Mutation-testing
+sweep: `names.py` (2026-08-19, nightly run)".
+
+### End-to-end CLI check (required after touching anything in the
+### names.py/verify.py/flags.py/extract.py/scoring.py family)
+
+No production code changed tonight, so this was a sanity check rather
+than a required regression check — but the required-after-touching-these-
+files rule exists precisely so a change doesn't get to skip it by
+reasoning "it's only tests," so I ran it anyway, live against Crossref
+(network available this session):
+
+- **Clean sample**: a prose bio for the real physicist Markus Aspelmeyer,
+  correctly attributed, citing his real DOI (`10.1038/nphys1170`, Crossref
+  gives sole author "Markus Aspelmeyer"). Result: the DOI claim comes back
+  `VERIFIED`, flags 4/6/10/11 all `PASSED`, OpenAlex/Wikipedia signals
+  both corroborate the subject. Overall level lands on **INSUFFICIENT
+  DATA** (evidence coverage 32%, just under the 35% `MIN_COVERAGE` floor)
+  — expected, not a regression: this is the standing "vagueness/thin-
+  profile" gap the task brief already documents, and a short truthful bio
+  correctly not being score-manipulated either way is the honest outcome.
+- **Fabricated sample**: the same real DOI, same real paper, but
+  attributed to "Dr. John Smith, PhD" (not the actual author) plus vague
+  "40 years of published, peer-reviewed research" filler. Result:
+  `MISMATCH` on the DOI claim (`name_matches` correctly reports "John
+  Smith" ≠ "Markus Aspelmeyer" — an actual mismatch, not one of tonight's
+  unanswerable-input edge cases), flag 11 `TRIGGERED`, verdict **ORANGE**,
+  score 33.
+
+This confirms the full pipeline still routes through `name_matches`
+correctly on both the genuine-match and genuine-mismatch paths — tonight's
+new tests only add coverage for the *unanswerable* (`None`) paths in
+between, which this check doesn't exercise by design (that's what the
+unit tests are for).
+
+### Adversarial re-review (step 5 of the standing cycle)
+
+No function's return contract, type, or possible output values changed
+tonight — `names.py` itself is byte-identical to the start of the run.
+The specific failure this step exists to catch (a caller silently
+mishandling a newly-possible return value) doesn't apply when nothing
+downstream has anything new to learn about. Skipped with this note rather
+than silently, per the instruction to always say when a step doesn't
+apply rather than leaving it unaddressed.
+
+### Mutation-testing log (standing requirement, tracked until all four
+### files have had a real pass)
+
+- `scoring.py`: done, 2026-08-16 (direct-to-master commit `79f6cf8`, not
+  a nightly run). On `master`.
+- `flags.py`: done, 2026-08-16 (direct-to-master commit `d958ce0`). On
+  `master`. A **second**, independent `flags.py` sweep also exists on the
+  still-open `nightly/2026-08-17` PR (#3) — likely duplicate/colliding
+  tests for whoever merges it; not resolved tonight since PR #3 wasn't
+  touched.
+- `names.py`: **done tonight** (this entry). On this branch,
+  `nightly/2026-08-19`.
+- `verify.py`: done, but only on the still-open `nightly/2026-08-18` PR
+  (#4) — not yet on `master`.
+
+**All four files now have at least one real sweep somewhere in the repo's
+history**, but `master` itself only has three (`verify.py`'s is stuck on
+an unmerged branch). This mandatory requirement will be fully satisfied
+on `master` once PR #4 merges — nothing further to do on this front
+except merging what already exists.
+
+### What I learned
+
+- The "which files still need a mutation sweep" bookkeeping in this repo
+  has been unreliable at least once before (see the flags.py-sweep
+  write-up's wrong closing claim above) — worth treating any single
+  night's "X still needs a sweep" pointer as a lead to confirm via `git
+  log`/`grep`, not a fact, the same way BACKLOG.md's own findings are
+  treated. I did that here; future runs should too.
+- Equivalent mutants are a real, expected category, not a sign the sweep
+  was done wrong — the `all`/`any` survivor here couldn't be distinguished
+  by *any* input given how `present` and `extra` are both derived from
+  the same `blob`. Forcing a synthetic pinning test for it would have
+  been noise (a test with no real regression behind it), not rigor. The
+  standing instruction to always pin a survivor should be read as "pin it
+  unless you can show — not just suspect — that it's unreachable."
+- The "guard masking" pattern (a guard is provably untested because a
+  *different*, later guard already returns the same answer for every case
+  the test suite tries) seems specific enough to `name_matches`'s stack of
+  early-return guards that it's worth a quick grep in other multi-guard
+  functions (`verify.py`'s dispatch functions have a few) next time
+  someone's doing a mutation pass there — same shape of bug is plausible
+  wherever multiple guards can independently reach the same return value.
+
+### What the next run should pick up first
+
+1. **Merge state, not new work, first**: two open, unmerged nightly PRs
+   (#3, #4) are sitting with unclear CI (`pending`/0 check runs via the
+   API in both cases — confirm whether CI is actually wired up on this
+   repo, separately from tonight's task). This isn't something a nightly
+   run auto-merges, but it's worth a human's attention before a third
+   night's PR stacks on top.
+2. **The core gap is still fully open**: subject-anchored verification
+   producing an actual `CONTRADICTED`/reconciliation verdict (derived
+   `Claims` + reconciliation step) rather than just PASSED/UNKNOWN. Read
+   the task brief's OpenAlex section again first (live-measured
+   constraints: USD rate limiting, 59.8% single-work author-entity splits,
+   only 7.3% carrying an ORCID, merged-entity false positives) — this is
+   still the single biggest lever in the codebase and no night has
+   attempted the actual derived-Claim/reconciliation architecture yet.
+3. Once PRs #3 and #4 both merge, the standing mutation-testing
+   requirement is satisfied for all four files — future nights' mandatory
+   passes should pick a *different* production file (`providers.py`,
+   `linkedin.py`, `extract.py`, `cli.py` are all candidates) rather than
+   re-sweeping the same four from scratch.

@@ -137,6 +137,54 @@ style, not promoted to a pinned behavior.
 pass — this covered `scoring.py` only, per the specific request that
 started it.
 
+### Mutation-testing spot-check: all four required files (2026-08-23, nightly run)
+
+Not a full sweep — the primary item tonight was the DEGREE_RE fix above, so
+this was the mandatory time-boxed pass (one hand-authored mutation per file,
+scratch-copy-run-revert, same harness as the sweeps above), not a repeat of
+the exhaustive per-file campaigns. Worth doing anyway: `scoring.py` and
+`flags.py`'s sweeps are on `master`; `names.py`'s and `verify.py`'s sweeps
+(nightly/2026-08-19 and nightly/2026-08-18) are sitting in still-unmerged
+PRs, so from `master`'s own test suite alone, only two of the four files
+had ever actually been checked.
+
+- `scoring.py` (`_apply_floors`'s `<=` → `<` tie-break): **caught** —
+  `TestFloorTieBreak.test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message`
+  failed on the mutation, confirming the 2026-08-16 sweep's pinning test is
+  still doing its job on `master`.
+- `flags.py` (`if refuted or mismatched:` → `if refuted:` on flag 11):
+  **caught** — `TestMutationSurvivorsFlags.test_a_mismatched_identifier_is_a_contradiction`
+  failed on the mutation, same confirmation.
+- `names.py` (`if len(present) >= 2:` → `>= 3:`): **caught** — 18 failures
+  across the name-matching and attribution suites, confirming the
+  2026-08-19 sweep's coverage of this exact boundary (that sweep's tests
+  are not yet on `master`, but its pinning tests for other boundaries
+  already exercise this path incidentally).
+- `verify.py` (`if wanted and wanted <= have:` → `if wanted <= have:` in
+  `verify_institution`): **SURVIVED on `master`** — the full 419-test suite
+  stayed green with the guard dropped. This is the exact mutation the
+  nightly/2026-08-18 sweep (PR #4, still unmerged) already found and
+  described as "the closest to an actual bug": a claim value that
+  decomposes to nothing but stopwords (e.g. "Of The") gives `wanted` an
+  empty set, and an empty set is a subset of any ROR hit by definition —
+  without the guard, the FIRST institution ROR happens to return for a
+  claim naming nothing at all comes back `VERIFIED`, manufacturing a
+  confirmed credential from an empty query. Since `master` does not yet
+  have PR #4's pinning test for it, added one directly tonight rather than
+  leaving it unpinned a second time: `TestRegistries.test_a_claim_of_nothing_but_stopwords_cannot_be_verified`
+  in `tests/test_verify.py`, confirmed to fail on the mutation and pass on
+  the restored file. (PR #4 will likely carry a near-duplicate of this test
+  when it eventually merges — a small, known collision, flagged here so
+  whoever merges it isn't surprised.)
+
+**Tally after tonight: all four of `scoring.py`/`names.py`/`flags.py`/`verify.py`
+now have at least one real mutation pass with evidence, and — as of
+tonight's `verify.py` pinning test — `master` itself (not just an unmerged
+PR) carries a regression test for the one survivor found. `names.py`'s and
+verify.py's exhaustive sweeps (13 and 6 mutations respectively, full
+per-file campaigns) are still only on unmerged branches; see "Open PRs at
+the start of this run" at the top of tonight's NIGHTLY.md entry.**
+
 ### Flag 13 — Self-Applied Doctoral Title Without a Matching Credential
 
 Built from a strategic discussion (2026-08-16, same-day interactive session,
@@ -763,7 +811,7 @@ Flag 10 is the tool's validation dimension, and its fallback branch returns PASS
 
 ---
 
-### DEGREE_RE's re.I defeats the capitalisation anchors, so the institution sent to ROR is corrupted prose
+### [FIXED — nightly/2026-08-23] DEGREE_RE's re.I defeats the capitalisation anchors, so the institution sent to ROR is corrupted prose
 
 `_INSTITUTION_CORE` relies on `[A-Z]` to bound institution names, but it is interpolated into `DEGREE_RE`, which is compiled with `re.I`. Under IGNORECASE, `[A-Z][\w-]*` matches lowercase words, so the optional trailing group runs past the real name into the following prose. The corrupted string is stored as the `degree_institution` claim, sent verbatim to ROR (which of course has no such organisation), and then printed to the user as the flag's evidence — an institution name the subject never wrote. A second failure mode in the same pattern truncates real names: the trailing group only continues across a connector word ('of', 'de', 'van'…), so 'Technische Universität München' is cut to 'Technische Universitat' and 'Universiteit Gent' to 'Universiteit'. Note `INSTITUTION_RE` at extract.py:90 is compiled WITHOUT re.I and extracts the same string correctly as `mentioned_institution`, which is what makes the discrepancy visible in the report.
 
@@ -773,6 +821,11 @@ Flag 10 is the tool's validation dimension, and its fallback branch returns PASS
 
 **Fix direction:** Compile the institution sub-pattern case-sensitively (build DEGREE_RE from case-insensitive degree/connector fragments plus an inline `(?-i:...)` block for `_INSTITUTION_CORE`, or match the degree and institution in two passes), and allow the name to continue across non-connector capitalised tokens so 'Technische Universität München' survives intact. Never send a claim value to a registry that a case-sensitive re-scan of the source text does not reproduce.
 
+**[FIXED — nightly/2026-08-23]** The corruption half (this entry's primary harm) is closed, but NOT the way the fix direction above proposed. `(?-i:...)` was tried first and does stop the "and a" overrun — but it also broke a standing invariant the test suite already enforced (`TestDeterminism.test_cosmetic_variation_does_not_move_the_verdict`, `tests/test_round4.py`): this repo deliberately guarantees identical claims for an all-caps or all-lowercase paste of the same profile, and reintroducing case-sensitivity into `_INSTITUTION_CORE` broke that determinism test immediately (an all-caps or all-lowercase "Delft University of Technology" no longer matched `[A-Z]` at all). Caught only because the full suite was run after the change, not just the new tests — the exact failure mode the standing brief's "review across function boundaries" step exists to catch, one regex flag deep instead of one function call deep.
+
+Shipped instead: `_INSTITUTION_CORE`'s trailing connector group keeps re.I (so the whole-document case invariance holds) but the up-to-two-more-words continuation after a connector ('of'/'de'/...) now carries a negative lookahead excluding a short list of function words ('and', 'but', 'or', 'nor', 'with', 'a', 'an', 'the', 'who', 'which', 'that') that can follow an institution mention in prose but are never part of one. `'Rotterdam School of Management and a BSc'` now correctly yields the `degree_institution` claim `'Rotterdam School of Management'`; `'Universidad de Sevilla and Roberto Diaz co-authored...'` yields `'Universidad de Sevilla'`. Verified live through the real pipeline (not just the handler): `run_audit` on the Rotterdam sentence now reports flag 8 evidence as "Degree tied to a named institution (Rotterdam School of Management)" — matching what the subject actually wrote. Full 419→420 test suite green throughout, including the determinism test, which was re-confirmed still passing on all six of its cosmetic variants (trailing space, CRLF, doubled spaces, uppercase, lowercase, no final period) after the fix.
+
+**Deliberately NOT fixed tonight, and confirmed still open:** the second failure mode this entry names — real institution names truncated after the first word when no connector follows ('Technische Universitat Munchen' → 'Technische Universitat', losing 'Munchen'/'München'). Re-measured live: this is NOT specific to `DEGREE_RE`'s re.I leak — `INSTITUTION_RE` (extract.py:90, `mentioned_institution`, already case-sensitive, untouched tonight) produces the identical truncation on the identical input. It is a shared, pre-existing limit of `_INSTITUTION_CORE`'s continuation logic (only continues past the institution-type word across one of the listed connector words, never across a bare adjacent capitalised token), affecting both subtypes equally. Left open as a separate, smaller-severity issue — a truncated-but-still-real name is a weaker false claim than a fabricated one — and is the natural next pick-up if extending this area.
 ---
 
 ### Timeline flag accuses ordinary CVs: recent-roles-only bios and future graduation dates

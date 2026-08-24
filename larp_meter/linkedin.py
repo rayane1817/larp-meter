@@ -84,6 +84,13 @@ class Profile:
         institutions and companies land on separate lines.
         """
         parts = []
+        if self.name:
+            # The name field is the cheapest possible place to self-apply a
+            # "Dr."/"Prof." title: it costs a fabricator nothing but typing
+            # it into their own LinkedIn display name. Flag 13 scans ctx.text
+            # for exactly that pattern, so the name has to actually reach the
+            # prose it scans, not just headline/about/experience/education.
+            parts.append(self.name)
         if self.headline:
             parts.append(self.headline + ".")
         if self.about:
@@ -241,6 +248,44 @@ def _is_chrome(line):
     return bool(stripped) and any(p.match(stripped) for p in _CHROME_PATTERNS)
 
 
+_LOCATION_KEYWORDS = ("remote", "hybrid", "area")
+
+
+def _looks_like_location(line):
+    """Is the first non-blank line after an experience's date the location,
+    or the start of the achievement description?
+
+    Location lines in LinkedIn paste are short comma-separated place names
+    ("Antwerp, Belgium") or a handful of fixed remote-work labels ("Remote",
+    "Greater London Area"). A short comma-containing DESCRIPTION sentence
+    ("Led cross-functional team of 12, shipped v2 platform.") is easy to
+    mistake for one under a bare "has a comma" test -- and to_prose() never
+    renders exp.location at all, so a false positive here doesn't just
+    mislabel the sentence, it silently deletes it from everything the
+    extractors and flags ever see. Keep this conservative: prefer leaving a
+    genuine location mis-classified as description (still visible in prose)
+    over swallowing real content into the field nothing renders.
+    """
+    stripped = line.strip()
+    if len(stripped) >= 60:
+        return False
+    lower = stripped.lower()
+    if any(word in lower for word in _LOCATION_KEYWORDS):
+        return True
+    if "," not in stripped:
+        return False
+    # A description sentence reads like prose: it has digits ("team of 12"),
+    # ends with sentence punctuation, or contains lowercase words that are
+    # not part of a place name. A location's comma-separated parts are each
+    # a capitalized place ("Antwerp", "Belgium") with no such tells.
+    if any(ch.isdigit() for ch in stripped):
+        return False
+    if stripped.endswith((".", "!", "?")):
+        return False
+    parts = [p.strip() for p in stripped.split(",")]
+    return all(p and p[0].isupper() for p in parts)
+
+
 def _format_duration(match):
     years = int(match.group(1)) if match.group(1) else 0
     months = int(match.group(2)) if match.group(2) else 0
@@ -366,8 +411,7 @@ def _parse_experiences(lines):
             post = [l.strip() for l in clean[date_idx + 1:] if l.strip()]
             if post:
                 first = post[0]
-                if len(first) < 60 and ("," in first or
-                        any(w in first.lower() for w in ("remote", "hybrid", "area"))):
+                if _looks_like_location(first):
                     exp.location = first
                     post = post[1:]
                 exp.description = " ".join(post)

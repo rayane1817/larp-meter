@@ -112,3 +112,23 @@ class TestScriptMismatchIsUnanswerable(unittest.TestCase):
 
     def test_both_sides_in_the_same_non_latin_script_still_compare(self):
         self.assertTrue(names.name_matches("Михаил Иванов", ["Михаил Иванов"]))
+
+
+class TestNoCandidatesIsUnanswerable(unittest.TestCase):
+    """Zero registry candidates means the question was never put to anyone,
+    not that the answer is no. This guard matters almost exclusively for
+    non-Western names: a Latin-script subject with an empty candidate list
+    is already caught by the script-mismatch guard above (mine_is_latin=True,
+    blob_is_latin=False for an empty blob), which independently returns None
+    for the same input -- masking whether this guard does anything at all.
+    A single-token non-Latin subject name is the case that actually needs
+    it: mine_is_latin and blob_is_latin are both False (no ASCII letters on
+    either side), so the script guard lets it through, and without this
+    guard the empty `present` set for a mononym would fall into
+    `bool(present)` and read as a confident mismatch from zero evidence."""
+
+    def test_no_candidates_at_all_is_unanswerable_not_a_mismatch(self):
+        self.assertIsNone(names.name_matches("Михаил", []))
+
+    def test_only_blank_candidates_is_unanswerable_not_a_mismatch(self):
+        self.assertIsNone(names.name_matches("Михаил", ["", "   "]))

@@ -415,3 +415,231 @@ two PRs that were sitting unmerged when it started:
 Plus the standing review question this session is adding: when you fix a
 function to newly return a value it never returned before, grep every
 caller, not just the ones your own PR happened to touch.
+
+---
+
+## 2026-08-25 (nightly run)
+
+### ⚠ Open PR pileup, now five deep — for human visibility, not acted on
+
+**Five `nightly/*` PRs are open, draft, and unmerged against `master`
+right now**, the oldest dating back eight nights:
+
+| PR | Branch | What it carries | State |
+|---|---|---|---|
+| #3 | `nightly/2026-08-17` | `linkedin.py` red-team fixes + `flags.py` mutation sweep | **`mergeable_state: dirty` — real merge conflict** |
+| #4 | `nightly/2026-08-18` | `verify.py` mutation sweep (6 mutations, all real) | clean, CI green |
+| #5 | `nightly/2026-08-19` | `names.py` mutation sweep (13 mutations, 4 real) | clean, CI green |
+| #6 | `nightly/2026-08-23` | `DEGREE_RE` case-insensitivity fix + 4-file mutation spot-check | clean, CI green |
+| #7 | `nightly/2026-08-24` | `linkedin.py` fixes (re-derived independently) + verify.py/names.py mutation pins | clean, CI green |
+
+Read all five diffs in full before starting tonight's work, specifically to
+avoid a third instance of what PR #6 and PR #7 both already flagged doing:
+**re-deriving work that's already sitting finished on an unmerged branch.**
+Worth stating plainly since it's now happened twice: PR #7 independently
+re-fixed the exact two `linkedin.py` bugs PR #3 already fixed six nights
+earlier (different test names, same root cause), and both PR #6 and PR #7
+independently added near-duplicate `verify.py`/`names.py` pinning tests for
+guards PR #4/#5's sweeps had already found. None of this is anyone doing
+anything wrong — each run correctly checked "is this still true on
+`master`" and found the answer was yes, because `master` never received the
+unmerged fix — but it means real engineering time has now been spent
+*three times* on some of the same handful of bugs, and will keep being
+spent every night this queue stays unmerged. **This is no longer a minor
+note: it is now the single biggest drag on this project's velocity**,
+ahead of any individual BACKLOG.md finding. Tonight's response was to
+deliberately pick a primary item with zero file overlap with any of the
+five branches (see below) rather than add a sixth risk of duplication, and
+to say this as plainly as possible here rather than repeat a softer
+version of the same paragraph a fourth time.
+
+### Running backlog tally (15 CRITICAL findings)
+
+**9 [FIXED] / 1 [PARTIALLY FIXED] / 5 still open** — moved by one tonight.
+Verified directly against `BACKLOG.md`'s own `## CRITICAL (15)` section on
+`origin/master`'s current tip (`7699b72`) before writing this down: FIXED =
+the institution-dead-code trio, GitHub/ClinicalTrials existence-vs-
+attribution, GitHub-only-registry, ClinicalTrials-investigator-fields, the
+surname-first-token fix, and **tonight's fix** (see below) = 9. PARTIALLY
+FIXED = the non-Latin-script fold (transliteration variance still open) =
+1. Still open = the core "one-way, claim-anchored funnel" finding and its
+duplicate write-up further down, "zero registry reach on a realistic
+prose profile" (both IN PROGRESS, not FIXED — see 2026-08-15/2026-08-16
+entries above), "citing no identifiers disables the entire verification
+half", and "`--verify` suppresses the 'nothing was checked' warning" = 5.
+
+### What I did
+
+**Primary item: "Any identifier appearing anywhere in the text is treated
+as a personal authorship claim"** — a CRITICAL finding no run had
+investigated before tonight (confirmed by grepping every prior NIGHTLY.md
+entry and this file's own `[FIXED]`/`[IN PROGRESS]` annotations first), and
+with zero file overlap with any of the five open PRs above, which was the
+deciding factor in picking it over anything else on the list.
+
+Confirmed live before touching anything, matching the entry's own
+measurement exactly: `extract.py` captures a 60-character context window
+around every DOI/ORCID/arXiv/patent match into `Claim.context`
+(`_context()`, extract.py:171-174) but nothing in the codebase ever reads
+that field (`grep -rn "\.context" larp_meter/` returns nothing outside its
+own definition and construction) — `verify.py`'s `_attribute`, the single
+shared tail for all four identifier types plus the GitHub-user branch,
+decides VERIFIED/MISMATCH purely from whether the registry's author list
+contains the subject's name, with no way to ask whether the subject's own
+sentence was even claiming authorship. Reproduced the entry's own patent-
+attorney example through the real dispatch path (stubbed Crossref, not
+`run_audit`'s mock network layer): "I prosecuted US 9876543 for a client
+in the sensor space. I was not the inventor on this work" came back flag
+11 **TRIGGERED**, the tool's only floor-carrying flag, on a sentence that
+explicitly disclaims the exact thing the flag accuses it of claiming.
+
+Wrote four failing tests first (`tests/test_verify.py`,
+`TestAttribution`), watched three of them fail against the unmodified
+code (the fourth, a negative control with no disclaiming language, passed
+immediately — confirming it wasn't a fixture bug), then fixed it: added
+`_disclaims_authorship()`, a phrase-based guard checked at the top of
+`_attribute`, before the existing subject-name/usable-names/match-is-None
+branches. When `claim.context` carries an explicit third-party signal
+("prior art", "cit-ed/ing/ation", "based/built/building on", "not the
+inventor/author/credited/own", "client", "employer", "colleague",
+"co-worker", "teammate", "on behalf of", "someone else's", "another's"),
+the claim resolves to UNCHECKABLE — the same "existence recorded,
+attribution not asserted" treatment `verify_github`'s repo branch and
+`verify_nct` already give ownership-ambiguous artifacts, just reached via
+context instead of by artifact type.
+
+**Deliberately took the narrower of the two fix directions the BACKLOG
+entry offered.** The entry's primary suggestion — require *positive*
+first-person/possessive framing before any identifier counts as
+attributable at all — would flip the tool's default behavior for the
+ordinary case too: a CV that lists "Publications: 10.xxx, 10.yyy" under a
+heading, with no "my"/"I" anywhere nearby, is the common shape of a
+genuine bio, not a special case. Flipping the default there is a
+materially larger, harder-to-fully-review change than fits in one night's
+slot, and got explicitly deferred rather than rushed. Tonight's
+deny-list-of-disclaiming-phrases approach is asymmetric on purpose: it can
+only ever turn a would-be VERIFIED or MISMATCH into UNCHECKABLE, never the
+other direction, so an evasive phrasing the guard fails to recognise costs
+coverage (same as before tonight), never produces a false accusation. This
+fixes the false-positive (honest citation punished) side of the finding;
+it does not add new fraud-detection surface, and a fabricator who bare-
+pastes a stolen identifier with no citation language at all is unaffected
+— noted explicitly in BACKLOG.md so it isn't mistaken for more than it is.
+
+### Verification
+
+- Full suite: 417 → 421 tests, green throughout (after the fix, after each
+  mutation below, and at the end).
+- Regression-checked the fix cannot become a blanket downgrade: every
+  existing hand-constructed `Claim(...)` in the test suite passes no
+  `context=` kwarg at all (defaults to `""`), and `bool("")` is falsy, so
+  none of them are touched by the new guard —
+  `test_doi_without_disclaiming_context_is_still_checked_normally` pins a
+  same-shape DOI claim with ordinary, non-disclaiming context and confirms
+  it still resolves MISMATCH exactly as before.
+- Ran the CLI end-to-end on two hand-written samples per the standing
+  requirement, live against real Crossref/Google Patents (network was
+  reachable this session):
+  - **Clean**: a patent attorney's bio, explicitly stating "I was not the
+    inventor on that filing — I drafted and prosecuted the claims on the
+    client's behalf." Landed on INSUFFICIENT DATA (thin profile, expected)
+    with flag 11 correctly **UNKNOWN** ("none could be attributed to the
+    subject") and the claim ledger showing the patent **UNCHECKABLE** with
+    the new guard's detail text — not TRIGGERED, which is what it returned
+    before tonight's fix.
+  - **Should-flag**: "Dr. John Smith... 40 years of published,
+    peer-reviewed research", citing a real DOI (Markus Aspelmeyer's actual
+    paper) with no disclaiming language anywhere. Flag 11 correctly
+    **TRIGGERED**, claim status **MISMATCH** — confirms the fix does not
+    blunt genuine fraud detection, only the false-accusation case it
+    targets.
+- Cross-boundary check (the standing "grep every caller" review question):
+  the guard does not introduce a new possible value anywhere — `UNCHECKABLE`
+  already existed and is already correctly handled by every downstream
+  consumer (`flags.py`'s `f_contradicted`/`f_output`/`f_credentials`,
+  `scoring.py`, `report.py`'s `CLAIM_ICON`), because `_attribute` already
+  produced it from two other branches (no usable names, unanswerable name
+  match) before tonight. This is a new *path* to an existing, already-
+  tested outcome, not a new outcome type — a materially smaller blast
+  radius than last cycle's `None`-handling bug, and confirmed by grep
+  before relying on that claim rather than assuming it.
+
+### Mandatory mutation-testing pass
+
+Time-boxed, one hand-authored mutation each in `scoring.py`, `flags.py`
+and `names.py` (verify.py's mutation-testing requirement was already met
+by mutating and reverting tonight's own new guard in `_attribute` — see
+"Verification" above, three tests failed, confirmed real). Picked lines
+not called out in any prior night's sweep write-up, to avoid re-checking
+the exact same guard a third time:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `category_scores`'s `if r is None or r.status not in (...)`: `or` → `and` | **Caught** — 14 failures/errors |
+| `flags.py` | flag 1/2's `if claimed not in dom.CREDENTIAL_GATED:` (both occurrences share this line; mutated the flag-1 instance): `not in` → `in` | **Caught** — 13 failures |
+| `names.py` | mononym branch `if len(mine) == 1: return bool(present)` → `return True` | **Caught** — `test_mononym` (`Prince` vs `Madonna`) fails |
+| `verify.py` | tonight's own `_disclaims_authorship(claim.context)` guard, deleted | **Caught** — 3 new regression tests fail |
+
+All four caught, all four reverted and the full suite reconfirmed green
+after each. No survivors tonight — a legitimate outcome, not a sign the
+exercise wasn't done; see prior nights' sweeps for the boundaries these
+mutations were deliberately picked to re-check (`category_scores`'
+UNKNOWN-exclusion filter and the open-entry-field guard were both real
+survivors when first swept on 2026-08-16/2026-08-17, so re-confirming
+they're still caught tonight is meaningful, not redundant).
+
+### What I confirmed in BACKLOG.md (evidence, not assertion)
+
+- **CRITICAL "Any identifier appearing anywhere in the text is treated as
+  a personal authorship claim" — CONFIRMED and FIXED.** Live repro matched
+  the entry's own patent-attorney example exactly. Full before/after and
+  the reasoning for the narrower fix direction recorded inline in
+  BACKLOG.md.
+- Did not re-verify any other BACKLOG.md entry tonight — this was a
+  single, focused pick, not a fresh sweep.
+
+### What I learned
+
+- The PR pileup is now actively costing correctness-adjacent effort, not
+  just tidiness: reading all five open diffs *before* picking tonight's
+  item (rather than after) is what avoided becoming the third instance of
+  re-deriving already-fixed work. Future nights should keep doing this
+  read-first, and should weight "zero file overlap with every open PR"
+  explicitly when choosing what to work on, the same way tonight did.
+- `grep -rn "\.context" larp_meter/` returning literally nothing outside
+  the field's own definition/construction was the single most useful
+  confirmation step tonight — it turned "the BACKLOG entry says this field
+  is dead" from an assertion to a directly-checked fact in about five
+  seconds, and is worth reaching for early whenever a BACKLOG finding
+  claims a field or return value is captured but never consumed.
+
+### Where to pick up next
+
+1. **The PR queue is now the top priority, ahead of any single finding.**
+   Five open, unmerged `nightly/*` branches, one already conflicting. Every
+   night this stays unmerged is measured, real, duplicated engineering
+   effort — not a hypothetical risk any more, per the last three nights'
+   independent re-discoveries of the same bugs. Strongly recommend a human
+   merge pass (or an explicit decision to close/supersede the ones now
+   fully covered by later independent fixes, e.g. PR #3's `linkedin.py`
+   half looks superseded by PR #7's independent re-fix) before the next
+   nightly run adds a sixth branch to the pile.
+2. **The core gap is still fully open** — subject-anchored `Claim`s +
+   reconciliation, gated behind the OpenAlex affiliation/`years`-array
+   corroboration work the standing brief describes. Untouched again
+   tonight; still the single biggest lever in the codebase, and every
+   night's entry for the past two weeks has said the same thing. Worth a
+   night with nothing else — including the PR-queue problem, once that's
+   resolved — competing for the slot.
+3. Re-verify the OpenAlex/registry constraints in the task brief against a
+   live request before starting on (2) — last measured 2026-08-14, and the
+   brief itself says not to trust them indefinitely.
+4. Two CRITICAL findings remain genuinely untouched by any run:
+   **"Citing no identifiers disables the entire verification half of the
+   tool, including its only severity floor"** and **"`--verify` suppresses
+   the 'nothing was checked' warning while performing zero checks"** — both
+   read in full tonight while surveying the CRITICAL section, neither
+   picked because tonight's slot went to the identifier-attribution
+   finding instead. Both are well-scoped, both have a live repro already
+   written in BACKLOG.md, and both look like reasonable single-night picks
+   once the PR queue is under control.

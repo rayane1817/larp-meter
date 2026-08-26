@@ -23,6 +23,19 @@ def score_text(report, suffix="/100"):
     return f"{report['larp_score']}{suffix}"
 
 
+def _verification_label(report, verified_word="verified", unverified_word="unverified"):
+    """Three real states, not two. `verified` on its own only ever meant
+    '--verify was passed' -- it says nothing about whether the run reached a
+    registry. A profile with no checkable identifiers makes --verify a
+    no-op, and the old two-state badge showed the identical text for that as
+    for a run that genuinely checked something."""
+    if not report.get("verified"):
+        return unverified_word
+    if report.get("verification_effective"):
+        return verified_word
+    return "verify attempted, 0 checked"
+
+
 def caveats(report):
     """Things a human must know before acting on this report."""
     out = []
@@ -65,11 +78,16 @@ def caveats(report):
         out.append(f"{len(checkable)} identifier(s) could be checked against a public registry "
                    f"but were not — re-run with --verify.")
 
+    if report.get("verified") and not report.get("verification_effective"):
+        out.append("--verify ran but no claim carried an identifier any registry could resolve; "
+                   "0 lookups were performed. This is not the same as a clean check — treat it "
+                   "exactly like an unverified run.")
+
     # The most important thing a reader can misunderstand. Nothing in text mode
     # establishes that a claim is TRUE — only that the profile is internally
     # consistent and specific. A fabricated bio that asserts the right things
     # passes, and does so easily.
-    if (report.get("level") in ("GREEN", "YELLOW") and not report.get("verified")
+    if (report.get("level") in ("GREEN", "YELLOW") and not report.get("verification_effective")
             and not (report.get("signals") or {}).get("wikipedia_about_subject")):
         out.append("Nothing here was checked against an outside source: the passing flags rest on "
                    "the subject's own account of themselves. A well-written fabrication passes "
@@ -121,7 +139,7 @@ def render_terminal(report, show_claims=True):
     out.append(f"  {LEVEL_ICON.get(lvl, '⚪')} {level_color(c, lvl)}{c.bold}{lvl}{c.reset}"
                f"   LARP score {score_text(report)}"
                f"   ·  evidence coverage {report['evidence_coverage_pct']}%"
-               f"   ·  {'verified' if report['verified'] else 'unverified'}")
+               f"   ·  {_verification_label(report)}")
     out.append(f"  {'─' * 62}")
     out.append(f"  {report['summary']}")
     spec = report["specificity_index"]
@@ -210,7 +228,7 @@ def render_markdown(report):
         f"**LARP score:** {score_text(report)}  ",
         f"**Evidence coverage:** {report['evidence_coverage_pct']}%  ",
         f"**Specificity index:** {report['specificity_index']}  ",
-        f"**Registry verification:** {'yes' if report['verified'] else 'no'}  ",
+        f"**Registry verification:** {_verification_label(report, 'yes', 'no')}  ",
         f"**Summary:** {report['summary']}",
         "",
     ]
@@ -317,7 +335,7 @@ def render_html(report):
              f"<style>{HTML_CSS}</style></head><body><div class='wrap'>"]
     parts.append(f"<h1>LARP Audit — {_esc(report['target'])}</h1>")
     parts.append(f"<div class='sub'>{_esc(report['timestamp'])} · mode: {_esc(report['mode'])} · "
-                 f"{'registry-verified' if report['verified'] else 'no registry verification'} · "
+                 f"{_verification_label(report, 'registry-verified', 'no registry verification')} · "
                  f"{report['word_count']} words analysed</div>")
 
     parts.append("<div class='hero'>")

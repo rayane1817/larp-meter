@@ -29,6 +29,15 @@ def run_audit(target, text, mode="text", source_urls=None, subject_name=None,
         verifier = Verifier(Path(cache_dir or ".") / "verify", subject_name=subject_name)
         verifier.verify_all(claims, progress=progress)
 
+    # `verify` alone only means the flag was passed -- it says nothing about
+    # whether any registry was actually reached. verify_all's dispatch is
+    # gated on HANDLERS, so a profile with zero checkable identifiers (a
+    # fabricator's cheapest evasion) leaves every claim UNCHECKED and makes
+    # zero calls; "verified" must not read the same as a run that genuinely
+    # checked something, or the report's one honesty disclaimer disappears
+    # for exactly the profile that needed it most.
+    verification_effective = bool(verify) and any(c.status != ex.UNCHECKED for c in claims)
+
     ctx = AuditContext(
         text=text,
         claims=claims,
@@ -48,6 +57,7 @@ def run_audit(target, text, mode="text", source_urls=None, subject_name=None,
         "mode": mode,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "verified": bool(verify),
+        "verification_effective": verification_effective,
         "level": verdict["level"],
         "larp_score": verdict["score"],          # None when coverage is too low to grade
         "raw_score": verdict["raw_score"],

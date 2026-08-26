@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from larp_meter.audit import run_audit
 from larp_meter.report import (caveats, render_terminal, render_markdown, render_html, save_all)
@@ -11,6 +12,18 @@ from larp_meter.report import (caveats, render_terminal, render_markdown, render
 SUBSTANTIVE = ("Founder of NimbusForge building radiation tolerant edge AI hardware for "
                "satellites. Work at 10.1038/nature14539 and github.com/acme/slam. "
                "MSc in European public health policy. Seeking investment.")
+
+# No DOI, ORCID, GitHub URL, arXiv ID, NCT number, patent number, or named
+# institution -- every claim below lands on a subtype outside verify.py's
+# HANDLERS, so `--verify` has nothing to dispatch and makes zero registry
+# calls, exactly the fabricator-with-no-identifiers case BACKLOG.md measured.
+NO_IDENTIFIERS = ("Dr. Marcus Vane, CEO and Founder of Helion Neurotech since 2005. PhD "
+                   "Neuroscience. 20 years of experience in translational neuroscience. Over "
+                   "40 peer-reviewed publications and 6 granted patents. Strategic "
+                   "partnerships with Siemens Healthineers, Philips and Mayo Clinic, backed "
+                   "by joint development contracts. 12,000 users on our platform, generating "
+                   "3M in annual revenue in 2024. We are raising a Series A. Featured in "
+                   "Forbes and Nature News for our breakthrough approach to neural interfaces.")
 
 
 def audit(text=SUBSTANTIVE, **kw):
@@ -72,6 +85,54 @@ class TestCaveats(unittest.TestCase):
     def test_caveats_never_raise_on_a_minimal_report(self):
         self.assertIsInstance(caveats({}), list)
 
+    def test_verify_flag_alone_does_not_earn_the_verified_badge(self):
+        """`report['verified']` used to be set from the CLI flag alone, so a
+        --verify run that checked nothing still suppressed the tool's single
+        most important disclaimer ('nothing here was checked against an
+        outside source'). Simulating the exact state audit.py now computes
+        for a claims-but-nothing-checkable profile: verified=True (the flag
+        was passed) but verification_effective=False (verifier.calls stayed
+        0). The 'own account' disclaimer must survive that combination."""
+        report = audit(self.RICH)
+        report["verified"] = True
+        report["verification_effective"] = False
+        self.assertTrue([c for c in caveats(report) if "own account" in c])
+
+    def test_an_effective_verify_drops_the_own_account_disclaimer_as_before(self):
+        """Guards the other direction: a run that genuinely checked something
+        must keep behaving exactly as 'verified' did pre-fix."""
+        report = audit(self.RICH)
+        report["verified"] = True
+        report["verification_effective"] = True
+        self.assertFalse([c for c in caveats(report) if "own account" in c])
+
+    def test_a_zero_identifier_profile_reports_zero_lookups_when_verify_is_passed(self):
+        """The real end-to-end case: a fabricator citing no identifiers makes
+        --verify a structural no-op (nothing in HANDLERS to dispatch to), and
+        the report must say so plainly rather than silently behaving as if
+        the flag had done something."""
+        with tempfile.TemporaryDirectory() as d:
+            report = audit(NO_IDENTIFIERS, verify=True, cache_dir=d,
+                            subject_name="Marcus Vane")
+        self.assertTrue(report["verified"])
+        self.assertFalse(report["verification_effective"])
+        self.assertEqual(report["verifier_stats"]["api_calls"], 0)
+        self.assertIn("0 lookups", " ".join(caveats(report)))
+
+    def test_a_dispatched_claim_is_effective_even_under_a_total_network_outage(self):
+        """Effectiveness tracks whether anything was DISPATCHED to a
+        registry, not whether the registry answered -- a network failure is
+        never evidence of deception (verify.py's own governing rule), and it
+        must not also fall back to the pre-fix 'nothing was checked' framing
+        for a profile that did carry a real identifier."""
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("offline")):
+            with tempfile.TemporaryDirectory() as d:
+                report = audit(SUBSTANTIVE, verify=True, cache_dir=d,
+                               subject_name="Nobody Real")
+        self.assertTrue(report["verified"])
+        self.assertTrue(report["verification_effective"])
+        self.assertFalse([c for c in caveats(report) if "0 lookups" in c])
+
 
 class TestRenderers(unittest.TestCase):
     def setUp(self):
@@ -100,6 +161,19 @@ class TestRenderers(unittest.TestCase):
     def test_html_renders_in_both_themes(self):
         html = render_html(self.report)
         self.assertIn("prefers-color-scheme:dark", html)
+
+    def test_ineffective_verify_does_not_render_the_plain_verified_badge(self):
+        """The terminal/markdown/HTML badge must not read the same as a real
+        registry-checked run when --verify was passed but dispatched
+        nothing -- that byte-for-byte identical badge is what let a
+        zero-identifier fabrication look scrutinised."""
+        report = dict(self.report)
+        report["verified"] = True
+        report["verification_effective"] = False
+        for rendered in (render_terminal(report), render_markdown(report), render_html(report)):
+            self.assertNotIn("·  verified", rendered)
+            self.assertNotIn("registry-verified", rendered)
+            self.assertNotIn("**Registry verification:** yes", rendered)
 
 
 class TestSaveAll(unittest.TestCase):

@@ -338,9 +338,27 @@ All verification is gated on six literal-identifier regexes in `ARTIFACT_PATTERN
 
 ---
 
-### `--verify` suppresses the 'nothing was checked' warning while performing zero checks
+### [FIXED] `--verify` suppresses the 'nothing was checked' warning while performing zero checks
 
-`run_audit` sets `"verified": bool(verify)` (audit.py:51) from the *flag*, not from whether any lookup succeeded. The renderer then keys three separate honesty affordances off that boolean. report.py:124 prints the header badge `'verified' if report['verified'] else 'unverified'`. report.py:72-77 gates the single most important disclaimer in the tool — "Nothing here was checked against an outside source... A well-written fabrication passes this easily" — on `not report.get("verified")`. And report.py:166 `checked = [cl for cl in report["claims"] if cl["status"] != UNCHECKED]` suppresses the entire "Claim ledger (registry lookups)" block when nothing was checked, so there is no place in the output where a zero appears. `verifier_stats: {"api_calls": 0}` is carried in the JSON (audit.py:77-79) but never surfaced in the terminal, markdown or HTML renderers. Passing `--verify` therefore *strictly reduces* the caveats shown to the reader while changing nothing about the evidence.
+**Verified and fixed 2026-08-26.** Confirmed live before touching anything: `--verify` on a
+zero-identifier fabrication (the `NO_IDENTIFIERS` text in `tests/test_report.py`) produced
+`verified` in the header badge and dropped the "own account" disclaimer, exactly as this entry
+describes — 0 API calls, `verified: true`. Fixed by adding a second field, `verification_effective`
+(`audit.py`): true only when `verify_all` actually changed at least one claim's status away from
+`UNCHECKED`. This is `True` for a real network *failure* too (a dispatched-but-unreachable claim
+still becomes `UNCHECKABLE`, not `UNCHECKED` — the "network failure is never evidence of deception"
+rule still applies), and `False` only in the exact case this finding names: nothing in `HANDLERS` had
+anything to dispatch to. `report.py` now derives the header badge (`_verification_label`, a shared
+helper across the terminal/Markdown/HTML renderers — three states: `unverified`, `verify attempted,
+0 checked`, `verified`) and the "own account" disclaimer's gate from `verification_effective`, not
+from the raw flag, and `caveats()` emits an explicit new line when `--verify` ran but checked nothing.
+Left as-is on purpose: `verifier_stats` is still JSON-only, not printed inline in the terminal — the
+new caveat line covers the specific harm (a misleading "verified" claiming more than happened);
+surfacing the full stats block is a smaller, separate follow-up. Regression tests in
+`tests/test_report.py` (`TestCaveats`/`TestRenderers`), each confirmed to fail against the pre-fix
+code and pass against the fix.
+
+Original finding, kept for context: `run_audit` sets `"verified": bool(verify)` (audit.py:51) from the *flag*, not from whether any lookup succeeded. The renderer then keys three separate honesty affordances off that boolean. report.py:124 prints the header badge `'verified' if report['verified'] else 'unverified'`. report.py:72-77 gates the single most important disclaimer in the tool — "Nothing here was checked against an outside source... A well-written fabrication passes this easily" — on `not report.get("verified")`. And report.py:166 `checked = [cl for cl in report["claims"] if cl["status"] != UNCHECKED]` suppresses the entire "Claim ledger (registry lookups)" block when nothing was checked, so there is no place in the output where a zero appears. `verifier_stats: {"api_calls": 0}` is carried in the JSON (audit.py:77-79) but never surfaced in the terminal, markdown or HTML renderers. Passing `--verify` therefore *strictly reduces* the caveats shown to the reader while changing nothing about the evidence.
 
 **Evidence:** audit.py:51 `"verified": bool(verify)`; report.py:124; report.py:72-77 (`and not report.get("verified")`); report.py:166-168; audit.py:77-79 `verifier_stats`. Measured A/B on the same profile — WITHOUT `--verify`: "Read this before acting: • Nothing here was checked against an outside source... • Only 44% of the flag weight could be decided". WITH `--verify`: only the 44% line remains; header now reads `· verified`; score identical (33/100), zero API calls, no claim ledger printed.
 

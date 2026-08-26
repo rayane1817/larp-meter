@@ -415,3 +415,181 @@ two PRs that were sitting unmerged when it started:
 Plus the standing review question this session is adding: when you fix a
 function to newly return a value it never returned before, grep every
 caller, not just the ones your own PR happened to touch.
+
+---
+
+## 2026-08-26 (nightly run)
+
+### ⚠ Open-PR pileup — read this before doing anything else
+
+**Six** `nightly/*` PRs are open and unmerged against `master`, dating back nine
+days: #3 (2026-08-17, `linkedin.py` red-team + `flags.py` mutation sweep, base is
+stale — predates the direct-to-master flags.py/scoring.py sweeps below), #4
+(2026-08-18, `verify.py` mutation sweep), #5 (2026-08-19, `names.py` mutation
+sweep), #6 (2026-08-23, `DEGREE_RE`/`re.I` institution-name fix), #7 (2026-08-24,
+more `linkedin.py` fixes + mutation pins — a *re-fix* of bugs #3 already fixed,
+because #3 never merged), #8 (2026-08-25, prior-art/citation disclaiming on flag
+11). Every PR from #6 onward documents this same pileup and explicitly says not to
+act on it beyond noting it — repeating that guidance here rather than touching any
+of them. Separately: `master` itself moved directly (not via a nightly PR) between
+2026-08-16 and 2026-08-17 with the flags.py/scoring.py mutation sweeps and the
+flag 11/flag 13 fixes that BACKLOG.md's "Shipped since the original review"
+section documents — this NIGHTLY.md file just never got a matching entry for
+that work, which is why the log jumps from 08-16 straight to here. Recommend a
+merge pass soon: this queue is now a bigger drag on velocity than any individual
+finding, and #3/#7 already show what happens when it sits — independent re-fixes
+of the same bugs that will collide at merge time.
+
+### Backlog tally
+
+BACKLOG.md CRITICAL: **9 [FIXED] / 1 [PARTIALLY FIXED] / 5 still open** (of 15) —
+up from 8/1/6 last recorded here, because tonight's primary item closes one.
+(This tally is `master`'s state only; the six open PRs each carry additional
+fixes/pins of their own that aren't reflected until they merge — see above.)
+
+### What I did
+
+**Primary item:** fixed BACKLOG.md's CRITICAL "`--verify` suppresses the
+'nothing was checked' warning while performing zero checks." Confirmed live
+first, exactly as measured: a zero-identifier fabrication (no DOI/ORCID/GitHub/
+arXiv/NCT/patent, no named institution) run with `--verify --name "..."` showed
+`verified` in the header badge and *dropped* the tool's one "nothing here was
+checked against an outside source" disclaimer, with `verifier_stats.api_calls ==
+0`. `report['verified']` was set from the CLI flag alone (`audit.py`), never from
+whether `verify_all` actually dispatched anything — and `verify_all`'s dispatch
+is gated on `HANDLERS`, which a fabricator citing no identifiers trivially clears
+by having nothing to check.
+
+Fix: added a second field, `verification_effective` (`audit.py`) — true only when
+at least one claim's status left `UNCHECKED` (equivalent to "at least one claim
+had an identifier subtype `HANDLERS` recognises," computed as a side effect of
+`verify_all` rather than by re-deriving `HANDLERS` membership in `audit.py`).
+Deliberately *not* keyed on `verifier.calls > 0`: the verify.py disk cache
+(30-day TTL) means a cache-hit run makes zero fresh HTTP calls while still
+carrying a completely real, previously-fetched answer — using raw call count
+would have manufactured a *new* false "nothing was checked" caveat on every
+cache-warm re-run, trading one honesty bug for another. Status-based effectiveness
+is cache-agnostic and, deliberately, still reads `True` on a pure network outage
+(a dispatched claim that comes back `UNCHECKABLE` did get asked, it just couldn't
+be answered) — that's a narrower, correctly-scoped claim than "the identifier
+was confirmed," and conflating the two is exactly what `_attribute`'s three-way
+split already exists to avoid elsewhere in this codebase.
+
+`report.py` now derives the header badge from a new shared helper,
+`_verification_label()` (three states — `unverified` / `verify attempted, 0
+checked` / `verified` — used identically by the terminal, Markdown and HTML
+renderers so the three can't drift), and gates the "own account" disclaimer on
+`verification_effective` instead of the raw flag. `caveats()` gains an explicit
+new line for the ineffective case, per the backlog entry's own suggested wording.
+Left out on purpose (smaller, separate follow-up, not tonight's scope):
+`verifier_stats` still isn't printed inline in the terminal — the new caveat line
+covers the actual harm (an over-claiming badge), and surfacing the full stats
+block is cosmetic by comparison.
+
+**Cross-boundary check (per the standing review question):** grepped every
+reader of `report["verified"]` — all five are in `report.py` (badge ×3, the two
+caveat gates) — and the one place `cli.py` hand-builds a report dict without
+going through `run_audit()` (the `--interactive` questionnaire mode, which never
+calls the verifier at all). Added `"verification_effective": False` there too so
+the dict shape stays complete, though `report.py` already reads every field via
+`.get()` so this was defensive, not required to avoid a crash.
+
+**Tests:** wrote 8 failing tests first in `tests/test_report.py` (2 errored —
+`KeyError`/`AttributeError` — 3 failed on assertions; a couple confirmed the
+badge-safe pre-fix cases before the fix, as negative controls), watched them fail
+against the unmodified code, then implemented. Covers: the flag-alone case no
+longer earns the disclaimer-suppressing badge; the genuinely-effective case still
+suppresses it exactly as before (the other direction — guards against
+over-correcting); the real end-to-end zero-identifier case through `run_audit`;
+a claim that dispatches but hits a total network outage (`urllib.request.urlopen`
+mocked to raise) still counts as effective, not a regression to the old
+"nothing was checked" framing; and the three renderers all drop the plain
+`verified` text under the ineffective case. 417 → 425 tests (see mutation log
+below for the other 3).
+
+**End-to-end CLI check**, `LARP_CACHE=<tmp> python3 larp-meter.py --text ... --verify
+--name ...`, two hand-written samples:
+- **Should-flag-as-ineffective:** the same zero-identifier "Dr. Marcus Vane"
+  fabrication from the test suite. Landed GREEN 0/100 (the still-open core gap —
+  expected, not a regression) with the badge now correctly reading `verify
+  attempted, 0 checked`, and *both* honesty caveats present: "--verify ran but no
+  claim carried an identifier any registry could resolve; 0 lookups were
+  performed" and "Nothing here was checked against an outside source...". Before
+  the fix, the second line was silently absent.
+- **Should-verify-normally (regression check):** a profile citing a real DOI
+  misattributed to a fake subject name, a real GitHub repo, and a real
+  institution, run with live network access. Landed ORANGE 20/100, flag 11
+  correctly TRIGGERED on the DOI mismatch, badge correctly reads plain
+  `verified` (3/3 claims dispatched, one contradicted) — confirms the effective
+  path is completely unchanged.
+
+### BACKLOG.md: confirmed / refuted
+
+- **Confirmed and fixed** (see above): "`--verify` suppresses the 'nothing was
+  checked' warning while performing zero checks" — reproduced exactly as
+  described, now `[FIXED]` in BACKLOG.md with the fix's specifics and what was
+  deliberately left out.
+- Did **not** investigate the core architectural gap ("Verification is a
+  one-way, claim-anchored funnel" / its duplicates) or any other still-open
+  CRITICAL tonight — tonight's item was scoped narrowly on purpose, see "Pick
+  ONE primary item" below.
+
+### Mutation-testing log
+
+Mandatory per-cycle spot-check, one mutation in each of the four required files,
+re-run against the full suite, reverted before the next:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `coverage >` | **Caught** (pinned 2026-08-16) |
+| `flags.py` | `if refuted or mismatched:` → `if refuted and mismatched:` | **Caught** (pinned 2026-08-16) |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:` | **Survived** — real, unpinned on `master`. Same bug PR #4 already found; pinned here (`test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`) rather than leave `master` exposed a second time. |
+| `names.py` | `name_matches`: deleted `if not usable: return None` | **Survived** — real, unpinned on `master`, and specifically masked: every existing test pairs this path with a Latin-script subject, where the *separate* script-mismatch guard also returns `None` for the same input, so the guard under test could be doing nothing and nothing would notice. Un-masked with a non-Latin subject. Same bug PR #5 already found; pinned here (`TestZeroCandidatesIsUnanswerable`, both the discriminating non-Latin case and the masked Latin case, documented as such) rather than leave `master` exposed a second time. |
+
+Plus the 2 mutations on tonight's own new code (`audit.py`'s
+`verification_effective` computation, `report.py`'s disclaimer gate) — both
+caught by the tests written for them, confirmed before those tests were kept.
+
+**Result: 425 tests green.** `scoring.py` and `flags.py` remain fully protected
+on `master` from the 2026-08-16 sweeps. `verify.py` and `names.py` now each have
+one more real gap closed directly on `master` (their full sweeps still sit
+unmerged in PRs #4/#5 — this was a one-mutation spot-check, not a substitute for
+merging those).
+
+### What I learned, worth keeping for future runs
+
+- **Don't use raw `verifier.calls` as an "was verification effective" signal.**
+  The disk cache means a cache-hit run makes zero fresh calls while carrying a
+  completely real answer. Claim-status-based ("did anything leave `UNCHECKED`")
+  is the cache-agnostic version of the same question and was the right choice
+  here — worth remembering for any future work that wants to distinguish
+  "attempted" from "answered."
+- Crafting a realistic, zero-identifier, GREEN/YELLOW-landing fabrication text by
+  hand for a test is fiddlier than it sounds — several attempts landed at
+  INSUFFICIENT DATA (coverage just under 35%) before one cleared the threshold.
+  Where the exact verdict tier doesn't matter for what's being tested, prefer the
+  `TestCaveats` file's established pattern of injecting fields onto an existing
+  fixture's report dict over hand-tuning new prose to hit a specific level.
+- The open-PR pileup is now the single biggest risk to this repo's own
+  bookkeeping being trustworthy: BACKLOG.md's "[FIXED]" tags and NIGHTLY.md's
+  tally only reflect `master`, but real fixes for at least 4 more findings
+  already exist on unmerged branches. A reader who only skims BACKLOG.md without
+  checking `list_pull_requests` would underestimate how much is actually done.
+
+### What the next run should pick up first
+
+1. **The open-PR queue is the top priority for a human, not for an autonomous
+   run** — flagging again rather than acting, per standing instructions. #4, #5,
+   #6, #8 read as clean/independent; #3 and #7 overlap heavily (same
+   `linkedin.py` bugs, fixed twice) and #7 is the more complete of the two.
+2. The core architectural gap (subject-keyed probes + a real reconciliation
+   step, per the OpenAlex research section near the top of this file) is still
+   fully untouched by any run since 2026-08-15's narrow OpenAlex/Wikipedia
+   signal-wiring slice. Every night's fabricated end-to-end test sample
+   continues to demonstrate it live (tonight's zero-identifier "Dr. Marcus Vane"
+   sample landed GREEN 0/100 again) — this remains the single highest-value,
+   highest-risk piece of unbuilt work in the repo.
+3. `verify.py`'s and `names.py`'s full mutation sweeps still only exist on the
+   unmerged PRs #4/#5 — once those merge, `master` inherits full four-file
+   coverage; until then, treat tonight's two spot-check pins as a stopgap, not
+   a substitute.

@@ -13,6 +13,42 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
+
+Not a full sweep (that's `nightly/2026-08-18`'s and `nightly/2026-08-19`'s work, still
+unmerged — see NIGHTLY.md's 2026-08-26 entry for the open-PR state). One
+per-cycle mutation each in all four required files
+(`scoring.py`, `flags.py`, `verify.py`, `names.py`), re-targeting guards those two
+still-open PRs already found and described, to check whether `master` itself is still
+exposed. `scoring.py`'s `coverage >= MIN_COVERAGE` boundary and `flags.py`'s
+`if refuted or mismatched:` guard were both **caught** — already pinned by the
+2026-08-16 direct-to-master sweeps. Two **survived on `master`**, confirming both PRs'
+findings are still real and unprotected there:
+
+- **`verify.py`'s `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:`
+  survived.** An institution claim that reduces to nothing but stopwords (`_significant_tokens`
+  strips them) has an empty `wanted` set, and an empty set is a subset of every set — without the
+  `wanted and` guard, the *first* ROR item returned, named nothing like the claim, "verifies" a
+  claim that named nothing at all. Same bug `nightly/2026-08-18` (PR #4) already found; pinned
+  directly here (`tests/test_verify.py::test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`)
+  rather than leave `master` unpinned a second time.
+- **`names.py`'s `name_matches`: the `if not usable: return None` zero-candidates guard
+  survived.** Deleting it did not move a single existing test — every one of them pairs a
+  Latin-script subject with the empty-candidates case, and the *separate* script-mismatch guard
+  independently also returns `None` for that input, masking whether this guard does anything.
+  Un-masked with a non-Latin subject: `name_matches("Михаил Иванов", [])` goes `None` → `False`
+  with the guard deleted (the Latin equivalent, `name_matches("Ada Lovelace", [])`, stays `None`
+  either way — it never reaches this guard's absence). Same bug `nightly/2026-08-19` (PR #5)
+  already found; pinned directly here (`tests/test_names.py::TestZeroCandidatesIsUnanswerable`,
+  both the non-Latin case that actually discriminates and the Latin case that documents the
+  masking) rather than leave `master` unpinned a second time.
+
+Both mutations reconfirmed CAUGHT after their pinning tests were added, and reconfirmed PASSING
+against the restored, unmutated file. Neither file needed a production change — the guards were
+already correct, just unasserted on `master`.
+
+---
+
 ### Mutation-testing sweep: `flags.py` (2026-08-16, same interactive session)
 
 33 hand-authored mutations across all 13 flags plus `evaluate()` — every

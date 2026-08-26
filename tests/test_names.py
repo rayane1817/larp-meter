@@ -112,3 +112,20 @@ class TestScriptMismatchIsUnanswerable(unittest.TestCase):
 
     def test_both_sides_in_the_same_non_latin_script_still_compare(self):
         self.assertTrue(names.name_matches("Михаил Иванов", ["Михаил Иванов"]))
+
+
+class TestZeroCandidatesIsUnanswerable(unittest.TestCase):
+    """A registry that returns no names at all (a private ORCID record, a
+    book with no author array) tells us nothing about attribution. The
+    Latin-script case is masked: the script-mismatch guard also returns None
+    for an empty candidate list (blob_is_latin is False either way), so a
+    test built only on a Latin subject cannot tell whether the `not usable`
+    guard is doing anything. A non-Latin subject is not caught by that other
+    guard, and lands on this one alone -- exactly the group who would
+    otherwise pay for a masked, unpinned guard."""
+
+    def test_a_non_latin_name_with_no_candidates_is_unanswerable_not_a_mismatch(self):
+        self.assertIsNone(names.name_matches("Михаил Иванов", []))
+
+    def test_a_latin_name_with_no_candidates_is_also_unanswerable(self):
+        self.assertIsNone(names.name_matches("Ada Lovelace", []))

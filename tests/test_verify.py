@@ -206,6 +206,21 @@ class TestRegistries(unittest.TestCase):
         self.assertEqual(claim.status, NOT_FOUND)
         self.assertIn("Institute of Advanced Studies", claim.detail)  # names the near miss
 
+    def test_a_stopword_only_institution_claim_cannot_verify_against_any_hit(self):
+        """Mutation guard: `_significant_tokens` strips stopwords, so a claim
+        value that is entirely stopwords ('of the and') reduces to an empty
+        `wanted` set. An empty set is a subset of ANY set by definition --
+        without the `wanted and` guard, the very first ROR hit, named nothing
+        like the claim, would 'verify' a claim that named nothing at all."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/00cv9y106",
+            "names": [{"value": "Ghent University", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "Belgium"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="of the and")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+
     def test_registry_name_is_never_echoed_from_the_claim(self):
         """Old bug: .get('name', claim.value) reported the claim back as proof."""
         body = json.dumps({"items": [{"id": "x", "names": [], "locations": []}]})

@@ -386,6 +386,78 @@ class TestMutationSurvivorsFlags(unittest.TestCase):
                     signals={"openalex": {"works": 0, "citations": 0, "display_name": "X"}})
         self.assertEqual(evaluate(c)[6].status, TRIGGERED)
 
+    # ── flag 6: a queried-and-empty OpenAlex search must become visible ──
+    #
+    # This is the task brief's own named first step on the core architectural
+    # gap: "a profile that makes strong output claims while carrying zero
+    # checkable identifiers should [at least] make the '0 works found' case
+    # visible in the report, even as an UNKNOWN-with-evidence line." Before
+    # this, ctx.signals["openalex"] was read with a bare `.get()`, which
+    # cannot tell "never queried" apart from "queried, found nothing" --
+    # both come back None -- so a real negative search result and a plain
+    # `--verify`-less run produced byte-identical UNKNOWN text.
+    def test_a_negative_openalex_search_is_surfaced_on_the_assertion_fallback(self):
+        """The 'Dr. Marcus Vane... published extensively in peer-reviewed
+        venues' archetype from BACKLOG.md's core-gap finding: no hard
+        artifact, no building language, just a soft 'peer-review claim'
+        assertion. Once a subject-anchored OpenAlex search has actually run
+        and found no matching scholarly record, that fact belongs in the
+        report -- still UNKNOWN, never escalated to TRIGGERED on absence
+        alone, but no longer silently indistinguishable from never having
+        looked."""
+        c = ctx_for("Over 15 years, I have published extensively in peer-reviewed venues.",
+                    signals={"openalex": None})
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertIn("OpenAlex", result.description)
+
+    def test_no_openalex_query_leaves_the_assertion_message_unchanged(self):
+        """Negative control for the above: when `--verify`/`--name` never
+        ran a search at all (the ordinary default-mode case, or the key
+        genuinely absent), ctx.signals has no "openalex" key. The message
+        must stay exactly as it always was -- mentioning a search that
+        never happened would be worse than saying nothing.
+
+        Pinned as an exact match, not just `assertNotIn("OpenAlex", ...)`:
+        a first version of this test used assertNotIn and did not notice
+        when a hand-mutated `_openalex_search_note` let `ctx.signals["openalex"]`
+        raise `KeyError` on the very case this test exists to guard -- the
+        per-flag exception guard in `evaluate()` swallowed it into a generic
+        "evaluator error: KeyError: 'openalex'" UNKNOWN, which also doesn't
+        contain the substring "OpenAlex" (capitalised) and so slipped past
+        the loose assertion. Exact-matching the real message closes that
+        gap."""
+        c = ctx_for("Over 15 years, I have published extensively in peer-reviewed venues.")
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertEqual(
+            result.description,
+            "Only unsourced assertions of output (e.g. 'peer-reviewed') — no identifiers to check.")
+
+    def test_a_zero_work_openalex_match_is_treated_the_same_as_no_match(self):
+        """A resolved OpenAlex author entity that lists zero works carries
+        the same "nothing found" meaning as no entity matching at all --
+        both must reach the same evidence-bearing UNKNOWN, not silently
+        fall back to the plain unqualified message just because the dict
+        key happened to be present with a value."""
+        c = ctx_for("Over 15 years, I have published extensively in peer-reviewed venues.",
+                    signals={"openalex": {"works": 0, "citations": 0, "display_name": "X"}})
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertIn("OpenAlex", result.description)
+
+    def test_negative_openalex_search_never_escalates_past_unknown(self):
+        """Fairness guard, straight from the task brief's live-measured
+        OpenAlex constraints: a name-based author search can under-match
+        transliterated or diacritic name variants, and even a genuine zero
+        result must never be reported as a standalone finding. Absence of
+        a matching record is a lead for a human to check, never proof --
+        this must never reach TRIGGERED on its own, no matter how the rest
+        of the text reads."""
+        c = ctx_for("Over 15 years, I have published extensively in peer-reviewed venues.",
+                    signals={"openalex": None})
+        self.assertEqual(evaluate(c)[6].status, UNKNOWN)
+
     # ── flag 2: both a title AND a domain are required ──────────────
     def test_a_title_without_a_claimed_domain_is_undecidable(self):
         """Mutation `not titles or not claimed` -> `and` survived. With

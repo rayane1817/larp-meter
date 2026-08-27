@@ -128,6 +128,33 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             report = cmd_text(args, "Wei Wang", "Wei Wang works in materials science.")
         self.assertEqual(report["signals"]["ambiguous_identity"], 2)
 
+    def test_a_genuine_empty_registry_search_reaches_flag_6_through_the_real_pipeline(self):
+        """The core-gap archetype from BACKLOG.md, run end-to-end rather than
+        unit-tested against flags.py in isolation: a subject with a soft
+        'peer-reviewed' output claim and no identifiers at all, where a real
+        OpenAlex author-name search genuinely completes and finds no match.
+
+        This is deliberately NOT a test_flags.py-only check. The standing
+        review discipline this repo keeps re-learning the hard way (see the
+        ROR/HANDLERS dead-code bug and the module docstring above) is that a
+        component can be perfectly correct in isolation while the real
+        pipeline never reaches it — cli.py has to actually thread a `None`
+        (as opposed to an absent key) through `_subject_registry_signals`
+        into `ctx.signals` for flags.py's distinction to mean anything."""
+        bio = ("Dr. Marcus Vane is a researcher who has published extensively "
+               "in peer-reviewed venues over a long career.")
+        args = build_parser().parse_args([
+            "--text", bio, "--name", "Marcus Vane", "--verify", "--quiet", "--no-save",
+        ])
+        fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY,
+                                 "openalex.org": json.dumps({"results": []})})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+            report = cmd_text(args, "Marcus Vane", bio)
+        self.assertIsNone(report["signals"]["openalex"])
+        flag6 = next(f for f in report["flags"] if f["id"] == 6)
+        self.assertEqual(flag6["status"], "UNKNOWN")
+        self.assertIn("OpenAlex", flag6["description"])
+
     def test_without_verify_no_registry_call_is_made(self):
         """--verify is the network opt-in; omitting it must not silently phone
         out to OpenAlex/Wikipedia anyway."""

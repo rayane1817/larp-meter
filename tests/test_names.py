@@ -112,3 +112,34 @@ class TestScriptMismatchIsUnanswerable(unittest.TestCase):
 
     def test_both_sides_in_the_same_non_latin_script_still_compare(self):
         self.assertTrue(names.name_matches("Михаил Иванов", ["Михаил Иванов"]))
+
+
+class TestNoUsableCandidatesIsUnanswerable(unittest.TestCase):
+    """Mandatory per-cycle mutation-testing pass, nightly/2026-08-27: dropping
+    the `if not usable: return None` guard in name_matches leaves the full
+    test suite green, so nothing was pinning it. Without the guard, a
+    registry that returns zero comparable names falls all the way through to
+    the trailing `return False` -- an unanswerable question silently becomes
+    a reported mismatch.
+
+    This lands asymmetrically. A Latin-script subject with zero candidates
+    is already caught earlier by the script-mismatch guard (`blob` normalizes
+    an empty join to "", which reads as Latin, matching a Latin subject and
+    never reaching this guard at all) -- see test_cyrillic_record_against_a_
+    latin_subject_name_is_unanswerable above, which passes with or without
+    this guard. A non-Latin subject has no such guard ahead of it: an empty
+    `blob` is *not* non-Latin, so `mine_is_latin != blob_is_latin` is False
+    and the script guard never fires either. Left unpinned, this would
+    silently mismatch every non-Western-scripted subject the moment a
+    registry query returns no names to compare against -- while the
+    identical situation for a Latin-scripted subject was already protected.
+    """
+
+    def test_zero_candidates_for_a_non_latin_subject_is_unanswerable(self):
+        self.assertIsNone(names.name_matches("Михаил Иванов", []))
+
+    def test_zero_candidates_for_a_latin_subject_is_also_unanswerable(self):
+        """The Latin-script side of the same guard, so a future refactor that
+        merges or reorders the two guards cannot silently regress either
+        one without a test noticing."""
+        self.assertIsNone(names.name_matches("Ada Lovelace", []))

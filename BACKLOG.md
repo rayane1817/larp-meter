@@ -13,6 +13,110 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Flag 6: a genuine negative OpenAlex search becomes visible in the report (nightly/2026-08-27)
+
+First slice of the core architectural gap's own recommended first step (see
+the CRITICAL entry below, its "[IN PROGRESS]" note): "start by making the
+'0 works found for a researcher claiming 40 papers' case visible in the
+report at all, even as an UNKNOWN-with-evidence line." Deliberately did NOT
+attempt a `CONTRADICTED`/reconciliation verdict — that still needs the
+disambiguation groundwork (merged entities, common-name collisions) the core
+gap entry describes, and pushing to TRIGGERED off an absence alone is exactly
+what the OpenAlex research constraints warn against.
+
+`f_output` (flag 6) already read `ctx.signals.get("openalex")`, but a bare
+`.get()` cannot distinguish "no --verify/--name, nothing was ever queried"
+from "a real search ran and found nothing" — both come back falsy. Confirmed
+live: `providers.OpenAlex.search` always sets the `"openalex"` key once a
+search actually completes (`signals = {"openalex": best}`, where `best` is
+`None` on zero name-matched candidates), and only omits the key entirely on
+an unreachable/unparseable response (`if not body: return [], {}`) — so the
+key's mere presence already carries the exact distinction flag 6 needed and
+was throwing away.
+
+Added `_openalex_search_note()`: when the key is present and the record
+carries no works (either no matching author entity at all, or one that
+resolves with zero works — both already collapse to the same "nothing to
+report" case one line above in `f_output`), the flag 6 "only unsourced
+assertions" message now appends one hedged sentence naming the negative
+search result. Deliberately conservative in three ways, following the task
+brief's own live-measured OpenAlex constraints: (1) status stays UNKNOWN,
+never escalated — absence is a lead, not proof; (2) the note is worded to
+flag its own limitation (name-based search under-matches transliterated or
+diacritic variants), so the report doesn't read as more confident than the
+method deserves; (3) it only fires on the "assertion"-only branch (soft
+phrases like "peer-reviewed" with no hard identifier and no "building"
+language) — the exact archetype BACKLOG's core-gap entry names ("Dr. Marcus
+Vane... published extensively in peer-reviewed venues"), not a blanket
+change to every UNKNOWN path.
+
+**Verification:** 4 new tests in `tests/test_flags.py` (two positive, two
+negative controls), plus one true end-to-end test in
+`tests/test_cli_registry_wiring.py` that runs the real `cmd_text` pipeline
+with a stubbed empty OpenAlex response — per this repo's own standing
+lesson (the ROR/HANDLERS dead-code bug), a flags.py-only test cannot prove
+the real pipeline threads the distinction through `_subject_registry_signals`
+into `ctx.signals` at all. Mutation-tested the new guard directly: deleting
+the "key present" check makes `ctx.signals["openalex"]` raise `KeyError` on
+the exact case the negative control exists to guard, which `evaluate()`'s
+per-flag exception catch silently converts into a generic "evaluator error"
+UNKNOWN — an early version of the negative-control test used `assertNotIn`
+and did not notice this failure mode; rewritten to assert the exact expected
+message, which does fail on the mutation. Ran live against the real OpenAlex
+API (network reachable this session): a fabricated "Dr. Marcus Vane... peer-
+reviewed venues" bio now shows the negative-search sentence under `--verify`
+and stays INSUFFICIENT DATA (coverage unchanged at 5% — the note does not
+manufacture coverage, flag 6 stays UNKNOWN either way); a real prolific
+researcher (Yoshua Bengio) with the same "peer-reviewed" phrasing and no
+identifiers still lands on the pre-existing PASSED "Independent scholarly
+record found" branch, confirming the positive path is untouched.
+
+**Still fully open** (unchanged by tonight): items (1) and (3) of the core
+gap's fix direction — OpenAlex/Crossref hits becoming derived `Claim`s with
+provenance, and a reconciliation step that can produce an actual
+`CONTRADICTED` status for a quantitative mismatch ("published extensively"
+vs. 2 works). Tonight only makes the existing UNKNOWN path honest about what
+was actually checked; it adds no new verdict.
+
+### Mutation-testing spot-check: `names.py`'s "zero usable candidates" guard confirmed still live on master (nightly/2026-08-27)
+
+Mandatory per-cycle mutation pass. `names.py`'s `name_matches` function has
+an `if not usable: return None` guard that was already independently found
+and described on the still-unmerged `nightly/2026-08-19` branch (PR
+#5), but that branch has never merged, so `master` itself has carried this
+gap, unpinned, for over a week. Re-confirmed live rather than trusting the
+PR description: reverting the guard on a scratch copy leaves the full
+(then-422-test) suite green, and `name_matches("Михаил Иванов", [])` goes
+from `None` (unanswerable) to `False` (reported mismatch) — silently, and
+**only** for non-Latin-scripted subject names, since a Latin-scripted
+subject's equivalent case is already caught earlier by the script-mismatch
+guard (an empty candidate blob normalizes to `""`, which reads as
+Latin-compatible, so it never reaches this guard for a Latin subject at
+all). Left unpinned, a registry that returns zero comparable names would
+quietly mismatch every non-Western-scripted subject it was asked about,
+while the identical situation for a Western name stayed protected — exactly
+the kind of asymmetric fairness gap the task brief's audit lens exists to
+catch.
+
+Pinned directly on `master` via tonight's branch (2 new tests in
+`tests/test_names.py`, one per script, so a future refactor that merges or
+reorders the two guards cannot silently regress either half without a test
+noticing), rather than leaving `master` exposed a second time waiting on
+PR #5 to merge. `names.py` itself needed zero production changes.
+
+Also mutation-spot-checked `scoring.py` (`coverage >= MIN_COVERAGE` boundary)
+and `flags.py` (flag 11's `if refuted or mismatched:`) — both **caught** by
+existing pinning tests, confirming the direct-to-master sweeps from
+2026-08-16/17 are still holding. And `verify.py`'s `verify_institution`
+"empty `wanted`" guard (`if wanted and wanted <= have:`) — **confirmed still
+live and unpinned on `master`**, exactly as already described independently
+on three separate open, unmerged PRs (#4, #6, #7, #9 — see NIGHTLY.md's
+2026-08-27 entry for the open-PR state). Deliberately did **not** re-pin it
+a fourth time on yet another branch: that would only add a fifth near-
+duplicate test for whoever eventually merges the queue. Recorded here as
+confirmation, not as a new finding — the fix is to merge one of the
+branches that already has it, not to write it again.
+
 ### Mutation-testing sweep: `flags.py` (2026-08-16, same interactive session)
 
 33 hand-authored mutations across all 13 flags plus `evaluate()` — every
@@ -231,6 +335,8 @@ Measured: extracting the 8-claim bio "PhD in Quantum Information from MIT / MSc 
 **Fix direction:** Make the subject, not the claim, a first-class verification input. Give Verifier a subject-anchored pass that runs alongside verify_all: resolve the subject to registry identities (ORCID search, OpenAlex author, ROR-affiliation) and emit *derived* Claims from what the record contains, then reconcile claimed-vs-found as a first-class comparison rather than as two disconnected flag inputs. Concretely: (1) merge providers.py into the claim layer so OpenAlex/Crossref hits become Claims with provenance, not `signals` dicts; (2) run the provider chain in every mode when `--name` is present, not only in web/batch; (3) add a reconciliation step between verify_all and evaluate that can produce a CONTRADICTED status for a *quantitative* claim ("published extensively" vs 2 works; "15 years" vs a record starting 2022) — the same asymmetric standard `_attribute` already uses, where only a positive contradicting record counts and absence stays UNCHECKABLE.
 
 **[IN PROGRESS — nightly/2026-08-15]** Confirmed live: `cmd_text`, `cmd_url`, `cmd_from_json` and the batch-text branch of `cmd_batch` never called `providers.gather`, exactly as measured here — item (2) of the fix direction. Closed *that specific* gap: those four entry points now run a subject-anchored OpenAlex + Wikipedia lookup under `--verify --name`, reusing providers.py's existing `name_matches`/`about_subject`/`ambiguous_identity` gating unchanged (see `cli._subject_registry_signals`, `tests/test_cli_registry_wiring.py`). This gets a truthful "published extensively" claim corroborated, and a fabricated one still reported UNKNOWN when no record exists — it does **not** yet produce a CONTRADICTED verdict for a *quantitative* mismatch (items 1 and 3 of the fix direction: OpenAlex/Crossref hits still land as `signals` dicts, not derived `Claim`s, and there is still no reconciliation step). That remains the highest-value work open in this file. Building it safely needs the OpenAlex disambiguation groundwork described in NIGHTLY.md (merged author entities, common-name collision) before any negative or contradicting verdict can be trusted.
+
+**[IN PROGRESS — nightly/2026-08-27]** Made the specific "0 works found for a researcher claiming 40 papers" scenario visible in the report for the first time, exactly as this entry's own fix direction names as the safe first step. Flag 6 now distinguishes "OpenAlex was never queried" from "OpenAlex was queried and found no scholarly record" (previously both read as the same falsy `.get()` result) and appends a hedged, UNKNOWN-only sentence naming the negative result when the subject's only output claim is a soft, identifier-free assertion. See "Flag 6: a genuine negative OpenAlex search becomes visible in the report" above for full detail. Deliberately still does **not** touch items (1) and (3) of the fix direction below — no derived `Claim`s, no reconciliation, no verdict above UNKNOWN from this alone. The disambiguation groundwork this entry's own note calls out (merged author entities, common-name collision, transliteration under-matching) is the reason the note is worded as a lead rather than a finding, and is still the blocking prerequisite for anything stronger than UNKNOWN.
 
 ---
 

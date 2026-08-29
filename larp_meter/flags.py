@@ -232,6 +232,38 @@ def f_vague_partnerships(ctx):
     return FlagResult(PASSED, f"Concrete deal terms present ({', '.join(concrete[:4]) or 'no vague-only pattern'}).")
 
 
+def _openalex_search_note(ctx):
+    """Describe a subject-anchored OpenAlex search that came back empty.
+
+    `ctx.signals.get("openalex")` alone cannot tell "no --verify/--name, so
+    nothing was ever queried" apart from "queried, and no matching scholarly
+    record turned up" — both read as a falsy `.get()` result. That collapse
+    is the specific gap BACKLOG.md's core architectural finding names: a
+    profile that makes soft output claims with no identifiers ("published
+    extensively in peer-reviewed venues") looks byte-identical whether or
+    not anyone ever checked. Distinguishing "key absent" (never queried, or
+    a network failure — see providers.OpenAlex.search's early `if not body`
+    return) from "key present" (a real, completed search) lets a genuine
+    negative result become visible without turning it into an accusation.
+
+    Deliberately returns a hedged, UNKNOWN-only note, never a verdict: per
+    the task brief's own live-measured OpenAlex constraints, a name-based
+    author search under-matches transliterated and diacritic name variants,
+    so an empty result is a lead for a human to check, not proof of
+    anything. Callers must never let this string alone move a flag past
+    UNKNOWN.
+    """
+    if "openalex" not in ctx.signals:
+        return ""
+    scholar = ctx.signals["openalex"]
+    if scholar and scholar.get("works"):
+        return ""  # a real record was found; nothing negative to report
+    return (" An OpenAlex author-name search for this subject found no scholarly "
+            "record with any published works — worth checking by hand, since "
+            "name-based search can under-match transliterated or diacritic name "
+            "variants.")
+
+
 # ── 6. Verifiable output ─────────────────────────────────────────────────
 @flag(6, "No Verifiable Output", 1.5, TRACK_RECORD,
       "Is there any independently checkable output (papers, patents, code, products)?")
@@ -263,7 +295,10 @@ def f_output(ctx):
             f"patent number, repository, trial registration or certification appears anywhere.",
             building[:3])
     if [c for c in artifacts if c.subtype == "assertion"]:
-        return FlagResult(UNKNOWN, "Only unsourced assertions of output (e.g. 'peer-reviewed') — no identifiers to check.")
+        return FlagResult(
+            UNKNOWN,
+            "Only unsourced assertions of output (e.g. 'peer-reviewed') — no identifiers to check."
+            + _openalex_search_note(ctx))
     return FlagResult(UNKNOWN, "No output is claimed, so there is nothing to verify.")
 
 

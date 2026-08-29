@@ -1773,3 +1773,194 @@ merging those).
    unmerged PRs #4/#5 — once those merge, `master` inherits full four-file
    coverage; until then, treat tonight's two spot-check pins as a stopgap, not
    a substitute.
+## 2026-08-27 (nightly run)
+
+### ⚠ Open-PR queue: seven unmerged `nightly/*` PRs, dating back to 2026-08-17
+
+**Read this first.** `master`'s own copy of this file stops at 2026-08-16 —
+everything below the line above is stale the moment you read it, because
+every night since 2026-08-17 branched fresh from `master`'s tip (per the
+standing instructions) and wrote its own NIGHTLY.md/BACKLOG.md updates onto
+a branch that was never merged. `master`'s tip is still commit `7699b72`
+(2026-08-17), and every one of PRs #3–#9 below is based on that exact same
+commit — nothing has landed since. This is now the single biggest drag on
+this project, worse than any individual backlog finding:
+
+| PR | Branch | What it claims | State |
+|----|--------|-----------------|-------|
+| #3 | nightly/2026-08-17 | `linkedin.py` red-team (name/location bugs) + `flags.py` mutation sweep | open, draft, `dirty` (real merge conflict) |
+| #4 | nightly/2026-08-18 | `verify.py` mutation sweep (6 mutations, all real) | open, draft, clean |
+| #5 | nightly/2026-08-19 | `names.py` mutation sweep (13 mutations, 4 real) | open, draft, clean |
+| #6 | nightly/2026-08-23 | `DEGREE_RE`'s `re.I` institution-name corruption fix | open, draft, clean |
+| #7 | nightly/2026-08-24 | Independent re-fix of #3's two `linkedin.py` bugs (never having seen #3 merged) | open, draft, clean |
+| #8 | nightly/2026-08-25 | "Citing prior art ≠ claiming authorship" (`_disclaims_authorship`) | open, draft, clean |
+| #9 | nightly/2026-08-26 | `--verify` no longer silently erases the "nothing was checked" disclaimer | open, draft, clean |
+
+Several of these are now independently duplicating each other's fixes
+(#3/#7 both fix the same two `linkedin.py` bugs; #4/#6/#7/#9 have each
+independently re-found and re-pinned the same `verify.py` guard — see
+below) because each night correctly branched fresh from `master` rather
+than stacking on unmerged work, but nobody has merged any of them in ten
+days. **This is not something a nightly run can fix by pushing more
+commits** — it needs a human merge pass, ideally oldest-first (or #4/#5/#6
+first, since they're clean and #3 already has a real conflict to resolve
+by hand). Every PR from #6 onward has already said this in its own
+description; recording it here too so it can't be missed by anyone reading
+NIGHTLY.md instead of scrolling the PR list.
+
+Per the standing instructions, tonight's branch is cut fresh from
+`master`'s tip regardless, and scoped to be small and touch nothing any of
+the seven above are likely to conflict on (`flags.py`, plus test files).
+
+### Running backlog tally (15 CRITICALs)
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open — unchanged by tonight.**
+(Verified directly against `master`'s current BACKLOG.md, not carried over
+by assumption: grepped `^### ` under `## CRITICAL (15)`, 8 carry `[FIXED]`,
+1 carries `[PARTIALLY FIXED]`, matching every recent PR description's own
+count.) Tonight's work is the core-gap's own named first slice plus a
+mutation-testing pin — neither is one of the 15 named CRITICALs, so the
+tally itself doesn't move; the two most relevant CRITICALs (the core gap,
+and `--verify` no longer erasing its own disclaimer) both have real
+progress sitting on unmerged branches (this entry's own core-gap slice, and
+PR #9 respectively).
+
+### What I did
+
+**Primary item — the task brief's own highest-priority gap, smallest safe
+slice:** made a genuine negative OpenAlex search result visible in the
+report for the first time. Before tonight, `ctx.signals.get("openalex")`
+could not tell "nobody ever asked" apart from "asked, and found nothing" —
+both are falsy — so flag 6's "only unsourced assertions of output" message
+for a bio like "Dr. Marcus Vane... has published extensively in peer-
+reviewed venues" (BACKLOG's own motivating example) read identically
+whether `--verify` ran a real search or not. Now it distinguishes the two
+by checking whether `"openalex"` is a *key* in `ctx.signals` (always set
+once `providers.OpenAlex.search` completes, even to `None`) rather than
+just its value, and appends one hedged sentence — "An OpenAlex author-name
+search for this subject found no scholarly record with any published
+works — worth checking by hand, since name-based search can under-match
+transliterated or diacritic name variants" — when that's genuinely true.
+Status stays UNKNOWN always; this cannot push a verdict, only make an
+existing UNKNOWN honest about what was actually checked. Full detail,
+including the exact mutation-testing self-check that caught a weak
+assertion in my own first-draft negative-control test, is in BACKLOG.md's
+new "Flag 6: a genuine negative OpenAlex search becomes visible" entry.
+
+Chose this over the two more obvious "smaller, more certain" options
+(another `linkedin.py` red-team pass, another isolated mutation sweep)
+because every single night since 2026-08-15 has deferred the core gap in
+favour of something smaller and certain, and the brief is explicit that
+this is the highest-value lever in the codebase. Kept it to the brief's own
+recommended *smallest* slice (visibility, not a verdict) specifically so it
+would still be small enough to finish, verify end-to-end, and land in one
+sitting without the disambiguation groundwork (merged OpenAlex entities,
+common-name collisions) the brief says a stronger verdict would need first.
+
+**Secondary — mandatory per-cycle mutation-testing pass**, all four
+required files:
+- `names.py`: confirmed live that the `not usable` ("zero registry
+  candidates") guard in `name_matches` is still unpinned on `master` — it
+  was already found on the unmerged `nightly/2026-08-19` branch (PR #5),
+  but that never merged, so master itself was exposed. Reverting the guard
+  leaves the full suite green and turns `name_matches("Михаил Иванов", [])`
+  from `None` (unanswerable) into `False` (reported mismatch) — and, per
+  the fixture work below, this lands *exclusively* on non-Latin-scripted
+  names, since a Latin-scripted subject's identical case is already caught
+  earlier by the script-mismatch guard. Pinned directly on this branch (2
+  new tests, one per script) rather than leave it unpinned a second time.
+- `scoring.py` (`coverage >= MIN_COVERAGE` boundary) and `flags.py` (flag
+  11's `if refuted or mismatched:`): both **caught** — the 2026-08-16/17
+  direct-to-master sweeps are still holding, nothing further needed.
+- `verify.py` (`verify_institution`'s `if wanted and wanted <= have:`
+  guard): **confirmed still live and unpinned on `master`**. This is now
+  independently re-found on four separate open PRs (#4, #6, #7, #9).
+  Deliberately did **not** write a fifth copy of the same test — recorded
+  the confirmation in BACKLOG.md instead. The actual fix here is merging
+  any one of those four branches, not writing this test again.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed** (live repro, not by reading the PR description): the
+  core-gap CRITICAL's own "0 works found" scenario is real and, before
+  tonight, produced byte-identical output whether or not `--verify` had
+  actually run a search. Fixed the visibility half only, as described
+  above.
+- **Confirmed** (live repro): `names.py`'s "zero usable candidates" guard
+  is real, still unpinned on `master`, and specifically asymmetric —
+  non-Latin-scripted names only. Matches PR #5's independent description
+  exactly.
+- **Confirmed** (live repro): `verify.py`'s `verify_institution` "empty
+  wanted set" guard is real and still unpinned on `master`. Matches PRs
+  #4/#6/#7/#9's independent descriptions exactly — this is the fourth
+  independent confirmation of the same finding, all from live reproduction
+  rather than trusting the earlier write-ups.
+- Did **not** re-verify any other BACKLOG.md entry tonight — in particular
+  the 6 still-open CRITICALs beyond the core gap were not re-examined;
+  don't assume they're still accurate without a fresh look.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: 2026-08-16 (12 mutations, 6 real, all pinned) — direct to
+  `master`. Spot-checked again tonight (1 mutation), still caught.
+- `flags.py`: 2026-08-16/17 (33 mutations, 13 real, all pinned) — direct to
+  `master`. Spot-checked again tonight (1 mutation), still caught.
+- `names.py`: full 13-mutation sweep done on the unmerged `nightly/2026-08-19`
+  branch (PR #5) — **not yet on `master`**. Tonight added a targeted 1-guard
+  pin directly to `master` (via this branch) for the specific survivor
+  confirmed live; the other 3 real survivors PR #5 found are still only on
+  that unmerged branch.
+- `verify.py`: full 6-mutation sweep done on the unmerged `nightly/2026-08-18`
+  branch (PR #4) — **not yet on `master`**. Tonight re-confirmed 1 of those
+  6 (the `wanted`/`have` guard) live on `master`, still unpinned there.
+
+**All four files now have had at least one real mutation-testing pass
+somewhere** — but two of those passes (`names.py`, `verify.py`) exist only
+on unmerged branches, so `master` itself is only fully covered for
+`scoring.py` and `flags.py`. This won't change until the queue above gets a
+merge pass.
+
+### What I learned
+
+- The single biggest thing blocking progress right now is not a missing
+  fix — it's an unmerged-PR queue. Four different survivors of the exact
+  same `verify.py` guard have now been independently rediscovered by four
+  different nightly runs because none of the branches carrying the fix
+  ever merged. Depth-first, small-and-independent nightly branches are the
+  right call per the standing instructions, but they only work if
+  something eventually merges them; ten nights of unmerged, non-conflicting
+  work is nearly as bad as ten nights of no work, plus the wasted
+  rediscovery effort.
+- `evaluate()`'s per-flag exception guard (found and pinned back on
+  2026-08-16/17) has a real, mildly annoying side effect for anyone writing
+  a mutation-testing pinning test: a broken guard that would otherwise
+  raise `KeyError` instead silently becomes a generic "evaluator error:
+  ..." UNKNOWN, which can slip past a loosely-worded assertion
+  (`assertNotIn` on a substring) without anyone noticing the test wasn't
+  actually discriminating. Worth remembering for future mutation-testing
+  work in this file: prefer exact-matching the expected message over
+  substring checks when the fallback path could itself produce a
+  similar-looking string.
+
+### What the next run should pick up first
+
+1. **This is now explicitly a human-merge-queue problem, not a code
+   problem.** If you're an autonomous run reading this with no merge
+   access, the single highest-value thing you can do is keep tonight's
+   branch small and independent (as this one was) and make the queue's
+   existence impossible to miss (as this entry tries to do) — not attempt
+   to resolve PR #3's conflict yourself or merge anything, since merging is
+   this project's deliberate human-in-the-loop gate.
+2. **The core gap, continued**: items (1) and (3) of its fix direction are
+   still fully open — OpenAlex/Crossref hits need to become derived
+   `Claim`s with provenance (not `signals` dicts), and a reconciliation
+   step needs to exist that can produce an actual `CONTRADICTED` status for
+   a quantitative mismatch. Read the task brief's OpenAlex constraints
+   section again before starting (re-verify live if it's been a while —
+   rate limits and response shapes change): the disambiguation groundwork
+   (merged entities, common-name collisions, the `years`-array corroboration
+   signal) has to come before any verdict stronger than the UNKNOWN-with-
+   evidence line this cycle added.
+3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
+   pass and found the same two bugs — once the queue clears, check whether
+   a third, fresh pass turns up anything neither of them caught.

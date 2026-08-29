@@ -101,6 +101,46 @@ class TestHyphenatedAndAttachedNames(unittest.TestCase):
         self.assertTrue(names.name_matches("Ada Smith-Jones", ["A. Jones"]))
 
 
+class TestBareInitialIsNotASignificantToken(unittest.TestCase):
+    """tokens() promises 'no bare initials' -- a lone letter with no period,
+    like the 'A' in 'A Zhu', must not count as a significant name token.
+    Mutation-testing names.py (2026-08-19) found this promise unpinned: with
+    the length filter loosened from > 1 to > 0, 'A Zhu' stops being a
+    length-1 mononym-style set ({'zhu'}) and becomes a two-token set
+    ({'a', 'zhu'}) that the registry's full 'Zhu Wei' can no longer satisfy
+    (only 'zhu' is found; 'a' never appears as a standalone word), flipping
+    a correct mononym-on-surname match into a false MISMATCH."""
+
+    def test_bare_single_letter_given_name_still_matches_via_surname_alone(self):
+        self.assertTrue(names.name_matches("A Zhu", ["Zhu Wei"]))
+
+
+class TestEmptyInputsStayUnanswerableAgainstNonLatinData(unittest.TestCase):
+    """The 'no subject name' and 'no candidates' guards (name_matches's two
+    earliest returns) are each covered by an existing test, but only against
+    a Latin-script counterpart -- where a second guard (the script-mismatch
+    check a few lines later) coincidentally also returns None, masking the
+    first guard entirely. Mutation-testing names.py (2026-08-19) found both
+    guards could be deleted outright without any existing test noticing.
+    Pairing each with non-Latin data on the other side removes that masking:
+    an empty subject name is exactly as unLatin as a Cyrillic record (both
+    have no [a-z] characters), so the script-mismatch guard no longer fires
+    and only the guard under test can save it from a false MISMATCH -- one
+    that would fall disproportionately on the non-Western names this
+    project's fairness audits exist to protect."""
+
+    def test_empty_subject_name_against_non_latin_candidates_is_unanswerable(self):
+        self.assertIsNone(names.name_matches("", ["Михаил Иванов"]))
+
+    def test_particle_only_subject_name_against_non_latin_candidates_is_unanswerable(self):
+        """'Dr.' alone is all honorific -- tokens() correctly reduces it to
+        no significant tokens, same as an empty string."""
+        self.assertIsNone(names.name_matches("Dr.", ["Михаил Иванов"]))
+
+    def test_non_latin_subject_with_no_candidates_is_unanswerable(self):
+        self.assertIsNone(names.name_matches("Михаил Иванов", []))
+
+
 class TestScriptMismatchIsUnanswerable(unittest.TestCase):
     """normalize() folds diacritics; it does not transliterate. A record
     deposited in a non-Latin script shares zero characters with a Latin-script

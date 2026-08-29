@@ -13,6 +13,42 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
+
+Not a full sweep (that's `nightly/2026-08-18`'s and `nightly/2026-08-19`'s work, still
+unmerged — see NIGHTLY.md's 2026-08-26 entry for the open-PR state). One
+per-cycle mutation each in all four required files
+(`scoring.py`, `flags.py`, `verify.py`, `names.py`), re-targeting guards those two
+still-open PRs already found and described, to check whether `master` itself is still
+exposed. `scoring.py`'s `coverage >= MIN_COVERAGE` boundary and `flags.py`'s
+`if refuted or mismatched:` guard were both **caught** — already pinned by the
+2026-08-16 direct-to-master sweeps. Two **survived on `master`**, confirming both PRs'
+findings are still real and unprotected there:
+
+- **`verify.py`'s `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:`
+  survived.** An institution claim that reduces to nothing but stopwords (`_significant_tokens`
+  strips them) has an empty `wanted` set, and an empty set is a subset of every set — without the
+  `wanted and` guard, the *first* ROR item returned, named nothing like the claim, "verifies" a
+  claim that named nothing at all. Same bug `nightly/2026-08-18` (PR #4) already found; pinned
+  directly here (`tests/test_verify.py::test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`)
+  rather than leave `master` unpinned a second time.
+- **`names.py`'s `name_matches`: the `if not usable: return None` zero-candidates guard
+  survived.** Deleting it did not move a single existing test — every one of them pairs a
+  Latin-script subject with the empty-candidates case, and the *separate* script-mismatch guard
+  independently also returns `None` for that input, masking whether this guard does anything.
+  Un-masked with a non-Latin subject: `name_matches("Михаил Иванов", [])` goes `None` → `False`
+  with the guard deleted (the Latin equivalent, `name_matches("Ada Lovelace", [])`, stays `None`
+  either way — it never reaches this guard's absence). Same bug `nightly/2026-08-19` (PR #5)
+  already found; pinned directly here (`tests/test_names.py::TestZeroCandidatesIsUnanswerable`,
+  both the non-Latin case that actually discriminates and the Latin case that documents the
+  masking) rather than leave `master` unpinned a second time.
+
+Both mutations reconfirmed CAUGHT after their pinning tests were added, and reconfirmed PASSING
+against the restored, unmutated file. Neither file needed a production change — the guards were
+already correct, just unasserted on `master`.
+
+---
+
 ### Mutation-testing sweep: `flags.py` (2026-08-16, same interactive session)
 
 33 hand-authored mutations across all 13 flags plus `evaluate()` — every
@@ -748,9 +784,27 @@ All verification is gated on six literal-identifier regexes in `ARTIFACT_PATTERN
 
 ---
 
-### `--verify` suppresses the 'nothing was checked' warning while performing zero checks
+### [FIXED] `--verify` suppresses the 'nothing was checked' warning while performing zero checks
 
-`run_audit` sets `"verified": bool(verify)` (audit.py:51) from the *flag*, not from whether any lookup succeeded. The renderer then keys three separate honesty affordances off that boolean. report.py:124 prints the header badge `'verified' if report['verified'] else 'unverified'`. report.py:72-77 gates the single most important disclaimer in the tool — "Nothing here was checked against an outside source... A well-written fabrication passes this easily" — on `not report.get("verified")`. And report.py:166 `checked = [cl for cl in report["claims"] if cl["status"] != UNCHECKED]` suppresses the entire "Claim ledger (registry lookups)" block when nothing was checked, so there is no place in the output where a zero appears. `verifier_stats: {"api_calls": 0}` is carried in the JSON (audit.py:77-79) but never surfaced in the terminal, markdown or HTML renderers. Passing `--verify` therefore *strictly reduces* the caveats shown to the reader while changing nothing about the evidence.
+**Verified and fixed 2026-08-26.** Confirmed live before touching anything: `--verify` on a
+zero-identifier fabrication (the `NO_IDENTIFIERS` text in `tests/test_report.py`) produced
+`verified` in the header badge and dropped the "own account" disclaimer, exactly as this entry
+describes — 0 API calls, `verified: true`. Fixed by adding a second field, `verification_effective`
+(`audit.py`): true only when `verify_all` actually changed at least one claim's status away from
+`UNCHECKED`. This is `True` for a real network *failure* too (a dispatched-but-unreachable claim
+still becomes `UNCHECKABLE`, not `UNCHECKED` — the "network failure is never evidence of deception"
+rule still applies), and `False` only in the exact case this finding names: nothing in `HANDLERS` had
+anything to dispatch to. `report.py` now derives the header badge (`_verification_label`, a shared
+helper across the terminal/Markdown/HTML renderers — three states: `unverified`, `verify attempted,
+0 checked`, `verified`) and the "own account" disclaimer's gate from `verification_effective`, not
+from the raw flag, and `caveats()` emits an explicit new line when `--verify` ran but checked nothing.
+Left as-is on purpose: `verifier_stats` is still JSON-only, not printed inline in the terminal — the
+new caveat line covers the specific harm (a misleading "verified" claiming more than happened);
+surfacing the full stats block is a smaller, separate follow-up. Regression tests in
+`tests/test_report.py` (`TestCaveats`/`TestRenderers`), each confirmed to fail against the pre-fix
+code and pass against the fix.
+
+Original finding, kept for context: `run_audit` sets `"verified": bool(verify)` (audit.py:51) from the *flag*, not from whether any lookup succeeded. The renderer then keys three separate honesty affordances off that boolean. report.py:124 prints the header badge `'verified' if report['verified'] else 'unverified'`. report.py:72-77 gates the single most important disclaimer in the tool — "Nothing here was checked against an outside source... A well-written fabrication passes this easily" — on `not report.get("verified")`. And report.py:166 `checked = [cl for cl in report["claims"] if cl["status"] != UNCHECKED]` suppresses the entire "Claim ledger (registry lookups)" block when nothing was checked, so there is no place in the output where a zero appears. `verifier_stats: {"api_calls": 0}` is carried in the JSON (audit.py:77-79) but never surfaced in the terminal, markdown or HTML renderers. Passing `--verify` therefore *strictly reduces* the caveats shown to the reader while changing nothing about the evidence.
 
 **Evidence:** audit.py:51 `"verified": bool(verify)`; report.py:124; report.py:72-77 (`and not report.get("verified")`); report.py:166-168; audit.py:77-79 `verifier_stats`. Measured A/B on the same profile — WITHOUT `--verify`: "Read this before acting: • Nothing here was checked against an outside source... • Only 44% of the flag weight could be decided". WITH `--verify`: only the 44% line remains; header now reads `· verified`; score identical (33/100), zero API calls, no claim ledger printed.
 

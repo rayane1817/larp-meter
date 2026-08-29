@@ -347,7 +347,7 @@ def cmd_interactive(args):
     verdict = score(results)
     report = {
         "version": __version__, "schema": 3, "target": "interactive assessment",
-        "mode": "interactive", "timestamp": "", "verified": False,
+        "mode": "interactive", "timestamp": "", "verified": False, "verification_effective": False,
         "level": verdict["level"], "larp_score": verdict["score"],
         "raw_score": verdict["raw_score"], "scored": verdict["scored"],
         "evidence_coverage_pct": verdict["coverage"], "specificity_index": 0.0,

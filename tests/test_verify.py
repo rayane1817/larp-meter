@@ -134,6 +134,76 @@ class TestAttribution(unittest.TestCase):
         self.assertEqual(claim.status, UNCHECKABLE)
         self.assertNotEqual(claim.status, MISMATCH)
 
+    def test_patent_prosecuted_for_a_client_is_not_a_mismatch(self):
+        """BACKLOG.md: 'Any identifier appearing anywhere in the text is
+        treated as a personal authorship claim.' extract_claims harvests
+        every DOI/ORCID/arXiv/patent number with no ownership context at
+        all, and `_attribute` asked only 'does the registry list the
+        subject' -- so a patent attorney writing 'I prosecuted US 9876543
+        for a client' got the same MISMATCH, floored at ORANGE by flag 11,
+        as an actual fabricator claiming someone else's invention. The
+        surrounding text explicitly disclaims authorship here; `_attribute`
+        must record existence without asserting -- or refuting -- that the
+        subject invented it."""
+        v = StubVerifier({}, subject_name="Sofia Almeida")
+        claim = Claim(kind="artifact", subtype="patent", value="US9876543",
+                      context="I prosecuted US 9876543 for a client in the sensor space.")
+        v._attribute(claim, ["Someone Else"], "Patent US9876543 (Sensor Array)", "https://x")
+        self.assertEqual(claim.status, UNCHECKABLE)
+        self.assertNotEqual(claim.status, MISMATCH)
+
+    def test_doi_cited_as_prior_art_is_not_a_mismatch(self):
+        """Same failure, the other everyday phrasing: 'our approach builds
+        on <doi>' cites prior work, it does not claim authorship of it."""
+        v = StubVerifier({}, subject_name="Sofia Almeida")
+        claim = Claim(kind="artifact", subtype="doi", value="10.5555/xyz",
+                      context="our approach builds on prior work (10.5555/xyz) in the field")
+        v._attribute(claim, ["Someone Else"], 'Paper "X"', "https://x")
+        self.assertEqual(claim.status, UNCHECKABLE)
+        self.assertNotEqual(claim.status, MISMATCH)
+
+    def test_doi_without_disclaiming_context_is_still_checked_normally(self):
+        """The guard must not swallow the ordinary, common case: an
+        identifier with no surrounding disclaimer (or none captured at all,
+        as when a Claim is hand-built without a context) is still fully
+        attributable -- this is not a blanket downgrade of every DOI/ORCID/
+        arXiv/patent claim to UNCHECKABLE."""
+        v = StubVerifier({}, subject_name="Rex Falsum")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz",
+                      context="Our published work: 10.1000/xyz.")
+        v._attribute(claim, ["Someone Else"], 'Paper "X"', "https://x")
+        self.assertEqual(claim.status, MISMATCH)
+
+    def test_end_to_end_patent_citation_does_not_trigger_the_contradiction_floor(self):
+        """Full pipeline, not `_attribute` in isolation: extract_claims's
+        60-character context window must actually reach the guard, and flag
+        11 -- this tool's only floor-carrying flag -- must not TRIGGER on a
+        citation the subject's own text explicitly disclaims."""
+        from larp_meter.audit import run_audit
+        from larp_meter import UNKNOWN, TRIGGERED
+
+        class PatchedVerifier(StubVerifier):
+            pass
+
+        import larp_meter.audit as audit_mod
+        real_verifier = audit_mod.Verifier
+        try:
+            audit_mod.Verifier = lambda cache_dir, subject_name=None: StubVerifier(
+                {"patents.google.com": (
+                    "<title>Sensor Array Patent</title>"
+                    "<dd itemprop=\"inventor\">Someone Else</dd>", True)},
+                subject_name=subject_name)
+            text = ("I prosecuted patent US 9876543 for a client in the sensor "
+                    "space. I was not the inventor on this filing.")
+            report = run_audit("t", text, verify=True, subject_name="Sofia Almeida")
+        finally:
+            audit_mod.Verifier = real_verifier
+
+        claim = next(c for c in report["claims"] if c["subtype"] == "patent")
+        self.assertEqual(claim["status"], UNCHECKABLE)
+        flag11 = next(f for f in report["flags"] if f["id"] == 11)
+        self.assertNotEqual(flag11["status"], TRIGGERED)
+
 
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):

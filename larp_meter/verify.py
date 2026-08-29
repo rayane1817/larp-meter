@@ -29,6 +29,36 @@ from xml.etree import ElementTree
 from . import names
 from .extract import VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE, EMITTED_SUBTYPES
 
+# A DOI/ORCID/arXiv/patent number sitting in someone's bio is not automatically
+# a claim of authorship: citing prior art, prosecuting a patent for a client,
+# or naming a paper you build on but did not write is ordinary professional
+# writing. extract_claims captures the sentence fragment around every
+# identifier as `claim.context` specifically so `_attribute` can tell the two
+# apart -- when that fragment itself disclaims ownership, the artifact's
+# existence must be recorded without asserting, or refuting, that the subject
+# is its author. This is deliberately a narrow, phrase-based check: it only
+# ever *removes* a possible MISMATCH/VERIFIED down to UNCHECKABLE, so a phrase
+# it fails to recognise costs coverage, never accuses anyone.
+_NON_ATTRIBUTION_CONTEXT_RE = re.compile(
+    r"\b("
+    r"prior art"
+    r"|cit(?:e|es|ed|ing|ation)"
+    r"|based on|builds? on|built on|building on"
+    r"|not (?:the |an |my |our )?(?:inventor|author|credited|own)"
+    r"|client|employer|colleague|co-?worker|teammate"
+    r"|on behalf of"
+    r"|someone else'?s"
+    r"|another(?:'s| author'?s)"
+    r")\b",
+    re.I,
+)
+
+
+def _disclaims_authorship(context):
+    """Does the sentence fragment around an identifier say it belongs to
+    someone other than the subject, rather than claiming it for them?"""
+    return bool(context) and bool(_NON_ATTRIBUTION_CONTEXT_RE.search(context))
+
 VERIFY_TTL = 30 * 24 * 3600
 MAX_RESPONSE_BYTES = 2_000_000
 USER_AGENT = ("larp-meter/3.0 (OSINT due-diligence triage; "
@@ -167,11 +197,22 @@ class Verifier:
     def _attribute(self, claim, candidate_names, label, url):
         """Shared tail: the artifact exists — does it belong to the subject?
 
-        Three outcomes, and conflating them is how this tool would libel
-        someone. A registry that returns no usable names (books with no author
-        array, ORCID records set to private, scraped markup that drifted) tells
-        us nothing about attribution, so it must not resolve to MISMATCH.
+        Four outcomes, and conflating any of them is how this tool would
+        libel someone. A registry that returns no usable names (books with no
+        author array, ORCID records set to private, scraped markup that
+        drifted) tells us nothing about attribution, so it must not resolve
+        to MISMATCH — and neither must an identifier the subject's own text
+        cites as someone else's work rather than claims as their own.
         """
+        if _disclaims_authorship(claim.context):
+            claim.status = UNCHECKABLE
+            claim.detail = (f"{label} exists, but the surrounding text frames it as someone "
+                            f"else's work (a citation, prior art, a client's or employer's "
+                            f"filing, ...) rather than the subject's own — attribution was not "
+                            f"checked.")
+            claim.source = url
+            return
+
         usable = [n for n in candidate_names or [] if n and n.strip()]
         match = names.name_matches(self.subject_name, usable)
         shown = ", ".join(usable[:4])

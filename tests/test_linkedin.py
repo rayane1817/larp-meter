@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 
+from larp_meter import TRIGGERED
 from larp_meter.linkedin import (
     Profile, Experience, Education,
     is_linkedin_paste, parse_linkedin_paste,
@@ -445,6 +446,102 @@ class TestSectionHeaderAmbiguity(unittest.TestCase):
         self.assertEqual(len(profile.educations), 1)
         self.assertEqual(profile.skills,
                          ["Python", "Radiation Physics", "Signal Processing"])
+
+
+class TestLocationMisclassification(unittest.TestCase):
+    """The line right after the date is only a location if it actually
+    looks like one. `to_prose()` never renders `exp.location` at all, so
+    misclassifying a description sentence as a location does not just
+    mislabel it -- it silently deletes it from every claim the extractors
+    ever see. That's a real-content-loss bug against an honest profile,
+    not a cosmetic one: a genuine achievement stops existing for scoring
+    purposes.
+    """
+
+    def test_short_description_with_a_comma_is_not_read_as_location(self):
+        text = ("Jan Fictief\nSenior Engineer\n\n"
+                "Experience\nSenior Engineer\nTechCorp\n"
+                "Jan 2018 - Present · 6 yrs\n"
+                "Led cross-functional team of 12, shipped v2 platform.\n\n"
+                "Education\nUniversity of Antwerp\nMSc, Electrical Engineering\n2010 - 2014")
+        profile = parse_linkedin_paste(text)
+        exp = profile.experiences[0]
+        self.assertEqual(exp.location, "",
+                         f"description sentence misread as location: {exp.location!r}")
+        self.assertIn("Led cross-functional team of 12", exp.description)
+        self.assertIn("Led cross-functional team of 12", profile.to_prose(),
+                      "achievement sentence vanished from the prose the extractors see")
+
+    def test_description_without_trailing_period_is_still_not_a_location(self):
+        """Same failure mode without a period to lean on: the real signal
+        is that the words after the comma aren't place names."""
+        text = ("Jan Fictief\nSenior Engineer\n\n"
+                "Experience\nSenior Engineer\nTechCorp\n"
+                "Jan 2018 - Present · 6 yrs\n"
+                "Grew revenue and closed several new enterprise deals\n\n"
+                "Education\nUniversity of Antwerp\nMSc, Electrical Engineering\n2010 - 2014")
+        profile = parse_linkedin_paste(text)
+        exp = profile.experiences[0]
+        self.assertEqual(exp.location, "",
+                         f"description sentence misread as location: {exp.location!r}")
+        self.assertIn("Grew revenue", exp.description)
+
+    def test_real_comma_separated_location_still_recognised(self):
+        """The fix must not regress the case it exists to handle."""
+        profile = parse_linkedin_paste(LINKEDIN_PASTE)
+        self.assertEqual(profile.experiences[0].location, "Antwerp, Belgium")
+
+    def test_metropolitan_area_location_still_recognised(self):
+        text = ("Jan Fictief\nSenior Engineer\n\n"
+                "Experience\nSenior Engineer\nTechCorp\n"
+                "Jan 2018 - Present · 6 yrs\n"
+                "San Francisco Bay Area\n"
+                "Shipped the v2 platform.\n\n"
+                "Education\nUniversity of Antwerp\nMSc, Electrical Engineering\n2010 - 2014")
+        profile = parse_linkedin_paste(text)
+        exp = profile.experiences[0]
+        self.assertEqual(exp.location, "San Francisco Bay Area")
+        self.assertIn("Shipped the v2 platform", exp.description)
+
+
+class TestNameSurvivesNormalisation(unittest.TestCase):
+    """`to_prose()` never rendered `profile.name` at all. That's invisible
+    for most facts -- the name doesn't carry claims -- but LinkedIn's own
+    display-name field is exactly where a member types a self-applied
+    "Dr."/"Prof." honorific, and flag 13 (self-applied doctoral title) only
+    ever looks for that honorific anchored to the subject's name inside the
+    audited text. Dropping the name line silently defeated flag 13 for
+    every LinkedIn-paste subject, however blatant the title inflation --
+    not because of any crafting effort, but because the title happens to
+    live in the one field the normaliser threw away.
+    """
+
+    def test_self_applied_title_in_the_paste_name_reaches_the_prose(self):
+        text = ("Dr. Marcus Vane\nVisionary CTO\n\n"
+                "Experience\nCTO\nVane Quantum Systems\nJan 2020 - Present\n\n"
+                "Education\nSome Business School\nMBA Healthcare Management\n2016 - 2018")
+        profile = parse_linkedin_paste(text)
+        self.assertIn("Dr. Marcus Vane", profile.to_prose(),
+                      "self-applied title in the display name vanished from the prose")
+
+    def test_self_applied_title_in_the_paste_name_triggers_flag_13(self):
+        from larp_meter.extract import extract_claims
+        from larp_meter.flags import AuditContext, evaluate
+
+        text = ("Dr. Marcus Vane\nVisionary CTO\n\n"
+                "Experience\nCTO\nVane Quantum Systems\nJan 2020 - Present\n\n"
+                "Education\nSome Business School\nMBA Healthcare Management\n2016 - 2018")
+        prose = parse_linkedin_paste(text).to_prose()
+        ctx = AuditContext(text=prose, claims=extract_claims(prose),
+                           subject_name="Marcus Vane")
+        self.assertEqual(evaluate(ctx)[13].status, TRIGGERED)
+
+    def test_ordinary_name_without_a_title_is_unaffected(self):
+        """The fix must not turn a plain name into a false credential
+        claim or otherwise change extraction for the common case."""
+        profile = parse_linkedin_paste(LINKEDIN_PASTE)
+        self.assertIn("Jan Fictief", profile.to_prose())
+        self.assertEqual(profile.experiences[0].title, "Senior Radiation Physicist")
 
 
 if __name__ == "__main__":

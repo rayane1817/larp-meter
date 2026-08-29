@@ -84,6 +84,14 @@ class Profile:
         institutions and companies land on separate lines.
         """
         parts = []
+        if self.name:
+            # LinkedIn's display-name field is exactly where a member types a
+            # self-applied "Dr."/"Prof." honorific. Leaving it out of the
+            # prose meant flag 13's title-inflation check -- which only ever
+            # looks for that honorific anchored to the subject's own name in
+            # the audited text -- could never see it for a LinkedIn-paste
+            # subject, however unsupported the title.
+            parts.append(self.name + ".")
         if self.headline:
             parts.append(self.headline + ".")
         if self.about:
@@ -235,6 +243,51 @@ _DURATION_RE = re.compile(
     re.I,
 )
 
+# Words that may appear lowercase inside an otherwise Title-Case place name
+# ("United States of America", "Vale do Paraiba"), without disqualifying the
+# line as a location.
+_LOCATION_CONNECTORS = frozenset({
+    "of", "and", "the", "de", "du", "la", "le", "van", "von", "der", "den",
+})
+
+
+def _looks_like_location(line):
+    """Is *line* plausibly a LinkedIn location line, not a description?
+
+    The line right after the date/duration is a location only sometimes —
+    LinkedIn omits it as often as it includes it. Treating any short,
+    comma-containing line as a location swallowed real achievement
+    sentences ("Led a team of 12, shipped v2 platform.") into `location`,
+    which `to_prose()` never renders — the sentence would silently vanish
+    from everything the extractors and flags ever see. A location is a
+    short run of Title-Case place-name words; a sentence has digits, a
+    closing period, or lowercase verbs the comma test alone can't rule out.
+    """
+    if not line or len(line) >= 60:
+        return False
+    if line.endswith((".", "!", "?")):
+        return False
+    if any(ch.isdigit() for ch in line):
+        return False
+    lowered = line.lower()
+    if any(w in lowered for w in ("remote", "hybrid", "area")):
+        return True
+    if "," not in line:
+        return False
+    for part in line.split(","):
+        words = part.strip().split()
+        if not words:
+            return False
+        for word in words:
+            base = word.strip(".'-")
+            if not base:
+                continue
+            if base.lower() in _LOCATION_CONNECTORS:
+                continue
+            if not base[0].isupper():
+                return False
+    return True
+
 
 def _is_chrome(line):
     stripped = line.strip()
@@ -366,8 +419,7 @@ def _parse_experiences(lines):
             post = [l.strip() for l in clean[date_idx + 1:] if l.strip()]
             if post:
                 first = post[0]
-                if len(first) < 60 and ("," in first or
-                        any(w in first.lower() for w in ("remote", "hybrid", "area"))):
+                if _looks_like_location(first):
                     exp.location = first
                     post = post[1:]
                 exp.description = " ".join(post)

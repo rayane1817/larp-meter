@@ -105,6 +105,111 @@ class TestIndividualFlags(unittest.TestCase):
         c = ctx_for(text, source_urls=["https://linkedin.com/in/x", "https://reuters.com/article/y"])
         self.assertEqual(evaluate(c)[10].status, PASSED)
 
+    def test_validation_triggers_at_exactly_40_words(self):
+        """Mutation-tested (2026-08-17): `ctx.word_count >= 40` survived as
+        `> 40` with the suite still green — nothing pinned the boundary
+        itself, only values comfortably past it. A profile landing on
+        exactly 40 words with real leadership/tech language and zero
+        press must still get the substantial-claims warning, not silently
+        fall through to 'too little material to expect validation
+        signals' one word early."""
+        text = " ".join(["founder"] + ["building"] * 38 + ["hardware"])
+        self.assertEqual(len(text.split()), 40)
+        self.assertEqual(status_of(text, 10), TRIGGERED)
+
+    def test_buzzword_density_and_variety_trigger_at_the_exact_thresholds(self):
+        """Mutation-tested (2026-08-17): both `len(distinct) >= 4` and
+        `density >= 2.0` survived as `>` with the suite green — every
+        existing fixture sat comfortably past the cut, none exactly on
+        it. A profile landing on precisely 4 distinct buzzwords at
+        precisely 2.0 per 100 words must still TRIGGER, not fall through
+        to 'density is normal' by one word or one buzzword."""
+        text = "synergy paradigm disruption pioneering " + "team " * 196
+        self.assertEqual(len(text.split()), 200)
+        self.assertEqual(status_of(text, 4), TRIGGERED)
+
+    def test_buzzword_flag_does_not_use_the_short_text_carve_out_at_25_words(self):
+        """Mutation-tested (2026-08-17): `ctx.word_count < 25` survived as
+        `<= 25` with the suite green. At exactly 25 words the flag must
+        already be judged on ordinary density, not routed into the
+        short-text 'too short to judge' carve-out meant only for text
+        shorter than that."""
+        text = " ".join(["synergy"] + ["team"] * 24)
+        self.assertEqual(len(text.split()), 25)
+        self.assertEqual(status_of(text, 4), PASSED)
+
+    def test_vague_partnerships_trigger_at_exactly_two_with_zero_concrete(self):
+        """Mutation-tested (2026-08-17): `len(vague) >= 2` survived as `> 2`
+        with the suite green — every fixture used 3+ vague terms."""
+        text = "We have an MoU in place and an NDA signed with several partners."
+        self.assertEqual(status_of(text, 5), TRIGGERED)
+
+    def test_vague_partnerships_do_not_trigger_on_a_tie_with_concrete(self):
+        """Mutation-tested (2026-08-17): `len(vague) > len(concrete)` survived
+        as `>=` with the suite green. At a 2-vague/2-concrete tie the flag
+        must PASS, not accuse someone of an "overwhelmingly non-binding"
+        pattern their own concrete terms equally balance out."""
+        text = ("We have an MoU in place and an NDA signed, alongside a "
+                "signed contract and grant funding.")
+        self.assertEqual(status_of(text, 5), PASSED)
+
+    def test_logo_wall_triggers_at_exactly_four_partners(self):
+        """Mutation-tested (2026-08-17): `len(distinct) >= 4` survived as
+        `> 4` with the suite green — the existing fixture used 5."""
+        text = ("Partnership with Orion Systems. Partnership with Caldera Group. "
+                "Collaboration with Ridgeway Institute. Alliance with Northwind Labs.")
+        self.assertEqual(status_of(text, 9), TRIGGERED)
+
+    def test_unsourced_assertion_alone_does_not_pass_as_checkable_output(self):
+        """Mutation-tested (2026-08-17): dropping the `c.subtype != "assertion"`
+        filter from flag 6's `hard` artifact list survived with the suite
+        green. `assertion` claims come from SOFT_EVIDENCE phrases like
+        'peer-reviewed' that carry no identifier any registry could ever
+        look up. Letting them count as a checkable artifact is exactly the
+        top-priority evasion this tool exists to close: a fabricator who
+        writes vague, identifier-free output language would PASS the flag
+        meant to catch that, instead of landing in the UNKNOWN bucket
+        that flags 'nothing here is actually checkable'."""
+        text = "My research is peer-reviewed and widely cited in the field."
+        self.assertEqual(status_of(text, 6), UNKNOWN)
+
+    def test_credential_flag_triggers_on_a_verified_ror_miss(self):
+        """Mutation-tested (2026-08-17): comparing against `ex.UNCHECKED`
+        instead of `ex.NOT_FOUND` survived with the suite green — every
+        flag-8 test in this file only ever exercises the PASSED/UNKNOWN
+        branches (no test here ever sets `verified=True` with a
+        registry-refuted institution), even though this is the exact
+        dead-ROR-check bug shape this repo has hit before: the TRIGGERED
+        branch existing in the source without any test ever reaching it
+        through `evaluate()`."""
+        text = "PhD in Astrophysics from the Institute of Advanced Fictional Studies."
+        claims = ex.extract_claims(text)
+        for cl in claims:
+            if cl.subtype == "degree_institution":
+                cl.status, cl.detail = ex.NOT_FOUND, "ROR has no match for this name."
+        c = ctx_for(text, verified=True)
+        c.claims = claims
+        self.assertEqual(evaluate(c)[8].status, TRIGGERED)
+
+    def test_timeline_does_not_trigger_at_exactly_the_three_year_slack_boundary(self):
+        """Mutation-tested (2026-08-17): `claimed > available + 3` survived
+        as `>=` with the suite green. At exactly the documented 3-year
+        slack the timeline must PASS, not accuse someone whose claimed
+        experience lands precisely on the tolerance the flag itself
+        grants."""
+        text = "9 years of experience in robotics. Founded the lab in 2020."
+        c = ctx_for(text, now_year=2026)
+        self.assertEqual(evaluate(c)[12].status, PASSED)
+
+    def test_timeline_does_not_treat_the_current_year_as_a_future_date(self):
+        """Mutation-tested (2026-08-17): `y > ctx.now_year` survived as `>=`
+        with the suite green. A date claimed as the current year is not
+        "stated as past but in the future" — it is today."""
+        text = ("6 years of experience in robotics. Deployed our system in 2026. "
+                "Founded the lab in 2020.")
+        c = ctx_for(text, now_year=2026)
+        self.assertEqual(evaluate(c)[12].status, PASSED)
+
 
 class TestContradictionFlag(unittest.TestCase):
     def test_unknown_without_verification_pass(self):
@@ -171,6 +276,24 @@ class TestContradictionFlag(unittest.TestCase):
             if claim.subtype == "doi":
                 claim.status, claim.detail = ex.UNCHECKABLE, "Crossref unreachable"
         self.assertEqual(evaluate(c)[11].status, UNKNOWN)
+
+    def test_triggers_on_a_pure_mismatch_with_nothing_refuted(self):
+        """Mutation-tested (2026-08-17): `if refuted or mismatched:` survived
+        as `if refuted:` with the suite green — every existing test for
+        this branch uses NOT_FOUND, none uses a claim that is only
+        MISMATCHED (exists, but lists someone else). This is the flag
+        with this tool's only severity floor; a MISMATCH-only profile
+        silently falling through to the catch-all UNKNOWN would drop the
+        ORANGE floor for a claim the registry actively contradicts."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True, subject_name="Someone Else")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.MISMATCH, \
+                    "Record lists different authors; subject not credited."
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, TRIGGERED)
+        self.assertIn("do not list the subject", result.description)
 
 
 class TestTimelineFlag(unittest.TestCase):

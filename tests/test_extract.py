@@ -72,6 +72,32 @@ class TestDegreeExtraction(unittest.TestCase):
         for v in values:
             self.assertNotIn("Wilrijk", v)
 
+    def test_degree_institution_is_not_corrupted_by_case_insensitive_overrun(self):
+        """DEGREE_RE is compiled with re.I so the field-of-study can be matched
+        regardless of case, but that flag leaked into _INSTITUTION_CORE's
+        [A-Z]-anchored continuation group: 'Rotterdam School of Management and
+        a BSc' let the lowercase words 'and a' satisfy [A-Z][\\w-]* under
+        IGNORECASE and got folded into the institution claim. The corrupted
+        string is what gets sent to ROR and printed back to the reader as the
+        subject's own credential — a name they never wrote. A case-sensitive
+        re-scan of the source text must reproduce whatever is sent."""
+        claims = ex.extract_claims(
+            "She earned an MBA from Rotterdam School of Management and a BSc "
+            "in Industrial Engineering.")
+        institutions = [c.value for c in ex.claims_by(claims, "degree", "degree_institution")]
+        self.assertEqual(institutions, ["Rotterdam School of Management"])
+
+    def test_degree_institution_does_not_swallow_a_lowercase_connector_word(self):
+        """Same overrun, different shape: the connector alternation itself
+        ('of|de|des|der|van|voor|di|du|und|et|en|för|für') is matched
+        case-insensitively when nested inside DEGREE_RE, so a lowercase verb
+        immediately after the institution phrase can be misread as one of
+        those connectors and pull the next capitalised word in too."""
+        claims = ex.extract_claims(
+            "PhD from Universidad de Sevilla and Roberto Diaz co-authored the paper.")
+        institutions = [c.value for c in ex.claims_by(claims, "degree", "degree_institution")]
+        self.assertEqual(institutions, ["Universidad de Sevilla"])
+
 
 class TestOrgExtraction(unittest.TestCase):
     def test_self_referential_overlap_detected_generically(self):

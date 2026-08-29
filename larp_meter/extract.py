@@ -83,9 +83,26 @@ _INST_TYPES = (r"Universit\w*|Uniwersytet\w*|Universidad\w*|Universidade\w*|Inst
 # The prefix class excludes '.' so a sentence boundary cannot be swallowed
 # ("...in Wilrijk. Karolinska Institutet" must not parse as one name), and the
 # trailing \b stops "Institutet" being truncated to "Institute".
+#
+# [A-Z] is meant to mean "looks like part of a proper noun", but DEGREE_RE
+# interpolates this whole pattern under re.I (needed so "msc"/"phd" are
+# recognised regardless of case) — and the codebase deliberately guarantees
+# the same claims for an all-caps or all-lowercase paste of the same profile
+# (see TestDeterminism.test_cosmetic_variation_does_not_move_the_verdict), so
+# [A-Z] cannot be made case-sensitive here without breaking that invariant.
+# Under IGNORECASE, [A-Z] matches any word, so the trailing connector group
+# walked straight past the real institution into ordinary prose: "Rotterdam
+# School of Management and a BSc" came back with the institution claim
+# "Rotterdam School of Management and a" — a string the subject never wrote,
+# which then gets sent to ROR and printed back as their own credential. The
+# negative lookahead below excludes the small set of function words that can
+# follow an institution mention but are never part of one.
+_INSTITUTION_CONTINUATION_STOP = r"(?!(?:and|but|or|nor|with|a|an|the|who|which|that)\b)"
 _INSTITUTION_CORE = (
     r"(?:[A-Z][\w-]*\s+){0,3}(?:" + _INST_TYPES + r")"
-    r"(?:\s+(?:of|de|des|der|van|voor|di|du|und|et|en|för|für)\s+[A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,2})?")
+    r"(?:\s+(?:of|de|des|der|van|voor|di|du|und|et|en|för|für)\s+"
+    + _INSTITUTION_CONTINUATION_STOP + r"[A-Z][\w-]*"
+    r"(?:\s+" + _INSTITUTION_CONTINUATION_STOP + r"[A-Z][\w-]*){0,2})?")
 
 INSTITUTION_RE = re.compile(r"\b(" + _INSTITUTION_CORE + r")\b")
 

@@ -215,6 +215,23 @@ class TestRegistries(unittest.TestCase):
         self.assertEqual(claim.status, NOT_FOUND)
         self.assertNotIn("Real institution: Totally Made Up University", claim.detail)
 
+    def test_a_claim_of_nothing_but_stopwords_cannot_be_verified(self):
+        """`wanted` is the set of significant tokens in the claim; when a value
+        decomposes to nothing but stopwords ("of", "the", ...) `wanted` is
+        empty, and an empty set is a subset of ANY registry hit's tokens by
+        definition. Without the `wanted and` guard, the first ROR item
+        returned — regardless of what it actually is — would satisfy
+        `wanted <= have` and come back VERIFIED, manufacturing a confirmed
+        credential from a query that named nothing at all."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/unrelated",
+            "names": [{"value": "Some Unrelated University", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "Norway"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Of The A")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+
     def test_short_acronym_match_is_reported_as_ambiguous(self):
         body = json.dumps({"items": [{
             "id": "https://ror.org/xyz",

@@ -1022,3 +1022,196 @@ except merging what already exists.
    passes should pick a *different* production file (`providers.py`,
    `linkedin.py`, `extract.py`, `cli.py` are all candidates) rather than
    re-sweeping the same four from scratch.
+## 2026-08-23 (nightly run)
+
+### Open PRs at the start of this run — all unmerged, none acted on
+
+`git log`/`master` had not moved since 2026-08-17 (`7699b72`). Three
+`nightly/*` PRs were open against it, oldest first:
+
+- **PR #3** (`nightly/2026-08-17`): `linkedin.py` red-team fixes + a
+  `flags.py` mutation sweep. Draft, open.
+- **PR #4** (`nightly/2026-08-18`): `verify.py` mutation sweep (6
+  mutations, all real). Draft, open. Its `verify_institution` finding
+  (the `wanted and` guard) is independently re-found and re-pinned
+  directly on `master` tonight — see the mutation section below; expect a
+  near-duplicate test when this PR eventually merges.
+- **PR #5** (`nightly/2026-08-19`): `names.py` mutation sweep (13
+  mutations, 4 real). Draft, open.
+
+No nightly run appears to have happened on 2026-08-20/21/22 — no branches,
+no NIGHTLY.md entries for those dates. Not investigated further; noting it
+here so the gap is visible rather than silently skipped over.
+
+Per standing instructions, none of these three were touched. Branched
+tonight's work fresh from `origin/master`'s tip (`7699b72`) rather than
+stacking on any of them, and kept tonight's change scoped to `extract.py`
++ its tests plus one `verify.py` test — no overlap with the modules PRs
+#3/#4/#5 touch (`linkedin.py`, `verify.py` production code, `names.py`),
+so this branch shouldn't conflict with any of them at merge time. The one
+soft collision is noted above: PR #4 will likely add a near-duplicate of
+tonight's new `verify.py` test when it merges.
+
+### Running backlog tally (15 CRITICAL findings)
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open — unchanged from PR #5's
+last recorded tally.** Tonight's DEGREE_RE fix (below) does NOT move this
+number: re-checked its section placement in BACKLOG.md before writing this
+and it sits in `## MAJOR (25)`, not `## CRITICAL (15)` — I nearly logged it
+against the CRITICAL count on the assumption that "a real fix" implies "a
+critical fix" without actually re-verifying which section it lives in;
+worth flagging as its own small lesson for future nights. The MAJOR/MODERATE/MINOR
+tallies aren't tracked run-over-run the way CRITICAL is; not starting that
+bookkeeping tonight, just noting the fix landed there instead.
+
+### What I did
+
+**Primary item — fixed a real false-institution-claim bug in `DEGREE_RE`,
+confirmed by writing failing tests first.** Picked up BACKLOG.md's
+"DEGREE_RE's re.I defeats the capitalisation anchors" CRITICAL entry
+(unverified going in, like everything in that file). Reproduced it live
+against current `extract.py` before touching anything:
+`extract_claims("She earned an MBA from Rotterdam School of Management
+and a BSc in Industrial Engineering.")` returned `degree_institution` =
+`"Rotterdam School of Management and a"` — a string the subject never
+wrote, which under `--verify` gets sent to ROR and printed back as their
+own credential (flag 8's evidence line). Root cause confirmed: `DEGREE_RE`
+is compiled with `re.I` for the degree/field text, and that flag leaks
+into the interpolated `_INSTITUTION_CORE`, so its `[A-Z]`-anchored
+"continue across a connector word" group stops meaning "capitalised word"
+and starts meaning "any word" — the lowercase "and a" following "of
+Management" satisfied it.
+
+Wrote two failing tests in `tests/test_extract.py` first
+(`test_degree_institution_is_not_corrupted_by_case_insensitive_overrun`,
+`test_degree_institution_does_not_swallow_a_lowercase_connector_word`),
+watched both fail against the unmodified code, then fixed it.
+
+**The first fix attempt was wrong, and the full suite is what caught it —
+this is the finding worth remembering more than the bug itself.** The
+BACKLOG entry's own suggested fix direction was `(?-i:...)` around
+`_INSTITUTION_CORE` to restore case-sensitivity. That does stop the
+overrun — and it also broke `tests/test_round4.py`'s
+`TestDeterminism.test_cosmetic_variation_does_not_move_the_verdict`, which
+asserts the tool returns byte-identical claims for an all-caps or
+all-lowercase paste of the same profile. Reintroducing `[A-Z]` case
+sensitivity into a shared institution pattern meant an all-caps or
+all-lowercase "Delft University of Technology" no longer matched at all.
+I only caught this because the standing instructions require running the
+*full* suite after a change, not just the new tests — `python -m unittest
+discover` immediately flagged 2 failures in a file I hadn't touched and
+hadn't thought to check by hand. This is the same failure shape as the
+2026-08-16 review's "a function's return contract changes and a caller
+elsewhere doesn't learn about it" — except one layer further down, in a
+shared regex fragment instead of a shared function.
+
+Shipped fix instead: kept `_INSTITUTION_CORE` fully case-insensitive
+(so the determinism guarantee holds), and added a negative-lookahead
+stopword exclusion (`and|but|or|nor|with|a|an|the|who|which|that`) to the
+trailing continuation group, so the over-run words themselves are excluded
+by name rather than by case. Both original bug tests pass, the
+determinism test's mutation-adjacent boundary (its 6 cosmetic variants,
+including uppercase/lowercase) all still pass, and the full suite went
+417 → 419 → **420** (one more test came from the `verify.py` mutation
+finding below).
+
+### What I confirmed in BACKLOG.md (evidence, not assertion)
+
+- **CRITICAL "DEGREE_RE's re.I..." — CONFIRMED and FIXED.** Live repro
+  matched the entry's own measured example exactly (`"...and a"`
+  corruption). Marked `[FIXED — nightly/2026-08-23]` in BACKLOG.md with
+  the full before/after and the determinism near-miss recorded inline.
+- **The entry's second failure mode (truncation: "Technische Universitat
+  Munchen" → "Technische Universitat", losing "Munchen") — CONFIRMED but
+  left OPEN, deliberately.** Re-measured live: `INSTITUTION_RE`
+  (`mentioned_institution`, already case-sensitive, untouched tonight)
+  produces the identical truncation on the identical input. It's a
+  shared, pre-existing gap in `_INSTITUTION_CORE`'s continuation logic
+  (only continues past the institution keyword across a listed connector
+  word, never across a bare adjacent capitalised token) — not specific to
+  the re.I bug fixed tonight, and lower severity (a truncated real name is
+  a weaker false claim than a fabricated one). Good next pick-up if
+  continuing this file.
+
+### Mutation-testing log (mandatory this cycle)
+
+Time-boxed spot-check across all four required files rather than a full
+sweep of any one, since the primary item above already consumed the
+night's main budget. One hand-authored mutation per file, scratch-copy /
+full-suite / revert, same discipline as every prior sweep:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors` tie-break `<=` → `<` | **Caught** (2026-08-16 sweep's test still active on `master`) |
+| `flags.py` | flag 11 `if refuted or mismatched:` → `if refuted:` | **Caught** (2026-08-17 sweep's test still active on `master`) |
+| `names.py` | `if len(present) >= 2:` → `>= 3:` | **Caught** (18 failures — incidental coverage from other pinning tests, even though the dedicated 2026-08-19 sweep isn't on `master` yet) |
+| `verify.py` | `verify_institution`'s `if wanted and wanted <= have:` → `if wanted <= have:` | **SURVIVED** — real, unpinned on `master` |
+
+The `verify.py` survivor is exactly the bug the still-unmerged PR #4
+already found and flagged as its most serious: a claim value that
+decomposes to nothing but stopwords ("Of The") gives `wanted` an empty
+set, and an empty set is a subset of any ROR hit — so without the guard,
+the first institution ROR returns for a query that named *nothing*
+comes back `VERIFIED`. Rather than leave `master` unpinned a second time
+waiting for PR #4, added
+`TestRegistries.test_a_claim_of_nothing_but_stopwords_cannot_be_verified`
+directly to `tests/test_verify.py` tonight, confirmed to fail on the
+mutation and pass on the restored file. **Expect a near-duplicate test
+when PR #4 eventually merges** — flagged in BACKLOG.md too so it isn't a
+surprise.
+
+**Standing four-file requirement: closed out.** Between tonight and the
+three still-open PRs, all four of `scoring.py`, `names.py`, `flags.py`,
+`verify.py` now have at least one real, evidenced mutation pass — two on
+`master` (`scoring.py`, `flags.py`), two on unmerged branches
+(`names.py` PR #5, `verify.py` PR #4) plus tonight's spot-check and one
+new pinned test landing directly on `master` regardless of what happens
+to PR #4. Future cycles can go back to deeper, single-file sweeps (repeat
+passes, or the files those PRs haven't reached yet) rather than needing to
+touch all four every night.
+
+### Verification
+
+- Full suite: 417 → 420 tests, green throughout (checked after the fix,
+  after the wrong first attempt was reverted, and after each mutation was
+  reverted).
+- Ran the CLI end-to-end on two hand-written samples per the standing
+  requirement:
+  - **Clean**: "Ana Kowalski, mechanical engineer. She earned an MBA from
+    Rotterdam School of Management and a BSc in Industrial Engineering
+    from TU Delft. Six years designing HVAC systems..." — the exact
+    sentence shape that used to corrupt the institution claim. Landed on
+    **INSUFFICIENT DATA** (thin, honest, no-verify profile — expected),
+    and flag 8's evidence line correctly reads "Degree tied to a named
+    institution (Rotterdam School of Management)" — confirmed in the
+    saved JSON's raw claim too: `degree_institution` = `"Rotterdam School
+    of Management"`, not the corrupted string.
+  - **Should-flag**: "Dr. Marcus Vane... PhD in Quantum Information from
+    Rotterdam School of Management..." (deliberately using the same
+    business-school institution against a claimed quantum-computing
+    domain, and the same "and a" sentence shape right after it). Landed
+    on **YELLOW 33/100**, flag 1 (Education ≠ Claimed Domain) TRIGGERED —
+    correctly identifies the credential/domain mismatch — and flag 8's
+    evidence again shows the clean, uncorrupted institution string.
+
+### What the next run should pick up first
+
+1. **The core gap is still fully open** — subject-anchored verification
+   (derived `Claim`s from OpenAlex/Crossref + a reconciliation step). Nothing
+   in the last several nights has touched this; it remains the single
+   biggest lever named in the task brief. Re-read the OpenAlex constraints
+   section in the standing brief and re-verify them live before starting —
+   they were last measured 2026-08-14.
+2. **Three open `nightly/*` PRs (#3, #4, #5) need a human merge decision.**
+   They're independent of each other's file scope mostly, but PR #4 will
+   collide with tonight's new `verify.py` test (near-duplicate, not a
+   logic conflict) — worth a heads-up to whoever merges it.
+3. `_INSTITUTION_CORE`'s truncation gap (real institution names cut short
+   after the institution-type word when no connector follows — "Technische
+   Universitat Munchen" → "Technische Universitat") — confirmed live
+   tonight, deliberately left unfixed, affects both `degree_institution`
+   and `mentioned_institution` equally. Smaller than tonight's fix but a
+   natural continuation of the same area.
+4. `linkedin.py`'s dedicated red-team pass (PR #3) is still sitting
+   unmerged — worth checking whether a fresh look after this many nights
+   turns up anything PR #3 missed, once it's merged or superseded.

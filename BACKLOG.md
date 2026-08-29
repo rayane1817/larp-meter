@@ -520,6 +520,103 @@ lens comes up.
 
 ---
 
+### `linkedin.py`: self-applied title in the name field was invisible to flag 13, and an achievement sentence could be silently swallowed into an unrendered field (2026-08-24, nightly run)
+
+First re-verification of `linkedin.py` since the 2026-08-17 red-team pass —
+that pass (PR #3, `nightly/2026-08-17`) found and fixed both of these bugs,
+but the PR was never merged and `master` never received the fix. Confirmed
+both were still live on `master` (commit `7699b72`) before touching
+anything, then re-implemented and re-verified independently rather than
+cherry-picking the unmerged branch, per the standing "don't push more
+commits to a stale open PR" instruction.
+
+**1. `Profile.to_prose()` never rendered `profile.name`.** Flag 13 (Self-
+Applied Doctoral Title) scans `ctx.text` for a "Dr."/"Prof." honorific
+anchored next to the subject's own name tokens — but the LinkedIn normaliser
+never put the name into the text it hands the rest of the pipeline at all.
+A fabricator who types "Dr. Marcus Vane" into their own LinkedIn display
+name field — the cheapest possible evasion, no crafting of prose required —
+was completely invisible to flag 13 whether reached via `--text` auto-
+detection or `--from-json`. Confirmed live: a hand-written paste with "Dr.
+Marcus Vane" as the name, MSc-only education, came back flag 13 `UNKNOWN`
+("no title self-applied... nothing to check") before the fix. Fixed by
+rendering `self.name` as the first line of `to_prose()`; re-ran the same
+sample after the fix and flag 13 correctly `TRIGGERED`
+("Self-applies 'Dr. Marcus Vane', but the entire stated education (MSc
+Biology) contains no doctorate").
+
+**2. A short achievement sentence with a comma, appearing on its own line
+right after the date/duration line, was misread as the location** (the
+existing heuristic was just "under 60 chars and contains a comma, or
+mentions remote/hybrid/area"). Since `to_prose()` never renders
+`exp.location` at all — it exists only for `--from-json` round-tripping —
+this wasn't a mislabel, it was silent content loss: "Led cross-functional
+team of 12, shipped v2 platform." vanished from everything the extractors
+and flags ever see, no crafting required, just an ordinary post-date
+achievement line. Fixed with a tighter `_looks_like_location()`: reject
+anything with a digit, anything ending in sentence punctuation, and any
+comma-separated part that doesn't start with a capital letter — a real
+achievement sentence fails at least one of those, a real location
+("Antwerp, Belgium", "Greater London Area", "Remote") passes all of them.
+
+Both fixes mutation-tested (reverted each in isolation, confirmed the
+suite's own new tests catch it, restored): reverting the name-rendering
+line fails 2 tests, reverting the location tightening fails 1. Verified
+through the real `--text`/`--from-json` CLI entry points (`report["flags"]`),
+not `flags.py`/`linkedin.py` in isolation, since a component correct in
+isolation but never reached by production is this repo's most repeated bug
+shape (ROR/HANDLERS, then `_attribute`'s `None` handling). 5 new tests in
+`tests/test_linkedin.py`. 417 → 422 tests, green throughout.
+
+**Left untouched:** the rest of `linkedin.py` (experience/education parsing,
+section-header ambiguity handling) got no changes — this was a targeted
+re-verification of two specific, previously-identified findings, not a
+fresh red-team pass.
+
+### Mandatory mutation-testing spot-check, four required files (2026-08-24, nightly run)
+
+Not the primary item tonight (the `linkedin.py` fixes above were), but the
+standing brief requires a time-boxed mutation pass every cycle regardless.
+One hand-authored mutation each in `scoring.py`, `verify.py`, `names.py`,
+`flags.py` — scratch-edit, run the full suite, revert — specifically
+targeting the boundaries/guards the still-unmerged `nightly/2026-08-18`
+(PR #4, `verify.py`) and `nightly/2026-08-19` (PR #5, `names.py`) branches
+already found and described, to check whether `master` itself is still
+exposed while those PRs sit open.
+
+- **`scoring.py`** (`MIN_COVERAGE` boundary, `>=` → `>`): **caught**. Already
+  pinned by the 2026-08-16 sweep on `master`.
+- **`flags.py`** (flag 12's `+3` timeline slack, `> available + 3` →
+  `> available`): **caught**. Already pinned by the 2026-08-16 sweep on
+  `master`.
+- **`verify.py`** (`verify_institution`'s `if wanted and wanted <= have`
+  guard, dropping the `wanted and`): **survived on `master`** — confirmed
+  exactly the gap PR #4 and PR #6 both independently found and described,
+  still real because neither PR is merged. An empty `wanted` set (a claim
+  that decomposes to nothing but stopwords) is a subset of any non-empty
+  ROR name by definition, so without the guard the first hit "verifies" a
+  claim that named nothing. Pinned directly on this branch — see
+  `tests/test_verify.py::TestRegistries::test_stopword_only_claim_is_not_verified_by_the_first_hit`
+  — rather than leaving `master` unpinned a second time (PR #6 already set
+  this precedent once).
+- **`names.py`** (`name_matches`'s "zero usable candidates" guard, removing
+  `if not usable: return None`): **survived on `master`** — same shape,
+  confirmed exactly the gap PR #5 found. Masked for Latin-script subjects by
+  the independent script-mismatch guard, so it only shows up for a
+  non-Latin, single-token subject name against an empty or blank-only
+  candidate list — where it silently returns a confident `False` (mismatch)
+  from zero registry evidence instead of `None` (unanswerable). Pinned:
+  `tests/test_names.py::TestNoCandidatesIsUnanswerable`.
+
+Both survivors reconfirmed CAUGHT after their pinning tests were added, then
+the mutation reverted and the full suite re-run green. `scoring.py` and
+`flags.py` need no changes tonight — the still-open item is `verify.py` and
+`names.py` getting a **full** dedicated sweep (not just this one guard each)
+merged to `master`; PRs #4 and #5 already did that work, they just haven't
+landed. See "Open PRs" below.
+
+---
+
 ## CRITICAL (15)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says

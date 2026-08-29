@@ -181,6 +181,15 @@ class TestToProse(unittest.TestCase):
     def test_description_included(self):
         self.assertIn("radiation-tolerant", self.prose)
 
+    def test_name_included(self):
+        """profile.name must reach the prose extractors and flags actually
+        read. A self-applied 'Dr.'/'Prof.' title in the LinkedIn display
+        name field costs a fabricator nothing but typing it in their own
+        name -- the cheapest possible evasion of flag 13 -- and to_prose()
+        silently dropped the name entirely, so that title was never visible
+        to anything downstream of parsing."""
+        self.assertIn("Jan Fictief", self.prose)
+
 
 class TestProfileSchema(unittest.TestCase):
     def test_round_trip(self):
@@ -388,6 +397,41 @@ class TestEdgeCases(unittest.TestCase):
         self.assertNotIn("see more", profile.about)
         self.assertIn("interesting", profile.about)
 
+    def test_achievement_sentence_after_date_not_misread_as_location(self):
+        """A short achievement sentence directly following the date line (no
+        separate location line present) must not be captured as
+        exp.location. to_prose() never renders location at all -- it exists
+        only for structured JSON round-tripping -- so anything wrongly read
+        into that field is silently discarded before any extractor or flag
+        the pipeline runs ever sees it. Real content loss against an honest
+        profile's own stated achievements, with no crafting required: this
+        is what a normal post-date description sentence with a comma in it
+        looks like."""
+        text = ("Name\nTitle\n\nExperience\nDirector\nCo\n"
+                 "Jan 2020 - Present · 4 yrs\n"
+                 "Led cross-functional team of 12, shipped v2 platform.\n\n"
+                 "Education\nSchool\nMSc, CS\n2016 - 2020")
+        profile = parse_linkedin_paste(text)
+        exp = profile.experiences[0]
+        self.assertEqual(exp.location, "",
+                          "an achievement sentence was misread as a location")
+        self.assertIn("Led cross-functional team of 12", exp.description)
+        self.assertIn("Led cross-functional team of 12", profile.to_prose())
+
+    def test_genuine_locations_still_recognised(self):
+        """The tightened heuristic must not regress the cases it exists to
+        catch in the first place."""
+        for location in ("Antwerp, Belgium", "San Francisco Bay Area",
+                          "Greater London Area", "Remote"):
+            text = ("Name\nTitle\n\nExperience\nDirector\nCo\n"
+                     f"Jan 2020 - Present · 4 yrs\n{location}\n"
+                     "Shipped the v2 platform.\n\n"
+                     "Education\nSchool\nMSc, CS\n2016 - 2020")
+            profile = parse_linkedin_paste(text)
+            exp = profile.experiences[0]
+            self.assertEqual(exp.location, location, f"lost genuine location {location!r}")
+            self.assertIn("Shipped the v2 platform", exp.description)
+
 
 class TestSectionHeaderAmbiguity(unittest.TestCase):
     """A section-header word is not always a section header.
@@ -542,6 +586,45 @@ class TestNameSurvivesNormalisation(unittest.TestCase):
         profile = parse_linkedin_paste(LINKEDIN_PASTE)
         self.assertIn("Jan Fictief", profile.to_prose())
         self.assertEqual(profile.experiences[0].title, "Senior Radiation Physicist")
+class TestSelfAppliedTitleReachesFlag13(unittest.TestCase):
+    """A self-applied 'Dr.'/'Prof.' title costs a fabricator nothing but
+    typing it into their own LinkedIn display name field -- no crafting of
+    prose required. Flag 13 already knows how to catch this from free text;
+    the only question is whether the real --text pipeline ever shows it the
+    name at all. Runs the actual CLI entry point, not flags.py in isolation,
+    since a component fully correct on its own but never reached in
+    production is this repo's most repeated bug shape."""
+
+    def _run(self, argv):
+        from larp_meter.cli import main
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv)
+        return code or 0, out.getvalue() + err.getvalue()
+
+    def test_title_in_display_name_with_no_doctorate_triggers_flag_13(self):
+        text = ("Dr. Marcus Vane\nSenior Research Director at Helix Biotech\n\n"
+                "Experience\nSenior Research Director\nHelix Biotech\n"
+                "Jan 2015 - Present · 9 yrs\n\n"
+                "Education\nState University\nMSc, Biology\n2008 - 2010")
+        code, out = self._run(["--text", text, "--no-save", "--json"])
+        self.assertEqual(code, 0, out)
+        report = json.loads(out[out.index("{"):])
+        self.assertEqual(report["mode"], "text:linkedin")
+        flag13 = next(f for f in report["flags"] if f["id"] == 13)
+        self.assertEqual(flag13["status"], "TRIGGERED",
+                          f"self-applied title in the name field went unseen: {flag13}")
+
+    def test_plain_name_does_not_falsely_trigger_flag_13(self):
+        text = ("Marcus Vane\nSenior Research Director at Helix Biotech\n\n"
+                "Experience\nSenior Research Director\nHelix Biotech\n"
+                "Jan 2015 - Present · 9 yrs\n\n"
+                "Education\nState University\nMSc, Biology\n2008 - 2010")
+        code, out = self._run(["--text", text, "--no-save", "--json"])
+        self.assertEqual(code, 0, out)
+        report = json.loads(out[out.index("{"):])
+        flag13 = next(f for f in report["flags"] if f["id"] == 13)
+        self.assertNotEqual(flag13["status"], "TRIGGERED", flag13)
 
 
 if __name__ == "__main__":

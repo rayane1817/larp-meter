@@ -206,6 +206,23 @@ class TestRegistries(unittest.TestCase):
         self.assertEqual(claim.status, NOT_FOUND)
         self.assertIn("Institute of Advanced Studies", claim.detail)  # names the near miss
 
+    def test_stopword_only_claim_is_not_verified_by_the_first_hit(self):
+        """An empty `wanted` set (a claim value that decomposes to nothing
+        but stopwords) is a subset of ANY non-empty registry name, by
+        definition of subset. Without the `wanted and` guard on the match
+        check, the very first ROR hit -- any real institution the registry
+        happens to return for a near-empty query -- would silently "verify"
+        a claim that named nothing at all, manufacturing coverage from a
+        query with no institution in it."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/00cv9y106",
+            "names": [{"value": "Ghent University", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "Belgium"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Of The And")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+
     def test_registry_name_is_never_echoed_from_the_claim(self):
         """Old bug: .get('name', claim.value) reported the claim back as proof."""
         body = json.dumps({"items": [{"id": "x", "names": [], "locations": []}]})

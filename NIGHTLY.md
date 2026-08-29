@@ -1215,3 +1215,161 @@ touch all four every night.
 4. `linkedin.py`'s dedicated red-team pass (PR #3) is still sitting
    unmerged — worth checking whether a fresh look after this many nights
    turns up anything PR #3 missed, once it's merged or superseded.
+## 2026-08-24 (nightly run)
+
+### ⚠ Open PR pileup — for human visibility, not acted on
+
+**Four `nightly/*` PRs are open, draft, and unmerged against `master` right
+now**, dating back a week: #3 (`nightly/2026-08-17`, `linkedin.py` red-team +
+`flags.py` sweep — **`mergeable_state: dirty`, i.e. now has a real merge
+conflict**), #4 (`nightly/2026-08-18`, `verify.py` sweep — clean), #5
+(`nightly/2026-08-19`, `names.py` sweep — clean), #6 (`nightly/2026-08-23`,
+`DEGREE_RE`/`re.I` institution-name fix — clean). No nightly run happened on
+2026-08-20, 08-21 or 08-22 (already flagged by PR #6's own description; still
+true). Per the standing instructions, tonight's run did not push to any of
+these — each one is small and independently reviewable, but they've now
+sat long enough that #3 conflicts with whatever landed after it, and #4/#5's
+`verify.py`/`names.py` mutation sweeps are real, already-completed work that
+still isn't protecting `master`. **This queue needs a human merge pass** —
+there's nothing more the autonomous side should do about it besides keep
+flagging it, which is exactly what this section is for.
+
+### Running backlog tally
+
+**CRITICAL: 8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open** (unchanged
+tonight — tonight's fix was MAJOR-severity, not one of the 15 criticals;
+mutation-testing gaps aren't BACKLOG.md items). Verified this count directly
+against `BACKLOG.md`'s own `## CRITICAL (15)` section on current `master`
+before writing it down, rather than trusting the last PR description's
+number.
+
+### What I did
+
+**Primary item**: re-verified and independently re-fixed two real bugs in
+`linkedin.py` that the 2026-08-17 red-team pass (PR #3) had already found
+and fixed — but since PR #3 was never merged, `master` still had both live.
+Confirmed both live on `master` before touching anything (grepped for
+`_looks_like_location` and `to_prose`'s handling of `self.name` — neither
+existed), then wrote failing tests first, watched them fail, then fixed:
+
+1. **`Profile.to_prose()` never rendered `profile.name`.** Flag 13
+   (Self-Applied Doctoral Title) scans the rendered prose for a "Dr."/"Prof."
+   honorific next to the subject's own name — but the LinkedIn normaliser
+   never put the name in that prose at all. A fabricator typing "Dr. Marcus
+   Vane" into their own LinkedIn display name field — the cheapest possible
+   evasion, no crafted prose needed — was invisible to flag 13 via both
+   `--text` auto-detection and `--from-json`. Fixed by rendering the name as
+   the first prose line. Verified live via both CLI entry points (see
+   BACKLOG.md for the exact before/after flag 13 output).
+2. **A short achievement sentence with a comma right after the date line was
+   misread as a location**, and since `to_prose()` never renders
+   `exp.location` at all, this was silent content loss, not a mislabel: "Led
+   cross-functional team of 12, shipped v2 platform." vanished from
+   everything the extractors and flags ever see. Fixed by tightening
+   `_looks_like_location()`: reject anything with a digit, anything ending
+   in sentence punctuation, or any comma-separated part not starting with a
+   capital letter.
+
+Both mutation-tested (reverted each fix in isolation — 2 test failures and 1
+test failure respectively — then restored). Full detail, including the
+exact live CLI output before and after, is in `BACKLOG.md` under
+"`linkedin.py`: self-applied title in the name field..." (2026-08-24).
+
+**Mandatory mutation-testing pass**: one spot-check mutation each in
+`scoring.py`, `flags.py`, `verify.py`, `names.py` (not a full sweep — the
+`linkedin.py` fix was primary tonight), deliberately targeting the specific
+guards PRs #4 and #5 already found, to check whether `master` is still
+exposed while those PRs sit unmerged. `scoring.py` and `flags.py`: both
+caught (already pinned by the 2026-08-16 direct-to-master sweeps).
+`verify.py` and `names.py`: **both survived on `master`**, confirming it
+really is still exposed to both PR #4's and PR #5's findings. Pinned both
+directly on this branch (same "don't leave master unpinned twice" call PR #6
+made for the same `verify.py` guard). Full mutation-by-mutation detail in
+BACKLOG.md.
+
+### Verification
+
+- Full suite: 417 → 425 tests, green throughout (after each fix, after each
+  mutation, and at the end).
+- Ran the CLI end-to-end on two hand-written LinkedIn-paste samples per the
+  standing requirement:
+  - **Clean**: "Elena Voss", a senior backend engineer with a real-shaped
+    career and no title claims. Landed on INSUFFICIENT DATA at 27% coverage
+    (expected — thin profile, the standing "vagueness beats the tool" gap,
+    not a regression) with flag 13 correctly UNDECIDABLE ("no title claimed").
+  - **Should-flag**: "Dr. Marcus Vane", MSc-only education, "40 years of
+    published, peer-reviewed research" filler. Flag 13 correctly
+    **TRIGGERED**: "Self-applies 'Dr. Marcus Vane', but the entire stated
+    education (MSc Biology) contains no doctorate." This is the exact case
+    tonight's fix exists for, confirmed live through the real pipeline, not
+    just the new unit tests.
+- Cross-boundary check (the "grep every caller" standing review question):
+  `to_prose()` has exactly two callers, `cli.py`'s `_maybe_normalise` (text
+  mode) and `cmd_from_json`. Tested both directly — flag 13 triggers
+  correctly through `--from-json` too (see BACKLOG.md for the exact repro).
+  `_looks_like_location`'s only caller is the one call site changed.
+
+### BACKLOG.md: confirmed / refuted
+
+- Confirmed live: both `linkedin.py` bugs described in PR #3's (unmerged)
+  body were still present on `master` at commit `7699b72`, exactly as
+  described. Now fixed and documented under "Shipped since the original
+  review" — not the same entries as PR #3's, since this is independent
+  re-verification, not a cherry-pick.
+- Confirmed live: PR #4's `verify_institution` guard finding and PR #5's
+  `name_matches` "not usable" guard finding are both still real on `master`
+  right now (see mutation-testing section above and in BACKLOG.md). Both
+  now pinned on `master` via this branch, independent of whether PR #4/#5
+  ever merge.
+- Did not re-verify any other BACKLOG.md entry tonight.
+
+### Mutation-testing log (cumulative, for the "each of the four files" tracking)
+
+| File | Dedicated sweep merged to `master`? | Where |
+|---|---|---|
+| `scoring.py` | Yes | direct commit `79f6cf8`, 2026-08-16 |
+| `flags.py` | Yes | direct commit `d958ce0`, 2026-08-16 |
+| `verify.py` | **No** — full sweep exists only on unmerged PR #4 | tonight's spot-check found and pinned 1 of its ~6 findings directly on `master` |
+| `names.py` | **No** — full sweep exists only on unmerged PR #5 | tonight's spot-check found and pinned 1 of its ~4 findings directly on `master` |
+
+Net effect: every file has now had *some* real, test-confirmed mutation
+work land directly on `master` at least once, but `verify.py` and `names.py`
+still haven't had the **full** sweep merged — that's sitting finished and
+reviewable in PRs #4/#5, waiting on the merge queue above.
+
+### What I learned
+
+- **State drift compounds when PRs don't merge.** Three of tonight's
+  "still open" backlog items (the two `linkedin.py` bugs, the `verify.py`
+  guard) were already found, fixed, and tested by prior nights — the work
+  wasn't missing, it was stuck in review. Re-doing it independently (rather
+  than reading the stale branch and cherry-picking) cost real tonight-time
+  that could have gone toward the still-fully-open core gap. The queue
+  itself is now the single biggest lever on this repo's velocity, more than
+  any individual finding.
+- Confirming "is this still true on `master`" before touching anything paid
+  off exactly the way the standing instructions intend: both `linkedin.py`
+  bugs and both mutation-testing guards were BACKLOG-adjacent claims from
+  unmerged branches that could easily have been stale by now (master moved
+  a lot between 08-17 and today) — they weren't, but checking live instead
+  of trusting the write-up is what makes that trustworthy.
+
+### Where to pick up next
+
+1. **Merge the PR queue** (human action, flagged above) — #3 needs conflict
+   resolution first, #4/#5/#6 are clean. This is now more valuable than any
+   single new finding: it unblocks two full mutation sweeps and a real
+   institution-name bug fix that are all sitting finished.
+2. **The real reverse path** (BACKLOG.md's top CRITICAL, still fully open):
+   subject-anchored `Claims` + reconciliation, gated behind the OpenAlex
+   affiliation/`years`-array corroboration work the standing brief
+   describes. Still the single biggest lever in the codebase and still
+   untouched by any night so far — every run including tonight has picked a
+   smaller, more certain item instead. Worth a night with nothing else
+   competing for the time slot.
+3. Re-verify the OpenAlex/registry numbers in the task brief against a live
+   request before anyone starts on (2) — they were last measured 2026-08-14
+   and the brief itself says not to trust them indefinitely.
+4. `linkedin.py`'s experience/education parsing and section-header handling
+   still haven't had a *fresh* red-team pass since 2026-08-17 (PR #3) — only
+   two previously-known bugs were re-verified tonight, not a new pass.

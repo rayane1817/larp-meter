@@ -113,6 +113,103 @@ provenance, and a reconciliation step that can produce an actual
 vs. 2 works). Tonight only makes the existing UNKNOWN path honest about what
 was actually checked; it adds no new verdict.
 
+### Affiliation-count merge-risk caveat on the OpenAlex "best" pick (nightly/2026-08-30)
+
+The disambiguation groundwork every entry since 2026-08-15 has named as the
+prerequisite for any stronger reconciliation verdict — "do the
+affiliation/`years`-array corroboration work first" — had never actually
+been started. This is a first, deliberately narrow slice of it: `best`
+(the OpenAlex candidate `providers.OpenAlex.search` picks when several
+name-matched authors exist) was chosen purely by `works_count` plurality,
+which the task brief's own research explicitly calls dangerous — a merged
+entity typically has a *higher* works_count than any real single person, so
+plurality actively prefers the merged record over a genuine one.
+
+Re-verified the brief's core claim live against the real API today rather
+than trusting the file's own older numbers: `GET /authors/A5100391883`
+(the "Wei Wang" example) now lists **873** affiliations (was 863 when
+originally measured) spanning education, healthcare, government and company
+institutions across at least China and the US — confirms the merged-entity
+problem is still exactly as real as described, with fresh numbers. Also
+discovered something the brief didn't have: `GET /authors?search=...` (the
+endpoint `providers.py` actually calls) is now hitting OpenAlex's own USD
+rate limiter with **`$0` remaining for the rest of today** in this
+environment (`"dailyRemainingUsd":0`, `retryAfter` ~21.8h) — even a bare
+`/authors?per_page=1` with no search term costs money now. The free
+singleton `/authors/{id}` and `/autocomplete/authors` endpoints are
+unaffected (`cost_usd: 0.0` on autocomplete, confirmed live) and remain the
+only OpenAlex calls this environment could make today. This didn't block
+tonight's change (implemented and tested entirely against stubbed fetch
+responses, per this repo's own convention — no live-search dependency), but
+it's a live, current data point for whoever picks up the reverse-path work
+next: prefer the free singleton/autocomplete endpoints over the costed
+`/authors?search=` list endpoint wherever the design allows it.
+
+Added `providers._affiliation_institution_count()`: counts distinct
+institutions from the full `affiliations` array (`{institution, years}`
+pairs — richer than the handful summarised in `last_known_institutions`,
+and, per a live check today, present on the singleton response; not
+independently confirmed present on the list-endpoint response due to the
+$0 search budget above, so the function defensively falls back to
+`last_known_institutions` if `affiliations` is absent). `best` now carries
+`institution_count` and `merge_risk` (institution count `>=
+MERGE_RISK_INSTITUTION_COUNT`, set to 15 — comfortably above even a
+well-travelled genuine career of a PhD, postdoc, two or three faculty jobs
+and an industry stint, comfortably below the 873 a merged entity actually
+shows).
+
+**Deliberately does not change which candidate `best` picks, and cannot
+produce a new TRIGGERED anywhere.** `f_output` (flag 6) still reads
+`scholar.get("works")` exactly as before and still returns PASSED on any
+real record — a merged entity still proves *someone* by this name
+published, which remains true, weak corroboration. The only change is that
+a `merge_risk` record's PASSED evidence text now carries an explicit
+caveat naming the institution count and warning it may blend several
+careers, so a human reading the report knows not to treat "OpenAlex found a
+huge record" as strong personal corroboration. This is intentionally the
+narrowest usable slice: real infrastructure (the institution-count signal
+now exists in `ctx.signals["openalex"]`) for the reconciliation step every
+prior night has deferred, without itself attempting reconciliation, a new
+verdict, or a change to which candidate gets picked as `best` (that's a
+separate, larger question — see "Where to pick up next" in NIGHTLY.md).
+
+**Verification:** 5 new tests in `tests/test_providers.py` (including an
+exact `>=` boundary pin at 14 vs. 15 institutions — this repo's flags.py
+mutation sweeps have repeatedly shown that a threshold with no test sitting
+exactly on the cut survives a `>=`/`>` mutation silently), 2 in
+`tests/test_flags.py` (the caution appears on a merge-risk record, stays
+absent on an ordinary one — including a fixture using the OLD signal shape
+with no `institution_count`/`merge_risk` keys at all, to pin that every
+pre-existing caller of this code keeps working unchanged), and 1 true
+end-to-end test in `tests/test_cli_registry_wiring.py` using the real raw
+JSON shape (`affiliations` array, not a hand-summarised dict) through the
+actual `cmd_text` pipeline — per this repo's standing lesson, a
+flags.py-only test cannot prove the real `OpenAlex.search` → `ctx.signals`
+→ flag pipeline actually produces this shape. All 6 written first, watched
+fail (`KeyError`/plain assertion failures against the unmodified code),
+then made to pass. Mutation-tested the new code directly: inverted the
+`>=` to `>` (caught by the boundary test), deleted the `merge_risk` gate in
+`flags.py` (caught by both the flags.py unit test and the end-to-end test),
+and dropped the `affiliations`-array branch in
+`_affiliation_institution_count` (caught by two tests) — all three
+mutations caught, all reverted, suite green throughout (473 → 480).
+
+Ran the real CLI end-to-end (`larp_meter.cli.main()`, stubbed fetcher, not
+just the test harness's direct function calls) on two hand-written samples:
+a clean single-institution honest researcher (flag 6 PASSED, plain evidence,
+no caution — unchanged from before tonight) and a "Wei Wang"-shaped merged
+record (flag 6 PASSED, now with the institution-count caution appended).
+Both stayed INSUFFICIENT DATA overall (thin bios, as expected) — confirms
+the change doesn't manufacture coverage or move a verdict, only qualifies
+an existing PASSED's evidence text.
+
+**Still fully open**: `best` is still chosen by works_count alone even when
+`merge_risk` is true — a genuine future reconciliation step would need to
+either avoid trusting `best` at all under merge_risk, or use the
+per-affiliation `years` array (not yet consumed anywhere) to check temporal
+overlap against the subject's own claimed career dates. Neither attempted
+tonight; this only makes the merge-risk fact visible.
+
 ### Mutation-testing spot-check: `names.py`'s "zero usable candidates" guard confirmed still live on master (nightly/2026-08-27)
 
 Mandatory per-cycle mutation pass. `names.py`'s `name_matches` function has
@@ -782,6 +879,8 @@ Measured: extracting the 8-claim bio "PhD in Quantum Information from MIT / MSc 
 **[IN PROGRESS — nightly/2026-08-15]** Confirmed live: `cmd_text`, `cmd_url`, `cmd_from_json` and the batch-text branch of `cmd_batch` never called `providers.gather`, exactly as measured here — item (2) of the fix direction. Closed *that specific* gap: those four entry points now run a subject-anchored OpenAlex + Wikipedia lookup under `--verify --name`, reusing providers.py's existing `name_matches`/`about_subject`/`ambiguous_identity` gating unchanged (see `cli._subject_registry_signals`, `tests/test_cli_registry_wiring.py`). This gets a truthful "published extensively" claim corroborated, and a fabricated one still reported UNKNOWN when no record exists — it does **not** yet produce a CONTRADICTED verdict for a *quantitative* mismatch (items 1 and 3 of the fix direction: OpenAlex/Crossref hits still land as `signals` dicts, not derived `Claim`s, and there is still no reconciliation step). That remains the highest-value work open in this file. Building it safely needs the OpenAlex disambiguation groundwork described in NIGHTLY.md (merged author entities, common-name collision) before any negative or contradicting verdict can be trusted.
 
 **[IN PROGRESS — nightly/2026-08-27]** Made the specific "0 works found for a researcher claiming 40 papers" scenario visible in the report for the first time, exactly as this entry's own fix direction names as the safe first step. Flag 6 now distinguishes "OpenAlex was never queried" from "OpenAlex was queried and found no scholarly record" (previously both read as the same falsy `.get()` result) and appends a hedged, UNKNOWN-only sentence naming the negative result when the subject's only output claim is a soft, identifier-free assertion. See "Flag 6: a genuine negative OpenAlex search becomes visible in the report" above for full detail. Deliberately still does **not** touch items (1) and (3) of the fix direction below — no derived `Claim`s, no reconciliation, no verdict above UNKNOWN from this alone. The disambiguation groundwork this entry's own note calls out (merged author entities, common-name collision, transliteration under-matching) is the reason the note is worded as a lead rather than a finding, and is still the blocking prerequisite for anything stronger than UNKNOWN.
+
+**[IN PROGRESS — nightly/2026-08-30]** First actual piece of the disambiguation groundwork itself (as opposed to another visibility-only slice of the flag 6 UNKNOWN path): `providers.OpenAlex.search`'s `best` pick now carries `institution_count`/`merge_risk`, computed from the full `affiliations` array, so a merged-entity record (re-confirmed live today: the brief's "Wei Wang" example now shows 873 affiliations, up from 863) is at least *visible* as such in flag 6's PASSED evidence text, instead of being silently trusted at face value the way plurality-by-works-count did before. `best` itself is still chosen by works_count alone even when `merge_risk` is true — this does not yet make the pipeline avoid or discount a merged record, only label it. See "Affiliation-count merge-risk caveat on the OpenAlex 'best' pick" above for full detail, including a live finding not in the brief: `/authors?search=` is now hitting OpenAlex's own $0-remaining-today USD rate limit in this environment, while the free singleton/autocomplete endpoints are unaffected — worth designing around for whoever builds the next slice. Items (1) and (3) of the fix direction are still fully open: no derived `Claim`s, no reconciliation step, no verdict above UNKNOWN/PASSED from any of this.
 
 ---
 

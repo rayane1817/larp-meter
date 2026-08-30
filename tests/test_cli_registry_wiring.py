@@ -50,6 +50,13 @@ OPENALEX_AMBIGUOUS_BODY = json.dumps({"results": [
      "cited_by_count": 10, "last_known_institutions": [{"display_name": "University B"}]},
 ]})
 
+OPENALEX_MERGED_BODY = json.dumps({"results": [
+    {"id": "https://openalex.org/A1", "display_name": "Ada Lovelace", "works_count": 900,
+     "cited_by_count": 50000,
+     "affiliations": [{"institution": {"id": f"https://openalex.org/I{i}",
+                                       "display_name": f"Institution {i}"}, "years": [2020]}
+                      for i in range(20)]}]})
+
 BIO_NO_IDENTIFIERS = ("Ada Lovelace is a mathematician who has published extensively on "
                       "computing and the Analytical Engine.")
 
@@ -154,6 +161,27 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
         flag6 = next(f for f in report["flags"] if f["id"] == 6)
         self.assertEqual(flag6["status"], "UNKNOWN")
         self.assertIn("OpenAlex", flag6["description"])
+
+    def test_a_merged_openalex_entity_reaches_flag_6_with_a_caution_through_the_real_pipeline(self):
+        """End-to-end version of the merge-risk caveat: the raw JSON shape a
+        real OpenAlex response actually has (an 'affiliations' array of
+        {institution, years} pairs, not the pre-summarised dict the
+        flags.py-level unit test constructs by hand) must actually produce
+        the caveat once it goes through the real provider -> signal -> flag
+        pipeline, not just when a test hand-builds the signals dict flags.py
+        expects -- the same reachability lesson this module's docstring
+        names, one layer further in."""
+        args = build_parser().parse_args([
+            "--text", BIO_NO_IDENTIFIERS, "--name", "Ada Lovelace",
+            "--verify", "--quiet", "--no-save",
+        ])
+        fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_MERGED_BODY})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+            report = cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
+        flag6 = next(f for f in report["flags"] if f["id"] == 6)
+        self.assertEqual(flag6["status"], "PASSED")
+        self.assertIn("20 distinct institutions", flag6["description"])
+        self.assertTrue(report["signals"]["openalex"]["merge_risk"])
 
     def test_without_verify_no_registry_call_is_made(self):
         """--verify is the network opt-in; omitting it must not silently phone

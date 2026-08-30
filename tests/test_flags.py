@@ -569,6 +569,37 @@ class TestMutationSurvivorsFlags(unittest.TestCase):
         self.assertEqual(result.status, UNKNOWN)
         self.assertIn("OpenAlex", result.description)
 
+    # ── flag 6: a merged OpenAlex entity softens the PASS, not the verdict ──
+    def test_a_merged_openalex_entity_softens_the_pass_with_a_caution_not_a_new_verdict(self):
+        """A merge-risk OpenAlex match still corroborates that *someone* by
+        this name has published -- PASSED is still correct, since existence
+        of a real record is real evidence -- but crediting the subject with
+        a record that likely blends several people's careers deserves a
+        caveat, not silent confidence. This must never become TRIGGERED:
+        that would accuse the subject of the *opposite* problem (nothing
+        found) from what merge-risk actually means (too much found, from
+        too many people)."""
+        c = ctx_for("We publish extensively in peer-reviewed venues.",
+                    signals={"openalex": {"works": 900, "citations": 50000,
+                                           "display_name": "Wei Wang",
+                                           "institution_count": 873, "merge_risk": True}})
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, PASSED)
+        self.assertIn("873", result.description)
+
+    def test_an_ordinary_scholarly_record_passes_without_the_caution(self):
+        """Regression: the vast majority of real OpenAlex matches are not
+        merged entities, and must not carry a caveat implying doubt about a
+        genuinely single-person record -- old signal shapes (no
+        institution_count/merge_risk keys at all) must also still pass
+        cleanly, since every signals dict built before tonight lacks them."""
+        c = ctx_for("We publish extensively in peer-reviewed venues.",
+                    signals={"openalex": {"works": 11, "citations": 429,
+                                           "display_name": "Ada Lovelace"}})
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, PASSED)
+        self.assertNotIn("Caution", result.description)
+
     def test_negative_openalex_search_never_escalates_past_unknown(self):
         """Fairness guard, straight from the task brief's live-measured
         OpenAlex constraints: a name-based author search can under-match

@@ -79,6 +79,34 @@ NOT_LINKEDIN = (
     "systems. I hold an MSc in Computer Science from MIT."
 )
 
+# A completely ordinary CV — bare "Experience"/"Education" section headers
+# and plain "YYYY - YYYY" date ranges are standard resume formatting, not
+# anything specific to LinkedIn. It has none of the markers that actually
+# distinguish a LinkedIn copy-paste: no month-based "Jan 2020 - Present ·
+# 2 yrs" date/duration combo, no "· Full-time" employment-type suffix, no
+# UI chrome (Message/Follow, a connections count, endorsements).
+ORDINARY_CV = """\
+Jane Smith
+Senior Software Engineer with 8 years of experience building distributed systems.
+
+Experience
+
+Senior Software Engineer, Acme Corp
+2019 - Present
+Led the migration of the payments platform to Kubernetes, cutting latency by 40%.
+Mentored five junior engineers and ran the on-call rotation for two years.
+
+Software Engineer, Beta Inc
+2015 - 2019
+Built the initial version of the recommendation engine, shipped to 2M users.
+
+Education
+
+State University
+BSc Computer Science
+2011 - 2015
+"""
+
 
 class TestDetection(unittest.TestCase):
     def test_full_linkedin_paste_is_detected(self):
@@ -97,6 +125,14 @@ class TestDetection(unittest.TestCase):
     def test_text_with_education_but_no_experience_not_detected(self):
         text = "Some intro\n\nEducation\nMIT\nPhD, Physics\n2010-2015"
         self.assertFalse(is_linkedin_paste(text))
+
+    def test_ordinary_cv_with_bare_headers_is_not_mistaken_for_linkedin_paste(self):
+        """Bare 'Experience'/'Education' headers plus plain 'YYYY - YYYY'
+        date ranges are standard resume formatting, not LinkedIn-specific —
+        the single most common CV shape there is must not be rewritten by
+        parse_linkedin_paste(), which assumes LinkedIn's exact layout and
+        silently drops content (see TestOrdinaryCvContentSurvives below)."""
+        self.assertFalse(is_linkedin_paste(ORDINARY_CV))
 
 
 class TestParsing(unittest.TestCase):
@@ -625,6 +661,43 @@ class TestSelfAppliedTitleReachesFlag13(unittest.TestCase):
         report = json.loads(out[out.index("{"):])
         flag13 = next(f for f in report["flags"] if f["id"] == 13)
         self.assertNotEqual(flag13["status"], "TRIGGERED", flag13)
+
+
+class TestOrdinaryCvContentSurvives(unittest.TestCase):
+    """The concrete cost of misdetecting ORDINARY_CV as a LinkedIn paste,
+    run through the real CLI entry point rather than asserted against
+    is_linkedin_paste() alone.
+
+    parse_linkedin_paste() groups an "Experience" section by blank lines
+    and only recognises a group as dated if it contains LinkedIn's own
+    month-based "Jan 2020 - Present" format; a plain "2019 - Present" line
+    doesn't match, so every group in a plain-dated CV is (wrongly) tagged
+    has_date=False and gets folded into the single preceding entry, whose
+    non-date branch keeps only the first two lines (title, company) of
+    the merged blob. Concretely: the entire second job ("Software
+    Engineer, Beta Inc") and both achievement sentences vanish -- not
+    mislabelled, gone -- before extract_claims ever sees them. This is
+    exactly the ROR/HANDLERS lesson one layer up: a unit test asserting
+    is_linkedin_paste(ORDINARY_CV) is False proves nothing about whether
+    the real --text pipeline still contains "Beta Inc" once it gets there.
+    """
+
+    def _run(self, argv):
+        from larp_meter.cli import main
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv)
+        return code or 0, out.getvalue() + err.getvalue()
+
+    def test_second_job_and_achievements_survive_the_real_pipeline(self):
+        code, out = self._run(["--text", ORDINARY_CV, "--no-save", "--json"])
+        self.assertEqual(code, 0, out)
+        report = json.loads(out[out.index("{"):])
+        self.assertEqual(report["mode"], "text",
+                          f"an ordinary CV was normalised as LinkedIn paste: {report['mode']}")
+        self.assertEqual(report["word_count"], len(ORDINARY_CV.split()),
+                          "the audited text is shorter than the pasted CV -- "
+                          "content was dropped before extraction ever ran")
 
 
 if __name__ == "__main__":

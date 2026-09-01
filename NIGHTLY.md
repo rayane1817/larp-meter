@@ -1964,3 +1964,229 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+---
+
+## 2026-09-01 (nightly run)
+
+### ⚠ Two open, unmerged `nightly/*` PRs — read before doing anything else
+
+Neither is stale or conflicting; both are green and clean, and don't touch
+overlapping files, so a human merge pass can take either or both in any
+order:
+
+| PR | Branch | What it does | State |
+|----|--------|--------------|-------|
+| #11 | `nightly/2026-08-30` | First slice of the core gap's own named prerequisite: flags an OpenAlex `best` pick that's likely a merged entity (`institution_count`/`merge_risk` on flag 6's evidence, never changes which candidate is picked or produces a new TRIGGERED). Touches `providers.py`, `flags.py`. | open, draft, `mergeable_state: clean`, CI green (6/6 checks) |
+| #12 | `nightly/2026-08-31` | Fixes `is_linkedin_paste` misfiring on an ordinary CV that uses bare "Experience"/"Education" headers, which was silently dropping content (a real second job and both achievement sentences) before extraction ever ran. Touches `linkedin.py` and its tests only. | open, draft, `mergeable_state: clean`, CI green (6/6 checks) |
+
+Both are based cleanly on `master`'s current tip (`9f71c98`) and PR #12's own
+description already confirms it doesn't overlap PR #11's files. Per the
+standing instructions this is not something a nightly run acts on — flagging
+for a human merge pass, same as prior pileup nights, but this one is small
+(two PRs, non-conflicting, both green) rather than the five-to-seven-deep
+queues earlier nights had to describe.
+
+### Running backlog tally (CRITICAL findings)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 5 still open (of 16)** — the 16th is new
+tonight (see below); of the 15 counted on 2026-08-27 the split was already
+10/1/4 unchanged since, so tonight's work moves the MAJOR section (see below)
+and adds one new CRITICAL, not the CRITICAL tally's fixed/open ratio.
+(Counted directly against `master`'s `BACKLOG.md` just now: `grep -c` under
+`## CRITICAL` for `[FIXED]`/`[PARTIALLY FIXED]`/neither, 16 headers total.)
+
+### What I did
+
+**Primary item:** fairness-lens fix for the MAJOR finding "Confidential work
+and pre-revenue fundraising are scored as deception." Confirmed live first:
+a hand-written satellite-power-electronics engineer bio (`MSc TU Delft, 12
+years since 2013, building next-gen hardware, "most of this work is covered
+by customer NDAs and cannot be published", raising a pre-seed round for a
+pre-product line`) TRIGGERED flag 6 ("cites no checkable artifact") and flag
+7 ("no customer, revenue or usage figure of any kind") before any change —
+exactly as BACKLOG.md described, on text with zero registry contradictions
+anywhere.
+
+Wrote 3 failing tests first (`tests/test_flags.py`), watched them fail
+against unmodified code, then fixed: added two new keyword banks in
+`matching.py` — `confidentiality_reasons` (nda, non-disclosure, confidential,
+proprietary, classified, export controlled, itar, trade secret, stealth
+mode, ...) and `pre_revenue_stage` (pre-revenue, pre-seed, pre-product, not
+yet generating revenue, early stage startup, ...). `f_output` (flag 6) now
+checks for a confidentiality reason before returning TRIGGERED on a bare
+building claim with no artifact, and returns UNKNOWN with the reason quoted
+back instead. `f_fundraising` (flag 7) does the same with the pre-revenue
+bank before its final TRIGGERED branch. Both checks sit *after* the existing
+PASSED branches (a real artifact or real traction still wins outright) and
+*before* the TRIGGERED fallback, so this can only ever soften a would-be
+TRIGGERED into UNKNOWN — it can never turn anything into a new TRIGGERED,
+and it can never manufacture a PASSED where none existed. A bare building/
+funding-ask claim with **no** stated reason still TRIGGERS exactly as
+before — confirmed via the pre-existing `test_no_verifiable_output` and
+`test_fundraising_without_traction` tests, unmodified, both still passing.
+
+**Cross-boundary check (per the standing review question):** grepped every
+reader of flag 6/7's `FlagResult` — `scoring.py` and `report.py` both key
+purely on `r.status in (TRIGGERED, PASSED, UNKNOWN)`, generically, with zero
+per-flag text parsing (confirmed by grep: neither file mentions `f_output`,
+`f_fundraising`, or a flag-6/7-specific string anywhere). Both flags already
+return UNKNOWN in other branches (e.g. "not visibly fundraising"), so no
+downstream code path is newly reachable — this doesn't add a case anything
+needs to learn about, only a new way to reach an already-handled one.
+
+**End-to-end CLI check**, two hand-written samples, `python3 larp-meter.py
+--file ... --name ...`:
+- **Should-soften:** the NDA-engineer/pre-seed sample above. Before: flags 6
+  and 7 both TRIGGERED. After: flag 6 reads "Claims to be building something
+  with no checkable artifact, but the text states a reason it wouldn't have
+  one ('cannot be published') — ..."; flag 7 reads "...but the text states
+  this is a pre-seed raise — no customer or revenue figure is expected at
+  this stage." Both UNKNOWN, both counted out of coverage rather than
+  against the subject.
+- **Should-still-trigger (regression check):** the standing "Dr. Marcus Vane"
+  fabricator sample (building claims + funding ask, no NDA/pre-revenue
+  language, no identifiers). Flag 6 stayed TRIGGERED ("Claims to be building
+  something, yet cites no checkable artifact...") exactly as before — the
+  escape hatch didn't fire because nothing in the text earned it.
+
+Full suite: 473 → 476 tests, green throughout.
+
+### A second, bigger bug found while writing the end-to-end check — NOT fixed tonight
+
+While hand-writing the fabricator sample I split "no customers or revenue
+disclosed yet" across a line wrap (an ordinary word-wrap, not a paragraph
+break) and flag 7 read it as **PASSED** ("Fundraising with stated traction
+(revenue)") instead of the TRIGGERED/UNKNOWN it should have been — the
+negation ("no customers or [wrap] revenue") had silently stopped applying.
+Traced it to `is_negated`/`_CLAUSE_END_CHARS` in `matching.py`: a bare `\n`
+is treated as an unconditional clause boundary, so a negator immediately
+before a word-wrap becomes invisible to the word immediately after it. Built
+a clean minimal repro confirming this is general, not specific to my two new
+banks or to "revenue":
+
+```
+find_terms("We are not raising a Series A at this time.", ..., skip_negated=True)   -> []
+find_terms("We are not\nraising a Series A at this time.", ..., skip_negated=True)  -> ['raising']
+```
+
+This is a real, currently-live false-accusation risk on completely ordinary
+input (any plain-text paste, PDF-extracted CV, or hard-wrapped email that
+happens to deny a funding_ask/traction/building_claims/vague_partnership
+term across a line break) — worse than tonight's primary finding, because it
+can actively fabricate a TRIGGERED accusation rather than merely fail to
+soften one. Did **not** attempt a fix tonight: it touches `is_negated`, the
+shared guard every `skip_negated=True` call in the whole flag battery relies
+on, `matching.py` has never had a mutation-testing sweep (only
+`scoring.py`/`names.py`/`flags.py`/`verify.py` are covered — see the log
+below), and a naive fix (just drop `\n` from `_CLAUSE_END_CHARS`) risks the
+opposite failure — negation bleeding across an intentional bullet/field
+break ("No revenue.\nRaising a seed round." would wrongly suppress the
+second line's real ask). That needs its own dedicated night with a proper
+`matching.py` mutation sweep and tests pinning both directions. Recorded as
+a new CRITICAL finding in BACKLOG.md ("Word-wrapped negation loses its scope
+at every bare newline") with the repro above and a scoped fix direction —
+this is the single highest-priority item for whoever picks up next.
+
+### BACKLOG.md: confirmed / refuted
+
+- **Confirmed and partially fixed**: "Confidential work and pre-revenue
+  fundraising are scored as deception" — reproduced live exactly as
+  described, fixed the escape-hatch half, left the "cap combined
+  contribution" half and a dedicated evasion red-team of the two new banks
+  explicitly open. Marked `[PARTIALLY FIXED]` with full detail in place.
+- **Confirmed live, new finding, not previously in BACKLOG.md**:
+  word-wrapped negation losing scope at a bare newline (see above). Added as
+  a new CRITICAL with live repro, not a re-derivation of anything already in
+  the file.
+- Did **not** re-verify any other still-open BACKLOG.md entry tonight,
+  including the two open core-gap duplicates and "Citing no identifiers
+  disables the entire verification half of the tool, including its only
+  severity floor" — read that last one in full while choosing tonight's
+  item and deliberately did not attempt it: its own suggested fixes (turn a
+  no-identifier profile's UNKNOWN into TRIGGERED, or attach the ORANGE floor
+  to a flag that can fire without registry input) both risk exactly the
+  false-accusation failure mode this project's governing value exists to
+  prevent — every honest person with no public identifiers (career break,
+  confidential work, non-academic field, thin online presence) would eat the
+  same penalty as a fabricator. That's a real design problem, not a
+  same-night fix; flagging it explicitly rather than picking it and
+  producing something rushed.
+
+### Mutation-testing log
+
+Mandatory per-cycle spot-check, one mutation in each of the four required
+files, run against the full suite, then reverted:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `scored = coverage >= MIN_COVERAGE` → `coverage >` | **Caught** (`test_coverage_exactly_at_min_coverage_is_still_scored`, pinned since 2026-08-16) |
+| `flags.py` | tonight's own `if reason:` (confidentiality escape) → `if not reason:` | **Caught** (5 failures, including the two new tests written for this fix) |
+| `verify.py` | `verify_institution`'s `if overlap > best_overlap:` → `>=` | **Caught** (existing ROR best-match tests) |
+| `names.py` | `name_matches`'s `if len(present) >= 2:` → `> 2` | **Caught** (18 failures + 5 errors, existing attribution tests) |
+
+All four still fully protected on `master`. **`matching.py` itself has never
+had a mutation-testing pass** — worth naming explicitly now that tonight
+found a live, unpinned bug in it (`is_negated`'s newline handling, above);
+recommend it join the mandatory four for the file that hosts the fix, once
+that fix exists.
+
+### What I learned
+
+- **Made, and caught, the exact mistake the 2026-08-15 entry warned about**:
+  ran `git checkout -- larp_meter/flags.py` to revert a deliberate mutation
+  while my real, uncommitted fix was still sitting in that same file. It
+  reverted both — silently discarded the confidentiality-escape-hatch code,
+  not just the one-line mutation — and I didn't notice until the *next*
+  mutation's test run failed with the wrong symptom (a `flags.py` test
+  failing during what was supposed to be a `verify.py`-only mutation check).
+  Recovered by re-applying the two edits from what was still in this
+  session's own context, then re-ran the full suite to confirm nothing else
+  had been silently lost. For the rest of tonight's mutation passes,
+  switched to `cp file file.orig` / `cp file.orig file` instead of `git
+  checkout --`, which doesn't care whether the file also carries
+  uncommitted real changes. **This is worth turning into a standing habit
+  note, not just a one-off recovery story**: `git checkout -- <file>` is
+  only safe as a mutation-revert when that file has no other uncommitted
+  work in it at that moment — true for a from-scratch mutation sweep on an
+  untouched file, false for exactly the common case of mutation-testing your
+  *own* fresh, uncommitted change in the same file. `cp`/`git stash` costs
+  nothing extra and removes the failure mode entirely.
+- The line-wrap negation bug is a good example of the brief's own advice
+  actually paying off: it was found purely by doing the mandated end-to-end
+  CLI check with a hand-written sample, not by unit-testing anything in
+  isolation. A `find_terms(...)` call in a unit test would never have used a
+  word-wrapped multi-line string; a hand-authored "realistic" bio (typed as
+  prose, wrapped for readability the way NIGHTLY.md itself is wrapped) hit
+  it immediately.
+
+### What the next run should pick up first
+
+1. **`matching.py`'s `is_negated` newline handling** — the new CRITICAL
+   finding above. Live-reproduced, scoped fix direction already written
+   into BACKLOG.md. Needs: a real design for "which newlines are clause
+   boundaries" that doesn't just trade one direction of error for the
+   other (test both: a wrapped negation preserved, AND a genuine
+   bullet-separated list still not bleeding negation across items), a full
+   mutation-testing sweep of `matching.py` (never yet done — first time it
+   would join the standing four-file rotation), and an end-to-end CLI check
+   on a realistically word-wrapped sample specifically, since that's the
+   input shape that hid this for however long it's existed.
+2. The two small, non-conflicting open PRs (#11, #12) — still just a
+   human-merge-queue item, not something for an autonomous run to act on,
+   but worth surfacing every night until they land so they don't quietly
+   become a third and fourth entry in a new pileup.
+3. **"Citing no identifiers disables the entire verification half of the
+   tool, including its only severity floor"** — read in full tonight,
+   deliberately not picked (see above). Still the most consequential open
+   CRITICAL after the core gap itself, and still needs a genuinely careful
+   design — not "flip UNKNOWN to TRIGGERED" — to close without punishing
+   every honest person with a thin public footprint.
+4. The core gap (subject-anchored `Claim`s + reconciliation) is still fully
+   open beyond PR #11's unmerged merge-risk groundwork. Unchanged tonight;
+   still the single biggest lever in the codebase per every entry since
+   2026-08-15.
+5. `matching.py` should be added to the mandatory four-file mutation-testing
+   rotation (`scoring.py`, `names.py`, `flags.py`, `verify.py`) once its own
+   dedicated sweep happens — it has never had one, and tonight found a real,
+   live, unpinned bug in it on the very first close look.

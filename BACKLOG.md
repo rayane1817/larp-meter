@@ -756,7 +756,7 @@ landed. See "Open PRs" below.
 
 ---
 
-## CRITICAL (15)
+## CRITICAL (16)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says
 
@@ -1056,6 +1056,25 @@ Regression-checked that this does not become a blanket downgrade: `Claim`s built
 Mutation-tested the fix itself: reverting the `_disclaims_authorship` guard in `_attribute` fails exactly the 3 new regression tests built for it (`test_patent_prosecuted_for_a_client_is_not_a_mismatch`, `test_doi_cited_as_prior_art_is_not_a_mismatch`, `test_end_to_end_patent_citation_does_not_trigger_the_contradiction_floor`), confirmed, then restored.
 
 **Left open, deliberately:** the broader "require positive ownership framing" direction (flip the default rather than deny-list disclaiming phrases) is still not attempted — it would meaningfully change coverage on ordinary bios and needs its own dedicated review, not a same-night bolt-on. The phrase list is also necessarily incomplete (a fabricator who never writes "prior art"/"client"/"cited" and simply lists a stolen identifier bare is unaffected — this fix protects the honest-citation case, it does not add new fraud detection). `verify_orcid`, `verify_arxiv`, `verify_patent` and the GitHub-user branch of `verify_github` all route through the same `_attribute` tail so all four benefit uniformly; `verify_institution` (ROR) and the GitHub-repo/ClinicalTrials branches were already blanket-UNCHECKABLE-on-ambiguity before tonight and are unaffected either way.
+
+---
+
+### Word-wrapped negation loses its scope at every bare newline
+
+`is_negated` (matching.py:64-87), the guard every `skip_negated=True` call in the file relies on to stop a denied claim being read as an asserted one, treats a bare `\n` as a clause boundary (`_CLAUSE_END_CHARS = ".;:!?\n•|"`, matching.py:57). That is correct for an intentional line break — a new bullet, a new field on its own line — but a `\n` is equally what any word-wrapped paragraph contains: pasted plain text, a PDF-extracted CV, or an email client that hard-wraps at 72-80 columns all insert a bare newline in the middle of an ordinary sentence, with no clause boundary intended. When a negator sits right before the wrap and the negated word sits right after it, the clause-boundary scan stops at the newline and the negator is invisible to the token that follows — the exact same failure this file's own docstring describes fixing for same-line text ("We have no customers and no revenue" — see matching.py:29-32), reintroduced by nothing more than where the source text happens to wrap.
+
+**Evidence:** matching.py:57 `_CLAUSE_END_CHARS = ".;:!?\n•|"`; matching.py:74-77 `for ch in _CLAUSE_END_CHARS: i = text.rfind(ch, 0, start); ... boundary = i + 1` — a `\n` anywhere before the match sets `boundary` past it, so `tokens_before` (matching.py:80-81) never includes anything from before the newline. Measured directly against `is_negated`/`find_terms`:
+```
+>>> find_terms("We are not raising a Series A at this time.", banks["funding_ask"], skip_negated=True)
+[]
+>>> find_terms("We are not\nraising a Series A at this time.", banks["funding_ask"], skip_negated=True)
+['raising']
+```
+Same collapse on the traction bank with a mid-sentence wrap: `"...with no customers or revenue disclosed yet."` correctly finds nothing; `"...with no customers or\nrevenue disclosed yet."` (line-wrapped at a plausible column) finds `['revenue']`.
+
+**Fails on:** Any ordinary word-wrapped bio that happens to negate a funding_ask, traction, building_claims or vague_partnership term across a line break. Concretely: a founder pastes a plain-text bio (or one extracted from a PDF) reading "We are not\nraising a Series A at this time; the team is heads-down on the product." `f_fundraising` reads `asks = ['raising']` (the "not" that denies it is now invisible), sees no traction language, and returns **TRIGGERED**: "Actively raising ('raising') with no customer, revenue or usage figure of any kind." — accusing someone of doing the literal opposite of what they wrote, purely because of where their word processor happened to wrap a line. The same mechanism can null out a stated `confidentiality_reasons`/`pre_revenue_stage` escape phrase (this file's "Confidential work and pre-revenue fundraising..." finding, [PARTIALLY FIXED] above) if the negation guarding it is wrapped away, or work in the tool's favor by nulling a real denial the wrong direction (missing a legitimate PASS) — either way the report depends on line-wrap position, which is not a fact about the subject.
+
+**Fix direction:** Stop treating every bare `\n` as a clause boundary; a paragraph/field break is better signalled by a blank line (`\n\s*\n`) or a line that starts with a bullet/field marker, not by the mere presence of one `\n`. The minimal, most defensible first step: before scanning, collapse a single `\n` that is not followed by another `\n` or a bullet-like marker into a space (or extend `_CLAUSE_END_CHARS`'s newline handling to look at what follows the break, not just its presence) so a genuinely wrapped sentence reads as one clause while an intentional new bullet/field still ends one. This touches shared infrastructure (`is_negated` backs every `skip_negated=True` call across every flag in `flags.py`), so it needs its own dedicated night: a full mutation-testing pass against `matching.py` (never yet swept — see the mutation-testing log in NIGHTLY.md, which has only ever covered `scoring.py`/`names.py`/`flags.py`/`verify.py`) plus new regression tests pinning both directions (a wrapped negation preserved, and a genuine bullet-separated list still NOT bleeding negation across items — e.g. "No revenue.\nRaising a seed round." must still count as a real ask on the second line).
 
 ---
 
@@ -1383,7 +1402,7 @@ Shipped instead: `_INSTITUTION_CORE`'s trailing connector group keeps re.I (so t
 
 ---
 
-### Confidential work and pre-revenue fundraising are scored as deception
+### [PARTIALLY FIXED] Confidential work and pre-revenue fundraising are scored as deception
 
 `f_output` triggers whenever the text contains a building_claims word ('building', 'developing', 'creating', 'working on') and no public identifier — which describes every engineer whose work is proprietary, classified, under NDA, or simply not academic. `f_fundraising` triggers whenever a funding_ask word appears with no quantified traction — which is the definition of a pre-seed or pre-product raise, and the normal state of deep-tech and biotech companies for years. Neither flag has an escape hatch for a stated reason (an explicit 'covered by customer NDAs' does not suppress f_output), and together they carry 3.0 of the 17.0 total weight. Because the score is a ratio over decided flags only (scoring.py:21-27), a short honest bio decides few flags, so these two alone can dominate the verdict.
 
@@ -1392,6 +1411,12 @@ Shipped instead: `_INSTITUTION_CORE`'s trailing connector group keeps re.I (so t
 **Fails on:** A satellite-power-electronics engineer with a real MSc, a real 12-year record and an NDA'd product raising a seed round scores ORANGE 50/100 with zero registry contradictions anywhere in the report. Every triggered flag is a description of her industry, not of her honesty.
 
 **Fix direction:** Make both flags UNKNOWN rather than TRIGGERED when the text supplies a legitimate reason for the absence (NDA/classified/proprietary/stealth for f_output; explicitly pre-product or pre-revenue stage for f_fundraising), and cap their combined contribution so that 'no public artifacts' cannot by itself move a profile past YELLOW without any contradicted claim.
+
+**[PARTIALLY FIXED — nightly/2026-09-01]** Confirmed live, exactly as measured: the NDA'd satellite-engineer bio TRIGGERED both flags before this fix. Implemented the first half of the fix direction only — two new keyword banks, `confidentiality_reasons` (nda, non-disclosure, confidential, proprietary, classified, export controlled, itar, trade secret, stealth mode, ...) and `pre_revenue_stage` (pre-revenue, pre-seed, pre-product, not yet generating revenue, early stage startup, ...) — and both `f_output`/`f_fundraising` now check for a stated reason before returning TRIGGERED, moving to UNKNOWN with an explanatory detail string instead when one is present. A bare building/funding-ask claim with no stated reason still TRIGGERs exactly as before (regression-tested). Re-ran the motivating bio end-to-end: flags 6 and 7 now both read UNKNOWN with the reason quoted back, instead of TRIGGERED.
+
+Deliberately **not done**: the "cap their combined contribution" half of the fix direction — capping flag 6+7's combined weight contribution even when both legitimately TRIGGER (no stated reason, genuinely no output/traction) is a separate, riskier scoring-level change and out of scope for one night. Also not done: quantifying how often a genuine fabricator could now type "stealth mode" or "pre-seed" to blanket-suppress these two flags. That trade-off (a stated reason silences the flag with no cross-check) is the same one the project already made for the LinkedIn-detector narrowing on 2026-08-31 and is consistent with the project's stated preference for missing a fraud over accusing an honest person, but it hasn't been red-teamed specifically for these two banks yet — worth a dedicated look if a future review is hunting for cheap evasions.
+
+Also found, live-reproduced, and NOT fixed while implementing this (see new CRITICAL finding "Word-wrapped negation loses its scope at every bare newline" below): `find_terms(..., skip_negated=True)` treats a single `\n` as a clause boundary, so a negated claim split across an ordinary line wrap ("we are not\nraising a Series A") loses its negation and reads as an active claim. This is a pre-existing bug in `is_negated`/`_CLAUSE_END_CHARS`, unrelated to tonight's two banks, but it was found by hand-testing exactly this kind of fundraising sentence — recorded separately because it's bigger than tonight's slot and touches shared infrastructure every `skip_negated` call depends on.
 
 ---
 

@@ -156,6 +156,17 @@ class TestPathologicalInput(unittest.TestCase):
         run_audit("x", "revolutionary paradigm shift " * 1500, mode="text")
         self.assertLess(time.time() - started, 10)
 
+    def test_a_newline_heavy_document_stays_tractable(self):
+        """The newline-boundary walk added to distinguish a word-wrap from a
+        real paragraph/list break has to stay bounded by the same lookback
+        cap as everything else in is_negated — walking back through every
+        newline in an unpunctuated document would reintroduce the same
+        quadratic cost the docstring above describes, just triggered by '\\n'
+        instead of spaces."""
+        started = time.time()
+        run_audit("x", "revolutionary paradigm shift\n" * 1500, mode="text")
+        self.assertLess(time.time() - started, 10)
+
     def test_overlap_resolution_is_still_correct(self):
         distinct, hits = find_non_overlapping(
             "A true paradigm shift and world class work.",

@@ -1964,3 +1964,210 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-02 (nightly run)
+
+### Three open, unmerged `nightly/*` PRs — read before doing anything else
+
+Much smaller queue than the 5-7-deep pileups earlier nights had to describe,
+and none of the three touch a file this branch touches:
+
+| PR | Branch | What it does | Files touched |
+|----|--------|---------------|----------------|
+| #11 | `nightly/2026-08-30` | Flags an OpenAlex `best` pick that's likely a merged entity (core-gap groundwork) | `providers.py`, `flags.py` |
+| #12 | `nightly/2026-08-31` | Fixes `is_linkedin_paste` misfiring on an ordinary CV with bare "Experience"/"Education" headers | `linkedin.py` |
+| #13 | `nightly/2026-09-01` | Confidentiality/pre-revenue escape hatch for flags 6/7 (fairness fix) + surfaced tonight's finding below | `flags.py`, `matching.py` |
+
+All three are based cleanly on `master`'s current tip (`9f71c98`) per `list_pull_requests`. #11 and #13 both touch `flags.py`, so whichever merges second will need a trivial rebase — noting it here rather than acting on it; merging is the human's gate, not a nightly run's. Tonight's branch is cut fresh from `master`'s tip regardless, per the standing instructions, and only touches `matching.py` and test files — nothing any of the three above are likely to conflict on. Not a merge-queue emergency this time; just flagging for visibility as every night is asked to.
+
+### Running backlog tally (CRITICAL findings)
+
+**11 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open (of 16)** — verified directly
+against `master`'s `BACKLOG.md` just now (`grep -c` under `## CRITICAL` for
+`[FIXED]`/`[PARTIALLY FIXED]`/neither). The 16th CRITICAL is the one this
+branch adds and fixes tonight (see below) — it existed only on the unmerged
+PR #13's copy of BACKLOG.md before this, so `master` itself was still showing
+15/10/1/4 until this branch. The 4 still open: the core gap itself (line
+~761), its near-duplicate "identifier-keyed and one-way" (line ~922), "Zero
+registry reach on a realistic prose profile" (line ~878, a specific instance
+of the same core gap), and "Citing no identifiers disables the entire
+verification half of the tool" (line ~832) — all four unchanged tonight, not
+re-verified this cycle beyond the read already logged on 2026-09-01.
+
+### What I did
+
+**Primary item:** fixed the CRITICAL finding the unmerged PR #13 surfaced but
+explicitly left open — "Word-wrapped negation loses its scope at every bare
+newline." Confirmed live first, exactly as PR #13's NIGHTLY.md entry
+described and BACKLOG.md now records in full: `is_negated`'s clause-boundary
+scan treats every `\n` as a hard stop (`_CLAUSE_END_CHARS` included it
+alongside `.;:!?•|`), so an ordinary word-wrap silently drops a negator from
+its own clause. `find_terms("We are not\nraising a Series A at this time.",
+["raising"], skip_negated=True)` returned `['raising']` — the identical text
+without the wrap correctly returned `[]`. This is a live false-accusation
+bug: any plain-text paste, PDF extraction, or hard-wrapped email that denies
+a `funding_ask`/`traction`/`building_claims`/`vague_partnership` term across
+a line break had the denial silently ignored, and `f_fundraising` (the
+highest-weighted flag after the contradiction check) could read an explicit
+"we are not raising" as an active, traction-free fundraise.
+
+Wrote 7 unit tests (`tests/test_negation.py::TestNewlineClauseBoundary`) and
+one end-to-end flag test first, watched all 8 fail against unmodified code,
+then fixed `larp_meter/matching.py`: removed `\n` from `_CLAUSE_END_CHARS`
+outright and added `_hard_newline_before()`, which walks backward through
+consecutive newlines (bounded by the file's existing `_MAX_LOOKBACK_CHARS`
+window, so this cannot reintroduce the quadratic cost the file's own history
+warns about) and only treats one as a clause boundary when it is a genuine
+blank-line paragraph break, or is immediately followed by a bullet/numbered
+list marker (`•`, `▪`, `‣`, `*`, `-`, an en/em dash, or `1.`/`1)`-style
+numbering). An ordinary mid-sentence word-wrap matches neither condition and
+is now treated as whitespace, so a negator reaches across it exactly as it
+would on one physical line.
+
+**Caught a weak test while mutation-testing my own diff, before it shipped:**
+my first draft of the paragraph-break regression test used a sentence that
+already ended in a period before the blank line ("...this quarter.\n\nWe are
+raising..."), so disabling the new blank-line check entirely left the test
+still passing — the pre-existing period boundary was doing the work, not the
+code under test. Same failure shape for the bullet/numbered-list tests: my
+first draft used a literal `•` character (already one of the *original*
+`_CLAUSE_END_CHARS`, independent of anything new) and a period-terminated
+numbered marker ("1. No revenue"), so both accidentally passed via unrelated
+pre-existing logic even with the new bullet-detection code disabled.
+Rewrote all three to use markers/punctuation that isn't already a clause-end
+char on its own (`-` bullets, `1)` numbering, and put the negator within the
+6-token lookback window so the existing lookback cap can't accidentally save
+a non-discriminating test either) — re-ran each mutation and confirmed a real
+failure this time. This is the exact "a test that cannot fail is worse than
+no test" lesson `test_mutation_guards.py`'s own docstring already names;
+worth restating because it happened on a test I wrote *for* a mutation check
+and only caught by actually running the mutation, not by reading the test.
+
+Also pinned the opposite direction explicitly (not just the reported bug):
+`test_word_wrapped_negation_still_applies` / `test_word_wrap_mid_phrase_still_applies`
+cover the fix itself; `test_paragraph_break_still_stops_negation`,
+`test_hyphen_bullet_list_item_stops_negation` and
+`test_numbered_list_item_stops_negation` cover the failure mode PR #13's own
+finding explicitly worried a naive fix would reintroduce — a real list-item
+break must still stop negation, or "No revenue" in one bullet would wrongly
+suppress "Raising a seed round" in the next.
+
+**End-to-end CLI check**, two hand-written samples via
+`LARP_CACHE=<tmp> python3 larp-meter.py --file ... --name ...`:
+- **Should-soften (honest, word-wrapped denial):** a Norwegian robotics
+  founder bio denying an active raise across a line break ("We are not\n
+  seeking investment and are not raising at this time. We have 12 paying
+  customers..."). Flag 7 correctly reports UNDECIDABLE — "Not visibly
+  fundraising; the flag does not apply" — where before the fix the wrapped
+  "raising" would have been read as asserted and (with no traction language
+  recognized either, since the denial masks it) risked a false TRIGGERED.
+- **Should-still-trigger (regression check, genuine wrapped assertion):** the
+  standing "Dr. Marcus Vane" fabricator sample, with the funding claim itself
+  wrapped across an unrelated line break ("We are actively\nraising a Series
+  A round. 40 enterprise customers and 12M in ARR."). Flag 7 correctly still
+  reports PASSED — "Fundraising with stated traction (customers, arr)" —
+  confirming the fix does not over-correct and suppress a genuine assertion
+  just because it happens to wrap.
+
+Also added `tests/test_round4.py::test_a_newline_heavy_document_stays_tractable`,
+mirroring that file's existing hype-heavy-document perf regression test,
+since the new backward walk through newlines touches exactly the kind of
+unpunctuated pathological input that test class exists to guard against
+(1500 repeats of an unpunctuated newline-terminated line stayed well under
+the file's existing 10-second budget).
+
+**Cross-boundary check (per the standing review question):** `is_negated`'s
+signature and return contract are completely unchanged (still a plain bool;
+only the internal boundary computation changed), so this is not the
+"function's return contract grew a new case, caller didn't handle it" shape
+the standing instructions warn about. Grepped both call sites: `matching.py`'s
+own `_matches()` and `extract.py:251`'s `negated=zero or is_negated(...)` —
+neither needed any change, and both are exercised by the full suite, not
+just `matching.py`'s own tests.
+
+Full suite: 473 → 481 tests, green throughout.
+
+### BACKLOG.md: confirmed / refuted
+
+- **Confirmed and fixed**: "Word-wrapped negation loses its scope at every
+  bare newline" — reproduced live exactly as PR #13 described it, added as
+  CRITICAL #16 (it wasn't on `master` yet, only on the unmerged branch) and
+  marked `[FIXED]` immediately with full detail, since this branch closes it
+  in the same night it's recorded.
+- Did **not** re-verify any of the four still-open CRITICALs tonight (the
+  core gap and its two duplicates, plus the no-identifiers-disables-
+  verification finding) — all four were already read in full as recently as
+  2026-09-01's entry and deliberately not re-derived here.
+
+### Mutation-testing log
+
+Mandatory per-cycle spot-check, one mutation in each of the four required
+files, run against the full suite, then reverted (used `cp file /tmp/...` /
+`cp /tmp/.../file file` throughout, not `git checkout --`, per the standing
+lesson from 2026-09-01 about that command discarding uncommitted work
+sharing the same file):
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors`'s `if ... <= _SEVERITY_ORDER.index(level):` → `<` | **Caught** (`test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message`) |
+| `verify.py` | `verify_institution`'s `if wanted and wanted <= have:` → `if wanted <= have:` | **Caught** (3 failures, incl. `test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`) |
+| `names.py` | `name_matches`'s `if len(present) >= 2:` → `> 2` | **Caught** (18 failures + 5 errors) |
+| `flags.py` | `f_contradicted`'s `if refuted or mismatched:` → `if refuted and mismatched:` | **Caught** (4 failures, incl. a test literally named for this mutation) |
+
+Plus the four mutations on tonight's own new `matching.py` code (disabling
+the blank-line check, disabling the bullet-marker check, reverting to the
+old always-hard-newline behavior, and the boundary tie-break `>=`→`>`) — see
+"What I did" above for the first three (all caught after fixing the
+non-discriminating draft tests); the tie-break mutation is unobservable by
+construction (when `nl_boundary == boundary` the assignment is a no-op
+either way), so it's not a real gap, just noted for completeness.
+
+**Result: 481 tests green.** All four required files remain protected on
+`master` by at least one live, passing mutation check tonight — this was a
+spot-check rotation, not a full sweep of any file; `matching.py` itself
+(new to any mutation-testing attention this cycle) got the closest thing to
+a full sweep it's had, scoped to the code this branch actually added.
+
+### What I learned
+
+- **A test written specifically to catch a mutation can itself pass "by
+  accident" if it isn't checked against the mutation it's meant to catch.**
+  Three of my own first-draft tests tonight (paragraph-break, bullet-list,
+  numbered-list) all happened to route through *unrelated* pre-existing
+  boundary logic (a stray trailing period, a `•` character already in the
+  original `_CLAUSE_END_CHARS`, a period inside a numbered marker) rather
+  than the new code they were meant to exercise, and every one of them still
+  passed with that new code deliberately disabled. The only way this
+  surfaced was running the mutation and watching the test *not* fail — never
+  trust a regression test's intent from reading it; run the mutation it's
+  supposed to catch, every time, even (especially) for tests written in the
+  same sitting as the fix.
+- The three-PR queue is currently in good shape (small, clean, non-
+  conflicting) compared to the 5-7-deep pileups earlier nights had to
+  describe at length — worth naming as a positive data point, not just
+  flagging problems. `flags.py` being touched by two of the three (#11,
+  #13) is a minor, expected rebase cost, not a real conflict risk (verified
+  no line-range overlap by reading both diffs).
+
+### What the next run should pick up first
+
+1. **The core gap** (subject-anchored `Claim`s + reconciliation) is still
+   fully open, per every entry since 2026-08-15. Still the single biggest
+   lever in the codebase; PR #11's unmerged merge-risk groundwork is the
+   only progress toward it sitting anywhere, merged or not.
+2. **"Citing no identifiers disables the entire verification half of the
+   tool, including its only severity floor"** — still the most consequential
+   open CRITICAL after the core gap, per 2026-09-01's entry; still needs a
+   genuinely careful design, not a blunt UNKNOWN→TRIGGERED flip, to avoid
+   punishing every honest person with a thin public footprint.
+3. The three small, non-conflicting open PRs (#11, #12, #13) — keep
+   surfacing them every night until a human merge pass lands them, per
+   standing instructions; not something an autonomous run should act on
+   directly.
+4. `matching.py` has now had its first real, if narrowly-scoped, mutation
+   check (limited to the newline-boundary code this branch added). The rest
+   of the file — `term_re`, `find_non_overlapping`'s span-sorting, the
+   `LOCAL_NEGATORS`/`CLAUSE_NEGATORS` lookback-token counts themselves — has
+   never had a dedicated sweep. Worth a full pass next time `matching.py`
+   is the night's focus, not just a spot-check riding along with an
+   unrelated fix.

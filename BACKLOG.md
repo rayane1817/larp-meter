@@ -756,7 +756,7 @@ landed. See "Open PRs" below.
 
 ---
 
-## CRITICAL (15)
+## CRITICAL (16)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says
 
@@ -1056,6 +1056,34 @@ Regression-checked that this does not become a blanket downgrade: `Claim`s built
 Mutation-tested the fix itself: reverting the `_disclaims_authorship` guard in `_attribute` fails exactly the 3 new regression tests built for it (`test_patent_prosecuted_for_a_client_is_not_a_mismatch`, `test_doi_cited_as_prior_art_is_not_a_mismatch`, `test_end_to_end_patent_citation_does_not_trigger_the_contradiction_floor`), confirmed, then restored.
 
 **Left open, deliberately:** the broader "require positive ownership framing" direction (flip the default rather than deny-list disclaiming phrases) is still not attempted — it would meaningfully change coverage on ordinary bios and needs its own dedicated review, not a same-night bolt-on. The phrase list is also necessarily incomplete (a fabricator who never writes "prior art"/"client"/"cited" and simply lists a stolen identifier bare is unaffected — this fix protects the honest-citation case, it does not add new fraud detection). `verify_orcid`, `verify_arxiv`, `verify_patent` and the GitHub-user branch of `verify_github` all route through the same `_attribute` tail so all four benefit uniformly; `verify_institution` (ROR) and the GitHub-repo/ClinicalTrials branches were already blanket-UNCHECKABLE-on-ambiguity before tonight and are unaffected either way.
+
+---
+
+### [FIXED] Word-wrapped negation loses its scope at every bare newline
+
+`is_negated` (matching.py:64-87), the guard every `skip_negated=True` call in the file relies on to stop a denied claim being read as an asserted one, treats a bare `\n` as a clause boundary (`_CLAUSE_END_CHARS = ".;:!?\n•|"`, matching.py:57). That is correct for an intentional line break — a new bullet, a new field on its own line — but a `\n` is equally what any word-wrapped paragraph contains: pasted plain text, a PDF-extracted CV, or an email client that hard-wraps at 72-80 columns all insert a bare newline in the middle of an ordinary sentence, with no clause boundary intended. When a negator sits right before the wrap and the negated word sits right after it, the clause-boundary scan stops at the newline and the negator is invisible to the token that follows — the exact same failure this file's own docstring describes fixing for same-line text ("We have no customers and no revenue" — see matching.py:29-32), reintroduced by nothing more than where the source text happens to wrap.
+
+**Evidence:** matching.py:57 `_CLAUSE_END_CHARS = ".;:!?\n•|"`; matching.py:74-77 `for ch in _CLAUSE_END_CHARS: i = text.rfind(ch, 0, start); ... boundary = i + 1` — a `\n` anywhere before the match sets `boundary` past it, so `tokens_before` (matching.py:80-81) never includes anything from before the newline. Measured directly against `is_negated`/`find_terms`:
+```
+>>> find_terms("We are not raising a Series A at this time.", banks["funding_ask"], skip_negated=True)
+[]
+>>> find_terms("We are not\nraising a Series A at this time.", banks["funding_ask"], skip_negated=True)
+['raising']
+```
+
+**Fails on:** Any ordinary word-wrapped bio that happens to negate a funding_ask, traction, building_claims or vague_partnership term across a line break. Concretely: a founder pastes a plain-text bio (or one extracted from a PDF) reading "We are not\nraising a Series A at this time; the team is heads-down on the product." `f_fundraising` reads `asks = ['raising']` (the "not" that denies it is now invisible), sees no traction language, and returns **TRIGGERED**: "Actively raising ('raising') with no customer, revenue or usage figure of any kind." — accusing someone of doing the literal opposite of what they wrote, purely because of where their word processor happened to wrap a line.
+
+**Fix direction:** Stop treating every bare `\n` as a clause boundary; a paragraph/field break is better signalled by a blank line (`\n\s*\n`) or a line that starts with a bullet/field marker, not by the mere presence of one `\n`.
+
+**[FIXED — nightly/2026-09-02]** Confirmed live first, exactly as measured above, then wrote 7 failing unit tests (`tests/test_negation.py::TestNewlineClauseBoundary`) plus one failing end-to-end flag test before touching `matching.py`. Implemented the fix direction's own suggestion, not the cruder "collapse every lone `\n` to a space" alternative it also floated: `_CLAUSE_END_CHARS` no longer includes `\n` at all; a new `_hard_newline_before()` walks backward through consecutive newlines (bounded by the existing `_MAX_LOOKBACK_CHARS` window, so this cannot reintroduce the quadratic cost the same file's own history warns about) and only counts one as a boundary when it is a genuine blank-line paragraph break or is immediately followed by a bullet/numbered-list marker (`_BULLET_START_RE`: `•`, `▪`, `‣`, `*`, `-`, an en/em dash, or `1.`/`1)`-style numbering). An ordinary mid-sentence word-wrap matches neither condition and is now treated as whitespace, so negation reaches across it exactly as it would on one line.
+
+Both directions are pinned, not just the reported bug: `test_word_wrapped_negation_still_applies` / `test_word_wrap_mid_phrase_still_applies` cover the fix itself; `test_paragraph_break_still_stops_negation`, `test_hyphen_bullet_list_item_stops_negation` and `test_numbered_list_item_stops_negation` cover the failure mode the fix direction itself worried about — a real list-item break must still stop negation, or "No revenue" in one bullet would wrongly suppress "Raising a seed round" in the next. Each of those three was written to fail specifically on the newline/bullet logic being disabled, not merely on the unrelated 6-token lookback cap happening to save it by coincidence (an earlier draft of the paragraph-break test didn't discriminate this way — caught it while mutation-testing my own diff, see below).
+
+**End-to-end CLI check**, two hand-written samples run through the real `run_audit` pipeline via `larp-meter.py --file`: (1) an honest, word-wrapped bio explicitly denying an active raise across a line break ("We are not\nseeking investment and are not raising...") — flag 7 correctly reports UNDECIDABLE ("Not visibly fundraising; the flag does not apply"), where before the fix it would have read the wrapped "raising" as asserted; (2) a fabricator bio asserting a real raise across an unrelated word wrap ("We are actively\nraising a Series A round...40 enterprise customers and 12M in ARR") — flag 7 still correctly reports PASSED ("Fundraising with stated traction"), confirming the fix does not over-correct and suppress a genuine, wrapped assertion.
+
+Mutation-tested the fix itself, one deliberate revert at a time, confirmed a real test failure, then restored: disabling the blank-line check alone (4 failures once the discriminating test above was fixed), disabling the bullet-marker check alone (2 failures), and reverting to the old always-hard-newline behavior entirely (4 failures). Also added `tests/test_round4.py::test_a_newline_heavy_document_stays_tractable`, mirroring the file's existing hype-heavy-document perf regression test, since the new backward walk touches exactly the kind of unpunctuated pathological input that test class exists to guard against.
+
+**Cross-boundary check:** `is_negated`'s signature and return contract (bool) are unchanged — only its internal boundary computation changed — so both call sites (`matching.py`'s own `_matches()` and `extract.py:251`'s `negated=zero or is_negated(...)`) needed no changes and were re-verified by the full suite, not just the module's own tests.
 
 ---
 

@@ -185,10 +185,58 @@ def norm_org(name):
     return ORG_SUFFIX.sub("", (name or "").strip()).casefold()
 
 
-def _context(text, match, width=60):
-    start = max(match.start() - width // 2, 0)
-    end = min(match.end() + width // 2, len(text))
-    return re.sub(r"\s+", " ", text[start:end]).strip()
+# `context` exists to answer one question -- verify.py's `_disclaims_authorship`,
+# "does this identifier's own sentence say it belongs to someone else?" -- so it
+# needs the whole sentence, not a fixed number of characters either side. A fixed
+# 60-character window clipped a disclaiming phrase sitting near the start of a
+# longer sentence when the identifier itself landed further along: an honest
+# patent attorney's "...prosecuting numerous filings on behalf of corporate
+# clients, including for instance US9876543..." only had "...including for
+# instance US9876543 which I filed for a sensor st..." captured -- the "on
+# behalf of" disclaimer had already scrolled out of the window -- so a real
+# client filing came back MISMATCH instead of UNCHECKABLE. Scanning to the
+# sentence boundary instead of a fixed width fixes that without risking the
+# opposite failure: stopping at the boundary (rather than, say, the whole
+# paragraph) keeps an unrelated disclaimer in an *adjacent* sentence from
+# masking a real, unqualified claim made in this one.
+#
+# Deliberately excludes a bare newline. matching.py's is_negated hit the same
+# question for negation scope and settled it the same way: an ordinary
+# word-wrapped paste, PDF-extracted CV or hard-wrapped email inserts a plain
+# "\n" with no clause boundary intended, and treating every one as a hard stop
+# reproduces this exact bug one line-length away -- a disclaiming phrase on
+# one physical line and the identifier on the next would go right back to
+# being severed, purely by where the subject's text happened to wrap. Unlike
+# is_negated, nothing here needs to detect a genuine paragraph break either:
+# widening slightly too far in a hard-wrapped document only risks pulling in
+# a little of the next paragraph, which can only ever add a disclaiming
+# phrase (never remove one) -- the same "costs coverage, never accuses"
+# direction every guard in this file is already allowed to fail in.
+_SENTENCE_END_CHARS = ".;:!?"
+# Bounds the scan on a pathological document with no punctuation at all --
+# matching.py's is_negated hit the identical quadratic-cost trap for the same
+# reason (unbounded rfind/find over the whole prefix) and fixed it the same way.
+_MAX_CONTEXT_SCAN = 300
+
+
+def _context(text, match):
+    start, end = match.start(), match.end()
+    lo = max(start - _MAX_CONTEXT_SCAN, 0)
+    hi = min(end + _MAX_CONTEXT_SCAN, len(text))
+
+    before = lo
+    for ch in _SENTENCE_END_CHARS:
+        i = text.rfind(ch, lo, start)
+        if i + 1 > before:
+            before = i + 1
+
+    after = hi
+    for ch in _SENTENCE_END_CHARS:
+        i = text.find(ch, end, hi)
+        if i != -1 and i < after:
+            after = i
+
+    return re.sub(r"\s+", " ", text[before:after]).strip()
 
 
 def extract_claims(text):

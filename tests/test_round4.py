@@ -156,6 +156,18 @@ class TestPathologicalInput(unittest.TestCase):
         run_audit("x", "revolutionary paradigm shift " * 1500, mode="text")
         self.assertLess(time.time() - started, 10)
 
+    def test_an_identifier_heavy_unpunctuated_document_stays_tractable(self):
+        """extract.py's `_context()` scans outward from each identifier match
+        to the nearest sentence boundary. Without a cap on that scan, a long
+        document with no punctuation at all (or none anywhere near an
+        identifier) would make every single match rescan an ever-larger
+        unbounded prefix/suffix -- the exact quadratic-cost shape
+        matching.py's is_negated hit for the same reason (see the hype-heavy
+        test above) and fixed the same way, with _MAX_CONTEXT_SCAN."""
+        started = time.time()
+        run_audit("x", "10.1000/abcde " * 20000, mode="text")
+        self.assertLess(time.time() - started, 15)
+
     def test_overlap_resolution_is_still_correct(self):
         distinct, hits = find_non_overlapping(
             "A true paradigm shift and world class work.",

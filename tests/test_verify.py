@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from larp_meter.extract import (Claim, VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE)
-from larp_meter.verify import Verifier
+from larp_meter.verify import Verifier, _disclaims_authorship
 
 
 class StubVerifier(Verifier):
@@ -174,6 +174,30 @@ class TestAttribution(unittest.TestCase):
         v._attribute(claim, ["Someone Else"], 'Paper "X"', "https://x")
         self.assertEqual(claim.status, MISMATCH)
 
+    def test_a_paper_being_cited_by_others_is_not_a_disclaimer(self):
+        """`_NON_ATTRIBUTION_CONTEXT_RE`'s citation alternative was written
+        for the active voice ('citing prior art', 'cited in the literature
+        review') but also matched the passive 'is cited BY' -- a sentence
+        saying OTHER people cite the subject's own paper, the opposite of a
+        disclaimer. Widening `_context()` to the whole sentence (see
+        extract.py) made this reachable much more often than the old
+        60-character window ever allowed: 'His landmark paper, <doi>, is
+        considered foundational... and is cited by thousands of researchers
+        worldwide' let a real fabrication (a fake author's name attached to
+        someone else's real paper) escape to UNCHECKABLE purely because the
+        word 'cited' appeared 83 characters away, describing the paper's own
+        reception rather than anything the subject said about its origin."""
+        context = ("His landmark paper, 10.1038/nphys1170, is considered foundational to the "
+                   "field of optomechanics and is cited by thousands of researchers worldwide.")
+        self.assertFalse(_disclaims_authorship(context))
+
+    def test_citing_something_as_prior_art_is_still_a_disclaimer(self):
+        """The fix above must not overcorrect: the active voice this
+        alternative exists for -- the subject citing someone else's work --
+        still has to disclaim."""
+        context = "our approach builds on prior work, citing the original paper 10.5555/xyz throughout"
+        self.assertTrue(_disclaims_authorship(context))
+
     def test_end_to_end_patent_citation_does_not_trigger_the_contradiction_floor(self):
         """Full pipeline, not `_attribute` in isolation: extract_claims's
         60-character context window must actually reach the guard, and flag
@@ -195,6 +219,44 @@ class TestAttribution(unittest.TestCase):
                 subject_name=subject_name)
             text = ("I prosecuted patent US 9876543 for a client in the sensor "
                     "space. I was not the inventor on this filing.")
+            report = run_audit("t", text, verify=True, subject_name="Sofia Almeida")
+        finally:
+            audit_mod.Verifier = real_verifier
+
+        claim = next(c for c in report["claims"] if c["subtype"] == "patent")
+        self.assertEqual(claim["status"], UNCHECKABLE)
+        flag11 = next(f for f in report["flags"] if f["id"] == 11)
+        self.assertNotEqual(flag11["status"], TRIGGERED)
+
+    def test_end_to_end_disclaiming_phrase_far_from_the_identifier_is_not_missed(self):
+        """Same guard, more realistic distance: a real sentence puts its
+        disclaiming phrase near the start and the identifier near the end,
+        further apart than the fixed 60-character window `_context()` used
+        to capture. Confirmed live before this fix: 'I have spent my career
+        as outside patent counsel prosecuting numerous filings on behalf of
+        corporate clients, including for instance US9876543 which I filed
+        for a sensor startup.' captured only 'ients, including for instance
+        US9876543 which I filed for a sensor st' as `claim.context` -- the
+        'on behalf of' disclaimer had already scrolled out of the window --
+        so a real client filing came back MISMATCH, floored at ORANGE by
+        flag 11, instead of UNCHECKABLE. `_context()` must scope to the
+        whole sentence, not a fixed character count, for the guard in
+        `_attribute` to ever see a disclaimer that doesn't sit within 30
+        characters of the identifier it qualifies."""
+        from larp_meter.audit import run_audit
+        from larp_meter import TRIGGERED
+
+        import larp_meter.audit as audit_mod
+        real_verifier = audit_mod.Verifier
+        try:
+            audit_mod.Verifier = lambda cache_dir, subject_name=None: StubVerifier(
+                {"patents.google.com": (
+                    "<title>Sensor Array Patent</title>"
+                    "<dd itemprop=\"inventor\">Someone Else</dd>", True)},
+                subject_name=subject_name)
+            text = ("I have spent my career as outside patent counsel prosecuting numerous "
+                    "filings on behalf of corporate clients, including for instance "
+                    "US9876543 which I filed for a sensor startup.")
             report = run_audit("t", text, verify=True, subject_name="Sofia Almeida")
         finally:
             audit_mod.Verifier = real_verifier

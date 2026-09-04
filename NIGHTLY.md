@@ -1964,3 +1964,175 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-04 (nightly run)
+
+**Open-PR queue, unchanged since last night's entry and growing: still not
+merged.** Five `nightly/*` PRs are open against `master`, all draft, clean,
+green, and — per each PR's own description — touching disjoint files from
+one another: #11 (`2026-08-30`, OpenAlex merge-risk detection —
+`providers.py`/`flags.py`), #12 (`2026-08-31`, LinkedIn-paste misdetection —
+`linkedin.py`), #13 (`2026-09-01`, confidential/pre-revenue work —
+`matching.py`/`flags.py`), #14 (`2026-09-02`, word-wrap breaking negation —
+`matching.py`), #15 (`2026-09-03`, a fixed-width context window clipping a
+disclaimer — `extract.py`/`verify.py`). None of this was actioned tonight —
+merging is the project's deliberate human-in-the-loop gate — but it is worth
+repeating from last night's entry: this is now explicitly a human-merge-queue
+problem, not a code problem, and the queue has not gotten shorter.
+
+**8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open of the 15 CRITICALs —
+unchanged by tonight** (re-verified directly against `master`'s current
+`BACKLOG.md`: `grep "^### " under "## CRITICAL (15)"`, same counts as every
+recent PR description). Tonight's fix is a MAJOR-adjacent finding under the
+already-[FIXED]-adjacent flag 13 write-up, not one of the 15 named
+CRITICALs, so the tally itself doesn't move. The core gap (this run's
+highest-priority item per the standing brief) was not touched tonight — see
+"What the next run should pick up first" below for why, and what a
+follow-up night should actually do about it.
+
+### What I did
+
+**Primary item:** flag 13 (self-applied doctoral title) matched only the
+exact title-case spelling of "Dr."/"Prof."/"Professor" — `_DOCTORAL_HONORIFIC_RE`
+had no `re.I`. Found via the red-team-for-evasion lens: not a clever attack,
+just the default output of an all-lowercase LinkedIn-paste style or an
+all-caps resume header, both common on their own. Confirmed live before
+touching anything: the flag's own motivating fixture ("Dr. Anke
+Verstraeten..." with an education list stopping at Master's), re-cased to
+"dr. Anke Verstraeten...", read UNKNOWN ("no title claimed") instead of
+TRIGGERED, through `run_audit` end to end. Wrote the failing test first
+(watched it fail: `'UNKNOWN' != 'TRIGGERED'`), added `re.I`, watched it
+pass. Grepped every consumer of the regex — `f_title_inflation` is the only
+one — so no cross-boundary risk. The name-adjacency check immediately below
+the regex (title must sit next to the subject's own name, same line, capped
+window) is what actually prevents a false accusation here, and it is
+untouched by letter case, so this closes a false-negative gap without
+loosening anything that guards against a false positive.
+
+**Mandatory mutation-testing pass, all four required files.** Time-boxed,
+new lines each (not re-testing guards prior nights already pinned):
+
+- `scoring.py`: `category_scores`'s own `r.status not in (TRIGGERED, PASSED)`
+  → `not in (TRIGGERED,)` **survived**. The one existing test for this
+  filter (`TestCategoryScoresExcludeUndecided`) pairs a TRIGGERED flag with
+  an otherwise-UNKNOWN category — PASSED and UNKNOWN get excluded
+  identically either way when nothing in that category TRIGGERED, so it
+  can't discriminate this mutation. A category where every decided flag
+  PASSED and none TRIGGERED is the case that does: the mutated filter drops
+  the whole category out of `buckets`, so it's simply missing from
+  `categories` in the report — not "unscored", just silently absent, as if
+  never evaluated. Pinned with a PASSED-only "rhetoric" category fixture
+  (`tests/test_scoring.py::TestCategoryScoresIncludePassed`).
+- `flags.py`: widened flag 13's own same-line tail slice from `[:60]` to
+  `[:600]` — **survived**. Every existing fixture keeps the subject's name
+  within a few words of the honorific, so the cap that stops a distant,
+  unrelated mention of the subject from being misread as a self-applied
+  title (the function's own comment explains why it exists) was never
+  actually exercised by any test. Pinned with a fixture where "Dr. Schilt"
+  (someone else's title) and the subject's own name share one physical line
+  ~130 characters apart, describing a colleague's work with no doctorate —
+  must stay UNKNOWN; the widened window instead reads it as self-applied
+  (came back PASSED on the mutation, driven by the word "doctorate"
+  appearing in the subject's own disclaiming sentence and being read as
+  degree evidence — a separate, smaller oddity worth another look some
+  night, not chased further tonight since the pinning test only needs the
+  UNKNOWN/not-UNKNOWN discrimination).
+- `verify.py`: `verify_institution`'s ROR "nearest listed name" tie-break,
+  `if overlap > best_overlap:` → `if overlap >= best_overlap:` — **survived**.
+  Two hits that both fail `wanted <= have` but score identical overlap
+  fractions should report the first one ROR listed, deterministically;
+  `>=` lets a later equally-relevant hit silently overwrite it in the
+  evidence text shown to the reader. Pinned with two synthetic ROR items
+  engineered to the same overlap fraction (0.2 each) by construction.
+  Cosmetic in impact (status stays NOT_FOUND either way; only which
+  "nearest" name gets quoted changes) but still a real, previously-untested
+  behavior, so it gets a test rather than a shrug.
+- `names.py`: two mutations tried (`len(present) >= 2` → `>= 3`, and the
+  Latin/non-Latin XOR script-mismatch guard flipped to AND) — both **caught
+  immediately and heavily** (18-35 failures each). No survivor tonight; this
+  file remains the most thoroughly pinned of the four.
+
+All three survivors are closed with a regression test alone — none needed a
+production fix, since in each case the guard itself was already correct,
+just unpinned. Same fail-first discipline as the primary fix: mutate, watch
+the new test fail, restore, watch it pass.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed** (live repro): flag 13's case-sensitivity gap is real and
+  exactly as described above — not previously in BACKLOG.md as its own
+  finding (the flag 13 write-up predates this specific gap); added a
+  `[FIXED — nightly/2026-09-04]` note under the existing "Flag 13" entry.
+- **Did not** re-verify any of the 6 still-open CRITICALs, or re-derive the
+  core-gap's own status, beyond the tally check above — no new evidence
+  gathered on either tonight.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: 2026-08-16 (12 mutations, 6 real) direct to `master`;
+  2026-08-26 spot-check (1 mutation, caught); **tonight** (1 new mutation,
+  a genuine survivor, pinned) — `master` now has two independent real
+  pins in this file.
+- `flags.py`: 2026-08-16/17 (33 mutations, 13 real) direct to `master`;
+  several nightly spot-checks since, all caught; **tonight** (1 new
+  mutation in flag 13's own tail-window logic, a genuine survivor, pinned).
+- `names.py`: full 13-mutation sweep on unmerged `nightly/2026-08-19` (PR
+  #5, still not on `master`); a 1-guard pin landed directly on `master` via
+  2026-08-27's run; **tonight**, 2 more mutations tried directly against
+  `master`, both caught — `master`'s own coverage of this file, independent
+  of the still-unmerged PR #5, keeps growing.
+- `verify.py`: full 6-mutation sweep on unmerged `nightly/2026-08-18` (PR
+  #4, still not on `master`); the `wanted <= have` guard's own pin landed
+  directly on `master` (`tests/test_verify.py::test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`,
+  confirmed present tonight); **tonight** adds a second, different survivor
+  in the same function (the tie-break determinism above), also pinned
+  directly on `master`.
+
+**All four files have now had at least one real mutation-testing pass
+directly on `master` itself** (not only on an unmerged branch) — this is a
+meaningfully better state than several recent entries described, where
+`names.py`/`verify.py` coverage existed only on branches that never merged.
+`master`'s own protection has been growing night over night regardless of
+the queue; the queue mainly costs re-discovery effort on `providers.py` /
+`linkedin.py` / `matching.py` / `extract.py`, whose sweeps are still stuck
+on unmerged branches.
+
+### What I learned
+
+- A regex missing `re.I` is exactly the shape of bug this project's
+  red-team lens is built to catch: no adversarial cleverness needed, no
+  crafted input — just an ordinary stylistic choice (writing in lowercase,
+  or in caps) that happens to fall outside a pattern's assumed case. Worth
+  grepping `flags.py`, `matching.py` and `extract.py` for other
+  `re.compile(...)` calls that lack `re.I` where nothing in a nearby comment
+  explains why case-sensitivity is deliberate (as it is, correctly, for
+  `DEGREE_RE` per the 2026-08-23 fix) — did not have time to do that sweep
+  tonight; flagging as the cheapest next lead.
+- Mutating a same-line character cap (60 → 600) is a different kind of
+  mutation than the boundary/comparison mutations this project usually
+  tries (`>` vs `>=`, dropping a guard clause) — it's a magnitude change to
+  a constant with no single "obviously correct" alternative to test against.
+  Worth remembering as its own mutation category for future sweeps: any
+  hard-coded window, cap, or threshold constant is itself mutable, not just
+  the comparisons around it.
+
+### What the next run should pick up first
+
+1. **The `re.I` grep this entry ran out of time for.** Check every
+   `re.compile` in `flags.py`, `matching.py`, `extract.py` for a
+   case-sensitivity choice that isn't explained by a nearby comment the way
+   `DEGREE_RE`'s is — each unexplained one is a candidate for tonight's
+   exact bug shape.
+2. **The core gap, still.** Unchanged from every recent entry: items (1)
+   and (3) of its fix direction (OpenAlex/Crossref hits becoming derived
+   `Claim`s with provenance; a reconciliation step producing CONTRADICTED
+   for a quantitative mismatch) are still fully open, and still blocked on
+   the disambiguation groundwork PR #11 started. Re-verify OpenAlex's rate
+   limits and response shapes live before extending it — the brief's own
+   numbers are dated 2026-08-14 and this project has already learned once
+   that they drift.
+3. **The merge queue.** Still five deep, still not this project's call to
+   resolve — but if a run ever gets explicit merge access or instruction to
+   consolidate, `providers.py`/`flags.py` (#11) and `matching.py`/`flags.py`
+   (#13, #14) are the two places multiple open PRs touch the same file and
+   will need real conflict resolution, not just a fast-forward.

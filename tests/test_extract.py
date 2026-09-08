@@ -135,6 +135,52 @@ class TestTimelineAndTraction(unittest.TestCase):
                     "Patent US10123456. 40 customers, 2.1M revenue.")
         self.assertGreater(ex.specificity_index(concrete), ex.specificity_index(vague))
 
+    def test_ascending_range_end_is_a_target_not_a_past_date(self):
+        """'2025 - 2027' states an in-progress degree's expected end point, not
+        a career date the subject already lived through. Before this test, the
+        end year of any ascending "YYYY - YYYY" range was read exactly like an
+        ordinary claimed-history year, so a current student's own study dates
+        made flag 12 accuse them of stating a past event that is still in the
+        future."""
+        claims = ex.extract_claims("Pursuing an MSc Computer Science, TU Munchen, 2025 - 2027.")
+        years = [c.value for c in ex.claims_by(claims, "timeline", "year")]
+        targets = [c.value for c in ex.claims_by(claims, "timeline", "year_target")]
+        self.assertNotIn("2027", years)
+        self.assertIn("2027", targets)
+        # The range's own start year is an ordinary, already-past date and
+        # must still be readable as career history.
+        self.assertIn("2025", years)
+
+    def test_descending_or_unrelated_years_are_not_treated_as_a_range(self):
+        """Only an ASCENDING adjacent pair reads as a range boundary. Two
+        unrelated years that happen to sit near each other, or a range typed
+        with the later year first, must not be swept into the same exemption
+        — that would let a fabricator hide any inconvenient future date by
+        simply preceding it with a smaller, unrelated year and a dash."""
+        claims = ex.extract_claims("The prototype shipped in 2030. A separate grant ran 2015 - 2010.")
+        years = [c.value for c in ex.claims_by(claims, "timeline", "year")]
+        # 2030 is not preceded by any marker or ascending range and must stay
+        # a plain, checkable year; "2015 - 2010" is descending (a synthetic
+        # probe, not a realistic date range), so it must not exempt 2010 either.
+        self.assertIn("2030", years)
+        self.assertIn("2010", years)
+
+    def test_equal_year_range_boundary_still_exempts_the_second_year(self):
+        """Mutation-tested (2026-09-08): the range-start comparison `<=`
+        survived as `<` with the suite green, because an ordinary ascending
+        range always has two distinct years and never exercises the boundary
+        where they're equal. A single-year program written 'YYYY - YYYY' is
+        the same boundary case and must still exempt the second year."""
+        self.assertTrue(ex._is_forward_year("2027 - 2027", 7, "2027"))
+        self.assertFalse(ex._is_forward_year("2028 - 2027", 7, "2027"))
+
+    def test_class_of_is_a_target_not_a_past_date(self):
+        """'Class of 2027' is a standard way to state an expected graduating
+        cohort. Without a recognised cue it read as a claimed-past date in the
+        future, the same false accusation as the range case above."""
+        claims = ex.extract_claims("Class of 2027, Computer Science, Colorado State University.")
+        self.assertNotIn("2027", [c.value for c in ex.claims_by(claims, "timeline", "year")])
+
 
 if __name__ == "__main__":
     unittest.main()

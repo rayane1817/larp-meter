@@ -1964,3 +1964,231 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-09 (nightly run)
+
+### ⚠ Open-PR queue: seven unmerged `nightly/*` PRs, dating back to 2026-08-30 (10 nights)
+
+**Read this first — for human visibility, not something to act on by pushing
+more commits to any of these.** `master`'s tip is the 2026-08-27 merge
+(`9f71c98`); PRs #1–#10 (2026-08-15 through 2026-08-27) are all already
+closed and their content is on `master` via manual merge commits (the human
+reviewer merges locally rather than through GitHub's button, which is why
+GitHub shows them `merged: false` despite the content being live — verified
+by reading `master`'s own git log, not by trusting the PR list's flag). But
+**every night since 2026-08-30 is still open, unreviewed, and unmerged**:
+
+| PR | Branch | What it claims | CI / comments |
+|----|--------|-----------------|-------|
+| #11 | nightly/2026-08-30 | Flag an OpenAlex "best" pick that's likely a merged entity | no CI configured, 0 comments |
+| #12 | nightly/2026-08-31 | An ordinary CV was mistaken for a LinkedIn paste and silently lost content | no CI configured, 0 comments |
+| #13 | nightly/2026-09-01 | Confidential and pre-revenue work is not deception | no CI configured, 0 comments |
+| #14 | nightly/2026-09-02 | A word-wrap can hide a denial from `is_negated` | no CI configured, 0 comments |
+| #15 | nightly/2026-09-03 | A fixed-width context window clipped a disclaiming phrase far from its identifier | no CI configured, 0 comments |
+| #16 | nightly/2026-09-04 | A self-applied doctoral title in lowercase or all-caps was invisible to flag 13 | no CI configured, 0 comments |
+| #17 | nightly/2026-09-08 | A current student's own study dates read as a fabricated future claim | no CI configured, 0 comments |
+
+All seven are drafts, all report `pending`/no status checks (there is no CI
+workflow in this repo — `get_status` returns `total_count: 0` for every one
+of them), and none has a single review comment. This isn't a blocked queue
+in the sense of failing checks or unresolved conflicts — it's simply seven
+nights of reviewed-by-nobody work sitting untouched, the oldest ten days
+old. Per the 08-27 entry's own note, this was already "the single biggest
+drag on this project" at five deep; it is now seven deep and has not moved
+in two weeks. Not something tonight's branch can fix (merging is this
+project's deliberate human-in-the-loop gate) — flagging it again because
+letting it go unmentioned is exactly the state-drift failure the standing
+instructions warn about.
+
+### Backlog tally
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open**, of the 15 CRITICALs —
+**this corrects the number two nights back**, not a change from new work
+tonight. Counted directly (`grep -c` on `## CRITICAL (15)`'s own `### `
+headers), not carried forward from memory: 10 carry `[FIXED]`, 1 carries
+`[PARTIALLY FIXED]`, and the remaining 4 (lines 761, 832, 878, 922 — all
+restatements of the same one-way-funnel/zero-registry-reach architectural
+gap from different angles of the original 5-lens review) are open. The
+2026-08-27 entry reported "8 / 1 / 6" and every night since carried that
+number forward; it was a miscount when written, not a figure that changed
+later — nothing in the CRITICAL section has flipped state since 08-27.
+Full detail on how this was found in BACKLOG.md's new top entry.
+
+### What I did
+
+**Mandatory per-cycle mutation-testing pass, done as a full systematic
+sweep this time** (~20 hand-applied mutations: comparison-operator flips,
+boundary shifts, and/or inversions, dropped guards) across the three files
+that hadn't had a fresh pass in a while — `names.py`, `verify.py`,
+`flags.py` — rather than the usual single spot-check, specifically because
+tonight also turned up a case (below) where a prior spot-check's own
+conclusion was wrong. `scoring.py` was spot-checked (1 mutation, the
+`coverage >= MIN_COVERAGE` boundary) and confirmed still caught; it has
+extensive dedicated boundary/tie-break test classes already
+(`TestLevelBoundaries`, `TestCoverageBoundaryIsInclusive`,
+`TestFloorTieBreak`) from the 2026-08-16 sweep and its later top-ups, so it
+did not get the full sweep treatment tonight.
+
+**One real, pinned survivor** — `flags.py`'s buzzword short-text carve-out
+(`f_buzzwords`, line 203): `ctx.word_count < 25` survived a mutation to
+`< 24` with the full suite green. A 2026-08-17 test already pins the upper
+edge (25 words must NOT get the carve-out); nothing pinned the lower edge,
+and — this is why a quick "add the missing boundary case" pass would still
+have missed it — the two directions are not symmetric. At 24 words with
+*zero* buzzwords, both the real and mutated code return PASSED (different
+message, same status), so a naive boundary test using a hype-free fixture
+proves nothing. The mutation only becomes observable with a *sparse* hit:
+one buzzword in 24 words. Real code: `UNKNOWN` ("too short to judge").
+Mutated code: falls through to the ordinary density formula
+(1/24×100 ≈ 4.2%, under the ≥4-distinct trigger gate) and returns `PASSED`
+("density is normal") — turning an honestly-undecidable flag into a
+decided, coverage-counting one on a technicality of exactly which one-word
+boundary a profile happens to sit on. Wrote the test first, watched it
+fail against the mutated line (`AssertionError: 'PASSED' != 'UNKNOWN'`),
+confirmed it passes against the restored line, then re-ran the full suite
+(474 tests, green). Detail and full mutation list in BACKLOG.md's new top
+entry, including two mutations investigated as possible survivors
+(`names.py` lines 59 and 152) and ruled out as equivalent — reasoned
+through rather than guessed, since an untested equivalent mutant left
+unexplained is exactly the kind of thing a future night re-discovers and
+wastes a cycle on.
+
+One process note for whoever reruns this kind of sweep: a stale
+`__pycache__` directory produced a false reading mid-session — a `.pyc`
+left over from an earlier `sed`-and-restore round briefly made an
+*unmutated* file behave like a *mutated* one when invoked directly via
+`python3 -c` (not through `python -m unittest`, which does its own
+discovery-time import and wasn't affected). Caught it by noticing the
+result was inconsistent with an identical check five minutes earlier, and
+resolved by deleting `__pycache__` before re-testing. Worth remembering:
+after any manual `sed`-in-place mutation-and-restore loop, clear
+`__pycache__` before trusting a fresh interpreter session's output,
+especially when checking a single flag function directly rather than
+through the full suite.
+
+**End-to-end pipeline check** (mandatory after touching `flags.py`,
+including test-only changes): ran the CLI on two hand-written samples.
+A clean profile (named subject, one attributable DOI, credentials matching
+claimed field, no hype) came back `PASSED` on Buzzword Density and No
+Verifiable Output, `INSUFFICIENT DATA` overall (14% coverage, no name/
+`--verify` — expected, this profile is short). A deliberately larpy profile
+("visionary disruptor... paradigm-shifting... synergy-driven... raising a
+seed round... massive market traction") triggered Buzzword Density (8
+distinct terms, 19.6/100 words) and Fundraising Without Traction, as
+expected. Confirms the real pipeline reaches `f_buzzwords` as intended —
+this change was test-only, but the failure pattern this project is
+watching for is exactly "a unit test called the function directly and
+never confirmed the pipeline reaches it the same way", so ran it anyway.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Refuted (with a live repro, not by re-reading the old write-up)**: the
+  2026-08-27 entry's claim that `verify.py`'s `verify_institution`
+  `if wanted and wanted <= have:` guard was "confirmed still live and
+  unpinned on master". It was not. The guard was pinned on `master` twice
+  before that entry was written — 2026-08-23 (`7d07d08`,
+  `test_a_claim_of_nothing_but_stopwords_cannot_be_verified`) and again
+  2026-08-26 (`test_a_stopword_only_institution_claim_cannot_verify_
+  against_any_hit`, this file's own entry immediately below tonight's).
+  Live-reproduced tonight: mutating that guard on current `master` fails
+  3 tests. The likely mechanism: PRs #4/#6/#7/#9 each branched from
+  `master` *before* 2026-08-23 and so were each individually accurate about
+  the commit they branched from, but by 08-27 the fix had already landed on
+  `master` by a different path, and nobody re-ran the mutation against the
+  actual tip before writing "still live" — see BACKLOG.md's new entry for
+  the fuller account and the lesson for future nights (reproduce against
+  current tip before citing other write-ups as corroboration).
+- **Corrected**: the running backlog tally BACKLOG.md tracks (previously
+  "8/1/6") — see "Backlog tally" above.
+- **Confirmed** (live mutation, not reasoning from the docstring alone):
+  `flags.py`'s buzzword short-text carve-out lower boundary was a real,
+  unpinned gap — see "What I did" above. Now pinned.
+- **Investigated and ruled equivalent, not pinned**: `names.py` line 152
+  (`if not extra or all(w in mine for w in extra):`) and line 59 (the
+  `split`-reading particle filter in `tokens()`). Reasoning in BACKLOG.md's
+  new entry. Neither produced a false `True`/accusation in any scenario
+  tried tonight; recorded rather than dropped in case a future pass finds
+  a scenario this one didn't construct.
+- Did **not** re-verify any BACKLOG.md entry outside tonight's own scope —
+  in particular the 4 still-open CRITICALs and the 25 MAJOR findings were
+  not re-examined tonight.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: 2026-08-16 (12 mutations, 6 real, all pinned) — direct to
+  `master`. Spot-checked again tonight (1 mutation), still caught.
+- `flags.py`: 2026-08-16/17 (33 mutations, 13 real, all pinned) — direct to
+  `master`. **Tonight: full ~7-mutation targeted sweep of numeric/boundary
+  comparisons** (word-count thresholds, buzzword variety/density gates,
+  vague-partnership tie, logo-wall count, future-year and career-length
+  boundaries) — 1 new real survivor found and pinned (the 24-word carve-out
+  above); the other 6 were already caught.
+- `names.py`: full 13-mutation sweep on unmerged `nightly/2026-08-19` (PR
+  #5, still not on `master`). **Tonight: ~9 additional targeted mutations
+  directly against `master`** (script-mismatch guard inversion, mononym
+  branch condition, `present`-count boundary, `at_an_end` `or`→`and`,
+  matched-membership inversion, particle-filter drop in two places) — all
+  caught except the two investigated-and-ruled-equivalent cases above.
+- `verify.py`: full 6-mutation sweep on unmerged `nightly/2026-08-18` (PR
+  #4, still not on `master`). **Tonight: ~9 additional targeted mutations
+  directly against `master`** (GitHub comparable-name threshold, ambiguous-
+  acronym length, GitHub-token host check, HTTP 404/410 handling, arXiv
+  error-page `or`→`and`, stopword-token filter, the `wanted and` guard
+  itself, ROR best-overlap tie-break `>`→`>=`, org-stem `startswith`→
+  `endswith`) — all caught, including a live re-confirmation that the
+  `wanted and` guard (see correction above) is genuinely pinned now.
+
+**All four required files have now had at least one real mutation-testing
+pass directly reflected on `master` itself** (not only on an unmerged
+branch) for every file except the two full sweeps that predate this
+entry and still live only on PRs #4 and #5 — `scoring.py` and `flags.py`
+are the most thoroughly covered; `names.py` and `verify.py` have a mix of
+their original full sweep (unmerged) plus multiple later spot-checks/
+targeted sweeps landed directly on `master`.
+
+### What I learned
+
+- Tonight's biggest finding wasn't a code bug — it was a *process* bug: a
+  two-week-old false claim ("still live and unpinned") survived unnoticed
+  in this file because nobody re-ran the mutation against the current tip
+  before repeating it, and "N independent PRs describe the same thing" was
+  read as corroboration when it was really N branches all forked before a
+  since-landed fix, none of which had rebased. Multiple write-ups agreeing
+  with each other is not the same evidence as one live reproduction against
+  `HEAD`. Given how heavily this project's own process leans on nightly
+  write-ups as the only memory between runs, this is worth taking
+  seriously — a bad note doesn't just waste one night, it compounds.
+- A stale `__pycache__` can make a manual mutation-and-restore loop lie to
+  you when you invoke a function directly rather than through
+  `python -m unittest` — see the process note above.
+- Confirmed by direct construction, not just intuition: `names.py`'s
+  `present`-set construction (searching *the subject's own tokens* against
+  the registry blob, rather than the other way around) has a useful
+  invariant baked in almost by accident — any candidate word that's also
+  one of the subject's own tokens is *always* already counted in `present`
+  before the "does this extra word match the subject's own name" fallback
+  logic ever runs. That's why that fallback's `or` branch is unreachable-
+  when-true. Worth knowing if anyone touches that function: the fallback
+  reads like it's doing real work but, given the current shape of the
+  function, it structurally cannot be.
+
+### What the next run should pick up first
+
+1. **Still a human-merge-queue problem, now worse (7 nights, 10 days).**
+   Nothing new to do about it from inside a nightly run beyond keeping
+   branches small, independent, and visible — see the note at the top of
+   this entry.
+2. **The core gap** (OpenAlex/Crossref hits becoming derived `Claim`s with
+   provenance; a reconciliation step producing real `CONTRADICTED` status)
+   is still fully open beyond the 08-27 visibility slice. Re-verify the
+   OpenAlex rate-limit numbers live before extending that work further —
+   it's been three and a half weeks since they were last checked against a
+   real request.
+3. Before trusting any older NIGHTLY.md/BACKLOG.md claim of the form "still
+   live/unpinned on master" or "N other write-ups agree", reproduce it
+   against the actual current tip first — see "What I learned" above. This
+   applies to every remaining open item in this file, not just the one
+   caught tonight.
+4. `linkedin.py` red-team pass — still due a fresh look once the queue
+   clears (PRs #3/#7's fixes are already on `master`; nobody has done an
+   independent third pass since).

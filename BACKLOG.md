@@ -13,6 +13,93 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Mutation-testing sweep: `flags.py`'s buzzword short-text carve-out, plus two write-up corrections (nightly/2026-09-09)
+
+Mandatory per-cycle mutation pass, all four required files. Systematic sweep
+(~20 hand-applied mutations across `names.py`, `verify.py`, `flags.py`)
+rather than a single spot-check, since a prior night's write-up (see
+correction below) turned out to have reported a false survivor — worth the
+extra rigor of re-confirming CAUGHT results too, not just trusting the
+narrative.
+
+**One real survivor, pinned:** `flags.py`'s `f_buzzwords`, the short-text
+carve-out at `if ctx.word_count < 25:` (line 203), survived a mutation to
+`< 24`. An existing test (`test_buzzword_flag_does_not_use_the_short_text_
+carve_out_at_25_words`, 2026-08-17) pins the *upper* edge — 25 words must
+NOT get the carve-out — but nothing pinned the lower edge, and the two
+directions are not symmetric. A 24-word text with zero buzzwords is PASSED
+either way (the carve-out's "no distinct terms" branch and the ordinary
+density formula both land on 0 distinct — same status, different message),
+which is exactly why a naive "add a boundary test" attempt would still miss
+it. The gap only surfaces with a *sparse hit*: one buzzword in 24 words
+should be UNKNOWN ("too short to judge") under the real `< 25` guard, but
+under the mutated `< 24` it falls through to the ordinary density formula
+(1/24×100 ≈ 4.2%, still under the ≥4-distinct trigger gate) and comes back
+PASSED ("density is normal") — silently manufacturing a decided,
+coverage-counting verdict for a profile with exactly the wrong-sided amount
+of data to tell "no hype" from "too little text to say". Confirmed live:
+the new test fails against the mutated line and passes against the
+restored one. Pinned in `tests/test_flags.py::TestIndividualFlags::
+test_buzzword_flag_still_uses_the_short_text_carve_out_at_24_words`. No
+production change — the guard was already correct, just unasserted in this
+direction.
+
+Every other mutation tried in `names.py` and `verify.py` this pass was
+already caught by the existing suite (see NIGHTLY.md's 2026-09-09 entry for
+the full list attempted). Two were investigated as possible survivors and
+ruled out as equivalent mutants rather than pinned: `names.py`'s
+`if not extra or all(w in mine for w in extra):` (line 152) is provably
+unreachable-when-true in its `or`-branch, because any candidate word that
+is also one of the subject's own tokens would already have been counted in
+`present` earlier in the function, contradicting the `len(present) == 1`
+branch it sits inside — so `and` in place of `or` cannot change any
+reachable outcome. `names.py`'s particle filter on the un-hyphenated
+`split` reading of `tokens()` (line 59) has the same non-effect in the
+scenarios checked: dropping it lets a particle leak into `mine`'s token
+count, but the later `parts` recomputation inside `name_matches` re-applies
+its own particle filter independently, and in every scenario tried this
+downgrades an already-correct `False` (confident mismatch) to `None`
+(unanswerable) rather than ever producing a wrong `True` — the safe
+direction per this project's own governing value, not a new accusation
+risk. Recorded here rather than silently dropped, since either could
+still matter for a scenario this pass didn't think to construct.
+
+**Correction to the 2026-08-27 entry below** ("Mutation-testing spot-check:
+`names.py`'s 'zero usable candidates' guard confirmed still live on
+master"): that entry also claimed `verify.py`'s `verify_institution`
+`if wanted and wanted <= have:` guard was "confirmed still live and
+unpinned on master", re-found independently on four then-open PRs
+(#4/#6/#7/#9). This was wrong, and had been wrong since before it was
+written. Direct history check: the guard was pinned on `master` via commit
+`7d07d08` on 2026-08-23 (`test_verify.py::
+test_a_claim_of_nothing_but_stopwords_cannot_be_verified`), four days
+*before* the 08-27 entry, and re-pinned a second time by this file's own
+2026-08-26 entry immediately above
+(`test_a_stopword_only_institution_claim_cannot_verify_against_any_hit`) —
+one day before the 08-27 entry claimed it was unpinned. Live-reproduced
+tonight on current `master`: mutating that exact guard now fails 3 tests
+(one in `test_mutation_guards.py`, two in `test_verify.py`), confirming
+it is caught, not exposed. The likely cause: PRs #4/#6/#7/#9 were all
+independently branched from `master` *before* the 08-23 fix landed, so
+their own descriptions were accurate for the commit they branched from —
+but by the time the 08-27 nightly run wrote "still live... unpinned on
+master", the fix had already reached `master` twice over, and nobody
+re-ran the mutation to check before asserting it as a live finding. Lesson
+for future nights: "matches N other independent write-ups" is not the same
+as "reproduced against the actual current tip" — reproduce live before
+citing agreement as corroboration, especially once several nights have
+passed and unrelated commits may have already landed the fix another way.
+
+**Also corrects the running backlog tally**, which the same 08-27 entry
+carried forward as "8 [FIXED] / 1 [PARTIALLY FIXED] / 6 still open". A
+fresh direct count against `BACKLOG.md`'s current `## CRITICAL (15)`
+section (`grep -c` on the section's own `### ` headers, not a remembered
+figure) gives **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open** — the
+count itself has not changed since 08-27 (no CRITICAL item was marked
+either way in between), so 8/1/6 appears to have been a miscount at the
+time it was written, not a stale-but-then-accurate figure. See NIGHTLY.md's
+2026-09-09 entry for the full per-item breakdown.
+
 ### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
 
 Not a full sweep (that's `nightly/2026-08-18`'s and `nightly/2026-08-19`'s work, still

@@ -1964,3 +1964,235 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+---
+
+## 2026-09-10 (nightly run)
+
+### ⚠ Open-PR queue — read this first: eight unmerged `nightly/*` PRs, eleven days and counting, zero merges since 2026-08-27
+
+**This is now the single most important fact in this file.** `master`'s tip
+is still the 2026-08-27 merge (`9f71c98`) — nothing has landed since. Every
+PR below is based cleanly on that exact commit, `mergeable_state: clean`,
+draft, no CI configured on this repo, zero review comments on any of them:
+
+| PR | Branch | What it claims |
+|----|--------|-----------------|
+| #11 | `nightly/2026-08-30` | Flags an OpenAlex "best" pick that's likely a merged entity (core-gap disambiguation groundwork) |
+| #12 | `nightly/2026-08-31` | An ordinary CV was mistaken for a LinkedIn paste and silently lost content |
+| #13 | `nightly/2026-09-01` | Confidential and pre-revenue work is not deception (partial fix; also found, did not fix, the newline-negation bug #14 later closed) |
+| #14 | `nightly/2026-09-02` | A word-wrap can hide a denial from `is_negated` |
+| #15 | `nightly/2026-09-03` | A fixed-width context window clipped a disclaiming phrase far from its identifier |
+| #16 | `nightly/2026-09-04` | A self-applied doctoral title in lowercase or all-caps was invisible to flag 13 (plus 3 pinned mutation survivors: `scoring.py` category-exclusion, flag 13's tail-window cap, `verify.py`'s ROR tie-break) |
+| #17 | `nightly/2026-09-08` | A current student's own study dates read as a fabricated future claim (part (b) of the timeline-fairness finding; part (a) still open) |
+| #18 | `nightly/2026-09-09` | Mutation-testing sweep + a correction to a two-week-old stale "still unpinned" claim in this very file |
+
+Every one of #11–#18 is small, independently authored, and (per each PR's own
+description, re-checked against the file lists above) touches disjoint or
+near-disjoint files — this was never a conflict problem. It is purely a
+"nobody has pressed merge in eleven days" problem, restated by five separate
+nightly entries in a row (08-27, 09-01, 09-02, 09-03, 09-04, 09-08, 09-09,
+now this one) with escalating counts (5 → 6 → 7 → 8 deep) and zero response.
+Tonight's own branch is cut fresh from `master`'s tip regardless, per the
+standing instructions, and touches only `larp_meter/report.py` and two test
+files — none of which any of #11–#18 touch, so it should not conflict with
+any of them at merge time.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight.**
+Re-counted directly against `master`'s current `BACKLOG.md` (`grep "^### "`
+under `## CRITICAL (15)`), not carried forward from the 2026-09-09 entry's
+own correction — matches it exactly, and nothing in the CRITICAL section
+changed tonight (tonight's fix is filed under "Shipped since the original
+review," like most nightly work, not against one of the 15 named findings).
+The 4 still open are the core one-way/claim-anchored funnel finding and its
+three near-duplicate write-ups from the original 5-lens review.
+
+### What I did
+
+**Primary item:** found and fixed a real, live bug in `report.py`'s
+`caveats()` — a file with no full mutation-testing pass on record and
+untouched by any of the eight then-open PRs, chosen specifically so tonight's
+branch could not conflict with or duplicate any of them. `caveats()`'s single
+most consequential disclaimer ("Nothing here was checked against an outside
+source... treat a clean result as 'no internal contradictions found', not as
+corroboration") only ever checked `signals["wikipedia_about_subject"]` before
+deciding whether real outside-source corroboration existed — it never
+checked `signals["openalex"]`, even though flag 6 (`f_output`) reads that
+exact signal to PASS with "Independent scholarly record found: N works with M
+citations (OpenAlex)." Both signals come from the same 2026-08-15
+`_subject_registry_signals` gather; the caveat logic simply never learned
+about the second one.
+
+Confirmed live before writing anything: `caveats({"level": "GREEN",
+"verification_effective": False, "signals": {"openalex": {"works": 12,
+"citations": 340}}})` still returned the "own account" disclaimer — a
+subject with zero identifiers in their bio but a real, name-matched OpenAlex
+author record (exactly the case the 2026-08-15 work exists to give credit
+for) got told nothing had been externally checked, directly contradicting
+flag 6's own PASSED evidence one section down in the same report. This
+doesn't move a score or manufacture an accusation, but it actively misleads a
+reader about how much of a clean verdict rests on self-report versus a real
+outside source — precisely the distinction this caveat exists to draw, and
+precisely the kind of thing an honest, well-documented researcher with no
+DOIs in their bio would be shortchanged by.
+
+Wrote 2 tests in `tests/test_report.py` first (the fix itself, mirroring the
+existing `wikipedia_about_subject` test exactly; and a negative-control
+guarding the fix from overcorrecting — a completed-but-empty OpenAlex search,
+`signals["openalex"]` is `None`, the genuine "asked and found nothing" case
+the 2026-08-27 entry made visible, must still get the full caveat), watched
+the first fail against the repro above, then fixed `caveats()` to also treat
+`scholar and scholar.get("works")` (mirroring flag 6's own truthiness check
+verbatim) as corroboration alongside `wikipedia_about_subject`.
+
+**End-to-end pipeline check, mandatory per this repo's own recurring lesson**
+(a component correct in isolation while the real pipeline never reaches it —
+the ROR/HANDLERS bug, the `_attribute`/`None` bug): added
+`tests/test_cli_registry_wiring.py::test_a_real_openalex_hit_silences_the_own_account_caveat`,
+running the real `cmd_text` → `run_audit` → `caveats` chain with the network
+stubbed, confirming `_subject_registry_signals`'s OpenAlex signal reaches
+`caveats()` in the exact shape it actually produces (`{"works": N,
+"citations": M, "institutions": [...], "orcid": ..., "display_name": ...}`),
+not just a hand-built dict shaped the way I assumed in the report.py-only
+test. This one bio needed care to construct: it has to reach GREEN/YELLOW
+(enough decided flags) while carrying zero identifier-claims of any subtype
+in `verify.HANDLERS` (so `verification_effective` stays False and the caveat
+condition is actually reachable) — a degree/institution claim alone would
+have made `verification_effective` True via ROR dispatch and hidden the gap
+entirely. Confirmed this test fails identically to the isolated repro when
+run against the code with the fix reverted (checked by temporarily restoring
+the pre-fix condition and re-running both new tests, then restoring the fix
+and re-running the full suite to confirm nothing was left mutated).
+
+Mutation-tested the new code directly: dropping the new `and not (scholar
+and scholar.get("works"))` clause entirely, and renaming the `"works"` key to
+a wrong one — both caught by the new tests. Full suite: 473 → 476 tests,
+green throughout.
+
+Also ran the CLI directly on two hand-written samples (`--file`, no
+`--verify`, since a live registry call isn't reproducible in this sandbox and
+the network-stubbed unittest above is the rigorous version of this same
+check): a clean engineer bio with real, concrete deal terms landed GREEN
+17/100 with a genuine Timeline flag TRIGGERED on a real dating gap (correct —
+not this fix's concern) and the "own account" caveat present (correct, since
+no `--verify`/OpenAlex signal was in play at all here); a hype-heavy
+fabricator bio landed GREEN 0/100 pre-`--verify`, also as expected for that
+sample. Neither hand run exercises the specific OpenAlex-signal path (that
+needs a stubbed registry response, which only the unittest above can give
+deterministically) — the stubbed end-to-end test is the actual proof this
+change works through the real pipeline, not these two.
+
+**Cross-boundary check (per the standing review question):** `caveats()`'s
+signature and return type (a list of strings) are unchanged — only an
+internal boolean condition changed — so every caller (`render_terminal`,
+`render_markdown`, `render_html`) needed no changes and is exercised by the
+existing renderer tests, which all stayed green.
+
+**Mandatory per-cycle mutation-testing spot-check**, one mutation in each of
+the four required files, run against the full suite, then reverted:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `LEVELS` cut boundary: `larp < cut` → `larp <= cut` | **Caught** (3 failures) |
+| `names.py` | `name_matches`'s `if len(present) >= 2:` → `>= 3` | **Caught** (18 failures + 6 errors) |
+| `verify.py` | `verify_institution`'s `if wanted and wanted <= have:` → `if wanted <= have:` | **Caught** (3 failures) |
+| `verify.py` | ROR nearest-name tie-break: `if overlap > best_overlap:` → `>=` | **SURVIVED** — see below |
+| `flags.py` | `f_contradicted`'s `if refuted or mismatched:` → `and` | **Caught** (4 failures) |
+
+**The `verify.py` tie-break survivor is not new** — it's the identical
+mutation `nightly/2026-09-04` (PR #16) already found and pinned with
+`test_nearest_name_tie_break_is_deterministic_not_last_writer_wins`, but that
+fix exists only on PR #16's unmerged branch, so `master` itself is still
+exposed to it. Per the 2026-08-27 entry's own precedent for this exact
+situation ("the actual fix here is merging... not writing this test again"),
+did **not** write a second copy of the same pin — recorded in BACKLOG.md
+instead. Every other mutation tried tonight remains caught; no new
+production gap found in the four standing files.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **New finding, confirmed live and fixed**: the "own account" caveat's
+  Wikipedia-only corroboration check, blind to a genuine OpenAlex hit. Full
+  write-up filed under "Shipped since the original review."
+- **Re-confirmed live, not duplicated**: `verify.py`'s ROR tie-break
+  (`>` → `>=`) is still a real, live, unpinned survivor on `master` — matches
+  PR #16's description exactly, four days old, still unmerged.
+- **Re-confirmed live**: the backlog tally (10/1/4 of 15 CRITICALs) is
+  unchanged and matches the 2026-09-09 entry's own corrected count exactly —
+  counted directly, not carried forward.
+- Did **not** re-verify any other BACKLOG.md entry tonight, including the 4
+  still-open CRITICALs, PR #17's still-open timeline part (a), or the
+  `re.I`-audit lead from 2026-09-04's entry. None of those were touched or
+  re-derived.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: full sweep 2026-08-16. Spot-checked again tonight (fresh
+  line, `LEVELS` cut boundary) — still caught.
+- `names.py`: full sweep 2026-08-19 (merged). Spot-checked again tonight
+  (fresh line, `present`-count boundary) — still caught.
+- `verify.py`: full sweep 2026-08-18 (merged) plus several later spot-checks
+  (merged). Tonight: the `wanted <=` guard is still caught; the ROR tie-break
+  is a confirmed-live, still-unpinned survivor whose fix sits only on
+  unmerged PR #16 — see above.
+- `flags.py`: full sweeps 2026-08-16/17 (merged). Spot-checked again tonight
+  (fresh line, `f_contradicted`'s `or`/`and`) — still caught.
+- `report.py`: **first mutation-testing attention this file has had** — not
+  one of the four standing files, but tonight's own new code in it was
+  mutation-tested directly (see "What I did" above), both mutations caught.
+  The rest of `report.py` (the renderers, `_esc`/`_safe_href`'s HTML-escaping
+  logic, `save_all`'s path handling) has never had a dedicated sweep — worth
+  a full pass some future night given it's the one file that formats what a
+  human actually reads.
+
+### What I learned
+
+- The "own account" caveat and flag 6's `f_output` read the identical
+  `signals["openalex"]` value but had drifted to disagree about what counts
+  as corroboration — flag 6 checks `scholar and scholar.get("works")`
+  directly, `caveats()` checked nothing at all. Two consumers of the same
+  signal silently diverging is the same shape of risk as the `_attribute`/
+  `None` cross-boundary bug this project's own standing instructions call
+  out by name; worth grepping for other places `ctx.signals`/`report["signals"]`
+  is read in more than one file and checking each reader agrees on what a
+  given value means, rather than assuming a signal's meaning is obvious from
+  its name.
+- A hand-built report dict test (report.py alone) and a real stubbed-pipeline
+  test (through `cmd_text`) caught the identical bug identically here — but
+  constructing the pipeline version surfaced a real constraint the isolated
+  version didn't (needing a bio with decided flags yet zero
+  `HANDLERS`-dispatchable claims, since a degree/institution claim alone
+  flips `verification_effective` to True via ROR dispatch and hides the
+  gap). Worth remembering: the "real pipeline" version of a test is not just
+  a formality, it can force you to construct a more precise fixture than the
+  unit-level one would have needed.
+- The open-PR queue's own count (8 now) is no longer just a "flag it and
+  move on" line — it has been repeated at escalating counts for eleven
+  straight nights with zero response. Nothing in this file's advice changes
+  as a result (still not a nightly run's call to merge anything), but it's
+  worth being explicit that restating the same fact for an eleventh night
+  running is itself informative: whatever mechanism is supposed to review
+  and merge these has not engaged with this project in over a week and a
+  half.
+
+### What the next run should pick up first
+
+1. **The open-PR queue — eight deep, eleven days, zero merges.** Still not
+   something a nightly run can fix directly. Keep restating it prominently;
+   consider that if it reaches a fifteenth night with no movement, that's
+   worth a stronger statement in this file than a table, since the
+   escalating-and-ignored pattern is itself now the notable fact.
+2. **The core gap** — unchanged from every entry since 2026-08-15. Still the
+   single biggest lever in the codebase; PR #11's unmerged `merge_risk`
+   groundwork is still the only progress toward it anywhere, merged or not.
+3. `report.py` has never had a full mutation-testing sweep — only tonight's
+   own new lines were tested directly. `_esc`/`_safe_href`'s escaping logic
+   in particular guards against a hostile bio injecting into the HTML
+   report and would benefit from one.
+4. PR #17's still-open "Timeline flag accuses ordinary CVs" part (a) — the
+   recent-roles-only false accusation — still needs the semantic distinction
+   its own write-up describes (a "founded X" origin date vs. an ordinary
+   "has led since" role-change date) before it can be fixed without
+   reintroducing a different false accusation.

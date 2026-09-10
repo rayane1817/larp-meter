@@ -82,6 +82,29 @@ class TestCaveats(unittest.TestCase):
         corroborated = audit(self.RICH, signals={"wikipedia_about_subject": ["Some Person"]})
         self.assertFalse([c for c in caveats(corroborated) if "own account" in c])
 
+    def test_the_caveat_is_dropped_when_openalex_corroborates_and_wikipedia_does_not(self):
+        """The 'own account' caveat only ever checked `wikipedia_about_subject`,
+        never `signals["openalex"]` -- but flag 6's own PASSED evidence
+        ("Independent scholarly record found... (OpenAlex)") is exactly the
+        kind of outside-source corroboration this caveat exists to detect.
+        A subject with no identifiers in their bio who genuinely has a
+        matching OpenAlex author record (real works, real citations) got the
+        caveat anyway, purely because nothing set `wikipedia_about_subject`
+        too -- telling the reader 'nothing here was checked against an
+        outside source' about a report whose flag 6 evidence, one section
+        down, says the opposite."""
+        scholar = {"works": 12, "citations": 340, "display_name": "Some Person"}
+        corroborated = audit(self.RICH, signals={"openalex": scholar})
+        self.assertFalse([c for c in caveats(corroborated) if "own account" in c])
+
+    def test_the_caveat_survives_a_genuine_negative_openalex_search(self):
+        """The fix above must not overcorrect: a completed OpenAlex search
+        that found nothing (`signals["openalex"]` is `None`, the real
+        "asked, and found nothing" shape from cli._subject_registry_signals)
+        is not corroboration and must not silence the caveat."""
+        no_hit = audit(self.RICH, signals={"openalex": None})
+        self.assertTrue([c for c in caveats(no_hit) if "own account" in c])
+
     def test_caveats_never_raise_on_a_minimal_report(self):
         self.assertIsInstance(caveats({}), list)
 

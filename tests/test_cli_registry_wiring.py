@@ -89,6 +89,43 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
         self.assertIn("OpenAlex", flag6["description"])
         self.assertEqual(report["signals"]["openalex"]["works"], 11)
 
+    def test_a_real_openalex_hit_silences_the_own_account_caveat(self):
+        """Real pipeline, not report.py's `caveats()` tested in isolation:
+        report.caveats' "Nothing here was checked against an outside source"
+        disclaimer only ever checked `signals["wikipedia_about_subject"]`,
+        never `signals["openalex"]` -- so a subject with no identifiers at
+        all, but a genuine matching OpenAlex author record (flag 6 PASSED,
+        "Independent scholarly record found... (OpenAlex)"), still got told
+        nothing had been checked against an outside source. This runs the
+        real `cmd_text` -> `run_audit` -> `caveats` chain end to end to
+        confirm `_subject_registry_signals`'s OpenAlex signal actually reaches
+        `caveats()` in the shape it expects (`{"works": N, ...}`), not just
+        that report.py's own unit tests pass a hand-built dict of that shape."""
+        bio = ("CTO at Marrow Robotics. Ten years of experience as an engineer. "
+               "40 customers, 2.1M revenue in 2024. Funded by a grant; contract with a "
+               "port authority. Featured in Reuters. Partnership with Orion Systems; we "
+               "co-authored a joint paper. Not fundraising.")
+        args = build_parser().parse_args([
+            "--text", bio, "--name", "Sofia Almeida", "--verify", "--quiet", "--no-save",
+        ])
+        sofia_openalex_body = json.dumps({"results": [
+            {"id": "https://openalex.org/A9", "display_name": "Sofia Almeida", "works_count": 11,
+             "cited_by_count": 429, "last_known_institutions": [{"display_name": "Marrow Robotics"}]},
+        ]})
+        fetcher = _stub_fetcher({"wikipedia.org": json.dumps({"query": {"search": []}}),
+                                 "openalex.org": sofia_openalex_body})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+            report = cmd_text(args, "Sofia Almeida", bio)
+        # Confirms this test actually exercises the gap: no identifier-keyed
+        # claim was dispatched, and no Wikipedia hit either -- OpenAlex is the
+        # only source of any outside corroboration in this report.
+        self.assertFalse(report["verification_effective"])
+        self.assertFalse(report["signals"].get("wikipedia_about_subject"))
+        self.assertEqual(report["signals"]["openalex"]["works"], 11)
+        self.assertIn(report["level"], ("GREEN", "YELLOW"))
+        from larp_meter.report import caveats
+        self.assertFalse([c for c in caveats(report) if "own account" in c])
+
     def test_duckduckgo_is_not_queried_from_text_mode(self):
         """DuckDuckGo returns hits for the NAME, not the subject. Pulling its
         general web-search results into a text audit's evidence would credit

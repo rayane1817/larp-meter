@@ -86,9 +86,19 @@ def caveats(report):
     # The most important thing a reader can misunderstand. Nothing in text mode
     # establishes that a claim is TRUE — only that the profile is internally
     # consistent and specific. A fabricated bio that asserts the right things
-    # passes, and does so easily.
+    # passes, and does so easily. `verification_effective` alone is not enough
+    # to know that, though: it only tracks claims dispatched through
+    # verify.py's identifier-keyed HANDLERS, never the subject-anchored
+    # OpenAlex signal flag 6 reads directly (cli._subject_registry_signals).
+    # A profile with no identifiers at all can still earn a genuine PASSED
+    # from a real OpenAlex author match — real works, real citations — and
+    # `signals["openalex"]` is `None`, not just falsy-and-absent, only when a
+    # search genuinely completed and found nothing (see flags.py's
+    # `_openalex_search_note`), so that distinction is safe to reuse here too.
+    scholar = signals.get("openalex")
     if (report.get("level") in ("GREEN", "YELLOW") and not report.get("verification_effective")
-            and not (report.get("signals") or {}).get("wikipedia_about_subject")):
+            and not signals.get("wikipedia_about_subject")
+            and not (scholar and scholar.get("works"))):
         out.append("Nothing here was checked against an outside source: the passing flags rest on "
                    "the subject's own account of themselves. A well-written fabrication passes "
                    "this easily — treat a clean result as 'no internal contradictions found', "

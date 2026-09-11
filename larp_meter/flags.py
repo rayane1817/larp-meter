@@ -498,6 +498,27 @@ def f_contradicted(ctx):
                       f"against. Existence alone is not confirmation.")
 
 
+# A single "since 2021 has led the team" is not evidence the profile "plausibly
+# covers the whole career" — it is the single most common CV/LinkedIn shape,
+# and by itself says nothing about how long the person worked before that
+# date. The duration comparison below only runs when the earliest date is
+# anchored to something that plausibly marks where a career could first have
+# started: an education claim (the year appears in a degree/institution
+# claim's own context) or an explicit founding/origin phrase ("founded the
+# lab in 2009") — or when the date already accounts for the claimed duration
+# on its own, in which case there is nothing to falsify either way. Without
+# one of those, an unmentioned earlier career is missing information, not a
+# contradiction, per BACKLOG.md's "Timeline flag accuses ordinary CVs" finding.
+_CAREER_ORIGIN_RE = re.compile(
+    r"\b(?:founded|co-founded|founding|established|launched|graduated|started|began)\b", re.I)
+
+
+def _is_career_start_anchor(year, year_context, degree_contexts):
+    if _CAREER_ORIGIN_RE.search(year_context or ""):
+        return True
+    return any(str(year) in ctxt for ctxt in degree_contexts)
+
+
 # ── 12. Timeline implausibility (new in v3) ──────────────────────────────
 @flag(12, "Timeline Implausibility", 1.5, CREDENTIALS,
       "Do the claimed dates and durations fit into a single human career?")
@@ -506,7 +527,9 @@ def f_timeline(ctx):
     # Only retrospective years. Forward-looking targets ("deployment is targeted
     # for 2030") are goals, not claimed history, and were being reported as a
     # fabricated timeline.
-    years = sorted({int(c.value) for c in ex.claims_by(ctx.claims, "timeline", "year")})
+    year_claims = ex.claims_by(ctx.claims, "timeline", "year")
+    year_context = {int(c.value): c.context for c in year_claims}
+    years = sorted(year_context)
     if not exp_claims and not years:
         return FlagResult(UNKNOWN, "No dates or durations stated.")
 
@@ -516,20 +539,29 @@ def f_timeline(ctx):
         problems.append(f"date(s) stated as past but in the future: {', '.join(map(str, future))}")
 
     parsed = [n for n in (ex.experience_years(c.value) for c in exp_claims) if n]
+    duration_tested = False
     if parsed and years:
         claimed = max(parsed)
         earliest = min(years)
         available = ctx.now_year - earliest
-        # +3 years of slack: careers can predate the earliest date a bio happens to mention
-        if claimed > available + 3:
-            problems.append(
-                f"claims {claimed} years of experience, but the earliest date anywhere in the "
-                f"profile is {earliest} — at most ~{available} years are accounted for")
+        degree_contexts = [c.context for c in ex.claims_by(ctx.claims, "degree")]
+        if available >= claimed or _is_career_start_anchor(earliest, year_context[earliest], degree_contexts):
+            duration_tested = True
+            # +3 years of slack: careers can predate the earliest date a bio happens to mention
+            if claimed > available + 3:
+                problems.append(
+                    f"claims {claimed} years of experience, but the earliest date anywhere in the "
+                    f"profile is {earliest} — at most ~{available} years are accounted for")
 
     if problems:
         return FlagResult(TRIGGERED, "Timeline does not add up: " + "; ".join(problems) + ".", problems)
-    if parsed and years:
+    if duration_tested:
         return FlagResult(PASSED, "Claimed durations are consistent with the dates given.")
+    if parsed and years:
+        return FlagResult(UNKNOWN,
+                          "A claimed duration cannot be tested against a single date that isn't "
+                          "tied to an education or founding event — an earlier, undated part of "
+                          "the career is missing information, not a contradiction.")
     return FlagResult(UNKNOWN, "Not enough dated detail to test the timeline.")
 
 

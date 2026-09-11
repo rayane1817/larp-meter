@@ -309,6 +309,41 @@ class TestTimelineFlag(unittest.TestCase):
     def test_unknown_without_dates(self):
         self.assertEqual(status_of("I build robots and enjoy it a great deal.", 12), UNKNOWN)
 
+    def test_a_long_career_with_only_a_recent_role_date_is_not_accused(self):
+        """BACKLOG.md's fairness finding: the single most common CV/LinkedIn
+        shape is to date only the current or most recent role ("since 2021
+        has led the team") and leave the rest of a long career undated. The
+        flag used to compare the claimed 12 years directly against 2021 and
+        declare a truthful engineer's timeline impossible — an unmentioned
+        earlier career is missing information, not a contradiction."""
+        text = ("Twelve years designing radiation-tolerant power electronics for "
+                "satellite platforms. Since 2021 has led the analogue team. MSc in "
+                "Electrical Engineering.")
+        self.assertEqual(status_of(text, 12), UNKNOWN)
+
+    def test_two_recent_role_dates_alone_still_dont_anchor_a_career(self):
+        """Matches BACKLOG.md's own 'fails on' example almost exactly: a
+        25-year veteran who lists only her last two dated roles. Neither
+        date is an education or founding date, so two of them are still not
+        enough to know how long she worked before either one."""
+        text = ("Twenty-five years leading power electronics teams. Senior "
+                "engineer since 2010; became head of the analogue group in 2021.")
+        self.assertEqual(status_of(text, 12), UNKNOWN)
+
+    def test_an_education_date_still_anchors_the_comparison(self):
+        """The fix must not overcorrect into silence: an education date is
+        exactly the kind of anchor that legitimately marks when a career
+        could first have started, so a genuine contradiction against it
+        must still trigger."""
+        text = "30 years of experience in robotics. MSc Robotics, 2020."
+        self.assertEqual(status_of(text, 12), TRIGGERED)
+
+    def test_a_founding_date_still_anchors_the_comparison(self):
+        """Same as above for the other existing anchor: founding a venture
+        is an explicit origin event, not an ordinary role-change date."""
+        text = "30 years of experience in robotics. Founded the lab in 2020."
+        self.assertEqual(status_of(text, 12), TRIGGERED)
+
 
 class TestTitleInflationFlag(unittest.TestCase):
     """Flag 13. One positive fixture proving it fires on the archetype it was

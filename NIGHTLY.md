@@ -1964,3 +1964,90 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+---
+
+## 2026-09-11 (nightly run)
+
+### ⚠ Open-PR queue — read this first: NINE unmerged `nightly/*` PRs, fifteen days and counting, zero merges since 2026-08-27
+
+**This is still, by far, the single most important fact in this file, and it has gotten worse every night it's been reported.** `master`'s tip is unchanged since the 2026-08-27 merge (`9f71c98`) — every entry this file records after that point (2026-08-30 through 2026-09-10, nine nights in a row) exists only on its own unmerged branch, never on `master`. All nine PRs below are `mergeable_state: clean`, draft, no CI configured on this repo, and have received zero review comments:
+
+| PR | Branch | What it claims |
+|----|--------|-----------------|
+| #11 | `nightly/2026-08-30` | Flags an OpenAlex "best" pick that's likely a merged entity (core-gap disambiguation groundwork) |
+| #12 | `nightly/2026-08-31` | An ordinary CV was mistaken for a LinkedIn paste and silently lost content |
+| #13 | `nightly/2026-09-01` | Confidential and pre-revenue work is not deception |
+| #14 | `nightly/2026-09-02` | A word-wrap can hide a denial from `is_negated` |
+| #15 | `nightly/2026-09-03` | A fixed-width context window clipped a disclaiming phrase far from its identifier |
+| #16 | `nightly/2026-09-04` | A self-applied doctoral title in lowercase or all-caps was invisible to flag 13, plus a pinned ROR nearest-name tie-break mutation survivor |
+| #17 | `nightly/2026-09-08` | A current student's own study dates read as a fabricated future claim (timeline part (b) — see this entry's own primary item for part (a)) |
+| #18 | `nightly/2026-09-09` | Mutation-testing sweep + a correction to a stale claim in this file |
+| #19 | `nightly/2026-09-10` | The "own account" caveat only credited Wikipedia, never a genuine OpenAlex hit |
+
+Every one of #11–#19 is small and independently authored, and each touches disjoint or near-disjoint files from the others — per every prior entry's own re-checking, this has never been a merge-conflict problem. It is a "nobody has pressed merge in over two weeks" problem, restated by name in the 2026-08-27, 09-01, 09-02, 09-03, 09-04, 09-08, 09-09, and 09-10 entries, at escalating counts each time (5 → 6 → 7 → 8 → 9 deep) with no response of any kind. Tonight's own branch (`nightly/2026-09-11`) is cut fresh from `master`'s tip regardless, per the standing instructions, and touches only `larp_meter/flags.py` and `tests/test_flags.py` — a file none of #11–#19 touch (checked against each PR's own file list), so it should not conflict with any of them.
+
+**Given fifteen days and nine PRs of zero engagement, this run also sent a push notification flagging the queue directly to the human maintainer** rather than only restating it here for the tenth time — see the end of this session for that message. This doesn't change anything about tonight's own work (still small, still independent, still not a nightly run's job to merge), just makes sure the fact reaches a human through a channel that doesn't require reading NIGHTLY.md.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight**, recounted directly against `master`'s current `BACKLOG.md` (grepping `^### ` under the `## CRITICAL (15)` section), matching the 2026-09-09/09-10 entries' own count exactly. Tonight's fix (below) is filed under "Shipped since the original review" against a MAJOR-severity finding, not one of the 15 CRITICALs, so the tally itself doesn't move. The 4 still-open CRITICALs remain the core one-way/claim-anchored funnel finding and its three near-duplicate write-ups from the original five-lens review.
+
+### What I did
+
+**Primary item:** fixed BACKLOG.md's "Timeline flag accuses ordinary CVs" finding, part (a) — the recent-roles-only false accusation, chosen because it's a fairness bug (punishes the single most common honest CV/LinkedIn shape), it was still fully unverified going into tonight, and it touches only `flags.py`/`tests/test_flags.py`, files none of the nine open PRs touch.
+
+Confirmed live before writing anything: `f_timeline` on "Twelve years designing radiation-tolerant power electronics for satellite platforms. Since 2021 has led the analogue team. MSc in Electrical Engineering." returned **TRIGGERED** — "claims 12 years of experience, but the earliest date anywhere in the profile is 2021 — at most ~5 years are accounted for." The only date this bio states is when she took on her *current* role; the flag was reading that as when her entire career began. Exactly BACKLOG's own claim, reproduced exactly.
+
+Wrote 4 tests in `tests/test_flags.py::TestTimelineFlag` first and watched 2 of them fail against the unmodified code (the false-accusation cases: the bio above, and BACKLOG's own "25-year veteran who lists only her last two dated roles" example); the other 2 (a genuine education-anchored contradiction, a genuine founding-anchored contradiction) already passed against the old code and exist to prove the fix doesn't overcorrect into silence.
+
+Fixed `f_timeline` in `larp_meter/flags.py`: the claimed-years-vs-earliest-date comparison now only runs when the earliest dated year is a **career-start anchor** — its value appears inside a degree/institution claim's own extracted `context` string (an education date), or its own context contains an explicit origin verb (`founded|co-founded|founding|established|launched|graduated|started|began`) — or when the earliest date already covers the claimed duration on its own (nothing to falsify regardless). Without an anchor, the flag now returns UNKNOWN with an honest reason instead of TRIGGERED.
+
+**Why an anchor via `context`-substring rather than tracking match positions properly:** `Claim` doesn't currently carry character offsets, only a pre-rendered `context` snippet (whitespace-collapsed, ±30 chars around the original match). Adding real position tracking to `Claim` and every extractor would be a much larger, riskier change than one night's "smallest safe slice" calls for. The substring check has a narrow false-positive surface (a coincidental exact-year digit string inside another claim's ±30-char window) that I judged acceptable for this scope; flagged in the diff's own comment for whoever eventually adds position tracking to `extract.py`.
+
+**Getting the anchor wording right took two iterations, not one — worth recording so the next run doesn't redo this thinking.** My first pass required either "an explicit degree-anchored year" or "≥2 distinct years in the profile" (reasoning: a fuller timeline should have more than one dated point). That broke a currently-pinned mutation-guard test, `test_career_slack_is_exactly_three_years` ("20 years of experience in robotics. Founded the lab in 2009." — one year, no degree, expected PASSED/TRIGGERED at the exact +3 slack boundary). The actual reason that test is legitimate is that "Founded the lab in 2009" is itself an origin-marking event, not a mid-career date — a distinction "≥2 years" can't see but a founding-verb check can. Second pass added the origin-verb regex instead of the year-count heuristic, which is what's in the fix now. Also had to broaden the regex from requiring "started the company/venture/lab/..." to a bare `started`/`began`, because `test_the_current_year_is_not_a_future_date`'s fixture ("2 years of experience in robotics. Started in 2026.") uses the bare verb with no following object noun. Both iterations were caught by running the *existing* suite, not by anticipating them — a reminder that "run the full suite after every attempt," not just the new tests, is what actually catches this kind of interaction.
+
+**Cross-boundary check (per the standing review question):** `f_timeline`'s signature and return type (`FlagResult` with the same three status values) are unchanged; only its internal logic and one of its UNKNOWN description strings changed. Grepped every caller — `evaluate()` iterates `REGISTRY` generically and treats all three statuses identically regardless of flag; `scoring.py` reads `.status` off the generic `FlagResult`, same as any other flag; nothing anywhere pattern-matches on flag 12's specific description text (grepped for the two changed strings — only `flags.py` itself and this file's own BACKLOG history mention them). No caller needed to change and none is silently mishandling a new case, because no new *status value* was introduced — only a different UNKNOWN message and a narrower TRIGGERED condition.
+
+**Mandatory end-to-end pipeline check:** ran `larp-meter.py --file ... --name ...` directly (not just unit tests) on two hand-written samples. The honest veteran bio above landed INSUFFICIENT DATA (short bio, low flag coverage — expected and unrelated to this fix) with flag 12 correctly UNDECIDABLE, showing the new fair message, instead of TRIGGERED. A hand-written hype-heavy fabricator bio ("Dr. Marcus Vane, visionary Founder... 40 years of experience... published extensively...") landed INSUFFICIENT DATA with flags 4 (buzzword density) and 7 (fundraising without traction) correctly TRIGGERED — confirming the fix didn't make the flag inert, only narrower. Neither sample carries enough total material to reach a full GREEN/RED band on its own; that's a property of these short hand-written samples, not of tonight's change, and flag 12's own behavior in both is exactly what the fix targets.
+
+**Mandatory per-cycle mutation-testing spot-check**, one mutation in each of the four required files, run against the full suite, then reverted:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors`'s tie-break: `<= _SEVERITY_ORDER.index(level)` → `<` | **Caught** (`test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message` failed) |
+| `names.py` | `name_matches`'s `if len(present) >= 2:` → `>= 3` | **Caught** (18 failures + 5 errors) |
+| `verify.py` | `verify_institution`'s ROR nearest-name tie-break: `if overlap > best_overlap:` → `>=` | **SURVIVED — still live and unpinned on `master`, see below** |
+| `flags.py` | `f_contradicted`'s `if refuted or mismatched:` → `and` | **Caught** (`test_a_mismatched_identifier_is_a_contradiction` failed, +3 more) |
+
+Also mutation-tested tonight's own new code directly: forcing the new anchor gate to always pass (`if True:` instead of the real condition) — caught by the two new false-accusation tests, confirming they actually discriminate rather than passing vacuously.
+
+**The `verify.py` survivor is not new.** `nightly/2026-09-04` (PR #16) found and pinned this exact mutation; `nightly/2026-09-09` and `nightly/2026-09-10` each independently re-confirmed it live on `master` and declined to write a fourth/fifth copy of the same test, per the 2026-08-27 entry's own precedent ("the actual fix here is merging... not writing this test again"). Doing the same tonight for the same reason — recorded in BACKLOG.md instead of re-pinned again.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed live, fixed**: Timeline flag part (a) (recent-roles-only false accusation) — reproduced exactly as the entry describes, fixed, tests added. Full write-up filed in-place as `[PARTIALLY FIXED]`.
+- **Confirmed live, NOT fixed tonight**: Timeline flag part (b) (future graduation dates) — re-ran the entry's own repro (`'MSc Computer Science, Technische Universitat Munchen, 2025 - 2027.'`) and it still returns TRIGGERED on `master` tonight. A fix already exists on unmerged PR #17; did not duplicate it.
+- **Re-confirmed live, not re-pinned**: `verify.py`'s ROR nearest-name tie-break survivor — matches PR #16/#18/#19's independent descriptions exactly, still unpinned on `master`.
+- **Re-confirmed live**: the CRITICAL tally (10/1/4 of 15) is unchanged, counted directly rather than carried forward.
+- Did not re-verify anything else in BACKLOG.md tonight, including the 4 still-open CRITICALs or any MAJOR/MODERATE/MINOR entry other than the timeline finding.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: full sweep 2026-08-16 (merged). Spot-checked again tonight (fresh line, `_apply_floors` tie-break) — still caught.
+- `names.py`: full sweep 2026-08-19 (merged). Spot-checked again tonight (fresh line, `present`-count threshold) — still caught.
+- `verify.py`: full sweep 2026-08-18 (merged) plus several later spot-checks. Tonight: the ROR tie-break survivor confirmed live again, still unpinned — fix sits only on unmerged PR #16.
+- `flags.py`: full sweeps 2026-08-16/17 (merged). Spot-checked again tonight (fresh line, `f_contradicted`'s `or`/`and`) — still caught. Tonight's own new code (the timeline anchor gate) was also mutation-tested directly and caught.
+
+### What I learned
+
+- A mutation-guard test pinned against *today's* behavior can quietly encode an assumption the behavior itself later needs to change (here: "a single dated year is always enough to test a claimed duration against"). When a BACKLOG fix touches a flag with existing pinned tests, don't just add new tests for the new behavior — run the *whole* suite against each draft of the fix, because an old pinned test failing is sometimes telling you your fix's condition is too narrow (or too broad) rather than that the old test is simply wrong. Here, two rounds of "run everything, see what breaks, ask why" produced a materially better anchor condition (an origin-verb check) than my first idea (a year-count heuristic) would have.
+- `Claim.context` (a rendered, whitespace-collapsed ±30-char text snippet) turned out to be a reusable general-purpose signal for "is this fact-fragment textually near that other fact-fragment," beyond its original purpose of showing evidence in a report. Worth remembering for future flags that want to correlate two extracted claims without adding real position tracking to `extract.py` — though see the caveat above about its narrow false-positive surface; this is a pragmatic shortcut, not a precise mechanism, and a future night adding character-offset tracking to `Claim` would make this and any similar future correlation check both simpler and more precise.
+- The open-PR queue is no longer just worth flagging in this file — nine independent, non-conflicting, reviewer-ready PRs sitting for up to two weeks is itself a signal that whatever human process is supposed to review and merge this project's nightly output has not engaged in a long time. This run also pushed a notification directly rather than relying on this file being read.
+
+### What the next run should pick up first
+
+1. **The open-PR queue — nine deep, fifteen days, zero merges.** Still not a nightly run's call to fix by pushing code. If it keeps growing, keep restating it here AND consider another direct notification rather than assuming this file gets read.
+2. **The core gap** — unchanged from every entry since 2026-08-15. Still the single biggest lever in the codebase; PR #11's unmerged `merge_risk` groundwork is still the only progress toward it anywhere, merged or not.
+3. Timeline finding part (b) (future graduation dates / the `year`/`year_target` de-duplication gap) — fix already exists on unmerged PR #17; either merge it or re-verify and re-implement if PR #17 has drifted.
+4. `report.py` has still never had a full mutation-testing sweep (per the 2026-09-10 entry) — only that night's own new lines were tested directly. Worth a full pass given it's the file that formats what a human actually reads.

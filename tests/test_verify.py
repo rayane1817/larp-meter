@@ -276,6 +276,42 @@ class TestRegistries(unittest.TestCase):
         self.assertEqual(claim.status, NOT_FOUND)
         self.assertIn("Institute of Advanced Studies", claim.detail)  # names the near miss
 
+    def test_a_non_english_word_for_university_is_not_discarded_as_a_stopword(self):
+        """`_ORG_STOPWORDS` used to list 'universite' (the accent-stripped
+        form of 'université') outright, so a claim like 'Universite Paris
+        Sud' reduced to just {'paris', 'sud'} -- trivially a subset of ANY
+        registry hit that happens to share those two geographic words,
+        university or not. Live-measured against the real ROR API before
+        this fix: 'Universite Paris Sud' verified against 'Geosciences
+        Paris Sud', an unrelated research unit that is not a university at
+        all. Every other language's word for university/institute/school
+        already folds to a common stem via `_ORG_STEMS` instead of being
+        discarded -- 'universite' and 'università' were the sole
+        stopword-listed exceptions, inconsistent with this file's own
+        stated design ("folded to a common stem before matching")."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/unrelated",
+            "names": [{"value": "Geosciences Paris Sud", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "France"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Universite Paris Sud")
+        v.verify_institution(claim)
+        self.assertNotEqual(claim.status, VERIFIED)
+
+    def test_a_genuine_non_english_university_name_still_verifies(self):
+        """The fix above must not overcorrect: 'universite' now stems to
+        'univ', exactly like the English 'university' already does, so a
+        real French university matched against ROR's own French-language
+        display name must still verify."""
+        body = json.dumps({"items": [{
+            "id": "https://ror.org/03083nz45",
+            "names": [{"value": "Université Paris-Saclay", "types": ["ror_display"]}],
+            "locations": [{"geonames_details": {"country_name": "France"}}]}]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Universite Paris-Saclay")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, VERIFIED)
+
     def test_stopword_only_claim_is_not_verified_by_the_first_hit(self):
         """An empty `wanted` set (a claim value that decomposes to nothing
         but stopwords) is a subset of ANY non-empty registry name, by
@@ -336,6 +372,32 @@ class TestRegistries(unittest.TestCase):
         v.verify_institution(claim)
         self.assertEqual(claim.status, VERIFIED)
         self.assertIn("ambiguous", claim.detail)
+
+    def test_nearest_name_tie_break_is_deterministic_not_last_writer_wins(self):
+        """Mutation guard: `if overlap > best_overlap` -> `>=` survived with
+        the suite green. On a tie, `>=` lets every later equally-good
+        candidate keep overwriting `best_name`, so the "Nearest listed
+        name" hint in a NOT_FOUND report becomes an artifact of ROR's
+        arbitrary result ordering rather than a stable answer -- the same
+        claim against the same registry could report a different "nearest"
+        institution on a re-run if ROR reorders ties. With strict `>`, the
+        first candidate reached at the best overlap seen so far wins and
+        stays won."""
+        body = json.dumps({"items": [
+            {"id": "https://ror.org/alpha",
+             "names": [{"value": "Institute of Advanced Alpha Studies", "types": ["ror_display"]}],
+             "locations": [{"geonames_details": {"country_name": "Norway"}}]},
+            {"id": "https://ror.org/beta",
+             "names": [{"value": "Institute of Advanced Beta Studies", "types": ["ror_display"]}],
+             "locations": [{"geonames_details": {"country_name": "Sweden"}}]},
+        ]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution",
+                      value="Institute of Advanced Fictional Studies")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+        self.assertIn("Institute of Advanced Alpha Studies", claim.detail)
+        self.assertNotIn("Beta", claim.detail)
 
     def test_clinical_trial_records_existence_without_claiming_attribution(self):
         """A trial's officials are its PIs, not a roster of every contributor,

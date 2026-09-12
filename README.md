@@ -110,13 +110,13 @@ Wikipedia and OpenAlex are also queried from `--text`, `--file`, `--from-json` a
 | 5 | Vague Partnerships Only | 1.0 | relationships | MoUs and NDAs instead of contracts, grants, revenue |
 | 6 | No Verifiable Output | 1.5 | track record | "Building" with no checkable artifact anywhere |
 | 7 | Fundraising Without Traction | 1.5 | track record | Raising money with zero customers or revenue |
-| 8 | Unverifiable Credentials | 1.0 | credentials | Degree with no institution, or one absent from ROR |
+| 8 | Unverifiable Credentials | 1.0 | credentials | Degree with no institution named in the text |
 | 9 | Logo Wall Syndrome | 1.0 | relationships | Many partner names, no substantive joint work |
 | 10 | No Independent Validation | 1.0 | validation | Only self-controlled platforms; pure echo chamber |
 | 11 | **Contradicted Verifiable Claim** | 2.5 | track record | A registry actively refutes a specific claim — **floors the verdict at ORANGE** |
 | 12 | **Timeline Implausibility** | 1.5 | credentials | Claimed durations that don't fit the stated dates |
 
-Flag 11 carries the heaviest weight, and a *floor*: when a registry contradicts a claim the verdict cannot come out better than ORANGE, however well the rest of the profile reads. Without that, a fabricated bio absorbed one contradiction under a pile of unverified assertions and still scored GREEN. It is the only flag backed by an external authority rather than by reading tea leaves. Institution misses are deliberately *excluded* from it and handled by flag 8 at lower weight, since ROR indexes research organizations and a small or non-research school can be legitimately absent.
+Flag 11 carries the heaviest weight, and a *floor*: when a registry contradicts a claim the verdict cannot come out better than ORANGE, however well the rest of the profile reads. Without that, a fabricated bio absorbed one contradiction under a pile of unverified assertions and still scored GREEN. It is the only flag backed by an external authority rather than by reading tea leaves. Institution misses are deliberately *excluded* from it, and flag 8 does not treat a ROR miss as a trigger either: measured against ROR's real API, the gap between a fabricated institution and a real one it simply doesn't index (a faculty of a parent university, a school merged or renamed since the subject attended, or a non-research institution) is not reliably separable, so a miss there reads as an honest lead for the reader to check by hand, not a scored accusation.
 
 ---
 

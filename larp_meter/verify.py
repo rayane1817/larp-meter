@@ -67,9 +67,19 @@ TIMEOUT = 12
 
 
 # Words that carry no identifying information in an organization name.
+# Institution-type words (university, institute, school, ...) do NOT belong
+# here even in translation: they carry exactly the identity the match needs
+# to preserve, and _ORG_STEMS below is where every language's spelling of
+# them is folded to a common stem. "universite" and "università" (the
+# accent-stripped forms of "université"/"università") used to be listed as
+# stopwords here, which discarded that identity outright: a claim like
+# "Universite Paris Sud" reduced to just {"paris", "sud"}, a set trivially
+# satisfied by any registry hit sharing those two geographic words, no
+# university required. See tests/test_verify.py's
+# test_a_non_english_word_for_university_is_not_discarded_as_a_stopword.
 _ORG_STOPWORDS = {
     "of", "the", "at", "for", "and", "in", "de", "des", "du", "der", "die", "das",
-    "van", "von", "el", "la", "le", "les", "a", "an", "università", "universite",
+    "van", "von", "el", "la", "le", "les", "a", "an",
 }
 
 

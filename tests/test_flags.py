@@ -295,6 +295,50 @@ class TestContradictionFlag(unittest.TestCase):
         self.assertEqual(result.status, TRIGGERED)
         self.assertIn("do not list the subject", result.description)
 
+    def test_confirmed_but_retracted_paper_triggers_the_contradiction_floor(self):
+        """BACKLOG.md: Crossref already returns retraction status, and
+        verify.py now records it on the claim as `retracted` -- but a
+        confirmed (subject-attributed) paper that has since been retracted
+        used to PASS here identically to one still standing, because this
+        flag only ever inspected `claim.status`, never the new field."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+                claim.retracted = True
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, TRIGGERED)
+        self.assertIn("retract", result.description.lower())
+
+    def test_confirmed_and_standing_paper_still_passes(self):
+        """Regression guard for the fix above: a confirmed paper that is
+        NOT retracted must keep passing -- this must not become a blanket
+        downgrade of every confirmed DOI claim."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, PASSED)
+
+    def test_retraction_without_a_name_still_does_not_confirm(self):
+        """Without --name, attribution was never checked at all (per the
+        existing no-name guard above), so a retracted-but-unattributed
+        claim must stay in that same UNKNOWN branch -- it must not newly
+        read as a confirmed-and-contradicted TRIGGERED result when nobody
+        ever established the paper was even the subject's."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True)  # no subject_name
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists (Ashish Vaswani)."
+                claim.retracted = True
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertNotIn("confirmed", result.description.casefold())
+
 
 class TestTimelineFlag(unittest.TestCase):
     def test_impossible_experience_span(self):

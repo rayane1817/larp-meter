@@ -48,6 +48,7 @@ class Claim:
     detail: str = ""           # human-readable verification result
     source: str = ""           # URL consulted by the verifier
     negated: bool = False      # the text denies this ("no customers", "not raising")
+    retracted: bool = False    # the registry itself marks this artifact retracted
 
     def to_dict(self):
         return asdict(self)

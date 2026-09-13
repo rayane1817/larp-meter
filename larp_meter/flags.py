@@ -487,6 +487,21 @@ def f_contradicted(ctx):
                 UNKNOWN,
                 f"{len(confirmed)} identifier(s) exist, but no --name was given so attribution was "
                 f"never checked — existence alone is not confirmation. Re-run with --name.")
+        retracted = [c for c in confirmed if c.retracted]
+        if retracted:
+            # A confirmed (subject-attributed) paper the publisher has since
+            # retracted is a registry actively contradicting the claim's
+            # continued validity — the same charter this flag already
+            # applies to a NOT_FOUND/MISMATCH identifier — regardless of why
+            # it was retracted, so this does not accuse the subject of the
+            # retraction itself, only of citing a paper that no longer
+            # stands as evidence.
+            return FlagResult(
+                TRIGGERED,
+                f"{len(retracted)} confirmed paper(s) have since been retracted by their "
+                f"publisher — no longer standing evidence of the claimed track record, "
+                f"whatever the reason for the retraction.",
+                [f"{c.subtype} {c.value}: {c.detail}" for c in retracted[:4]])
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their registries.",
                           [f"{c.subtype} {c.value}: {c.detail}" for c in confirmed[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the

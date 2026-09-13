@@ -59,6 +59,37 @@ def _disclaims_authorship(context):
     someone other than the subject, rather than claiming it for them?"""
     return bool(context) and bool(_NON_ATTRIBUTION_CONTEXT_RE.search(context))
 
+
+# Publishers apply one of these prefixes to a retracted work's own title
+# near-universally (Nature, Elsevier/Lancet, Springer, ... all confirmed live
+# against api.crossref.org on 2026-09-13). Anchored at the start so a paper
+# that merely discusses retraction as a research topic ("A Survey of
+# Retraction Patterns...") is never mistaken for a retraction itself.
+_RETRACTED_TITLE_RE = re.compile(r"^(retracted|retraction|withdrawn)\b", re.I)
+
+
+def _is_retracted(msg):
+    """Does Crossref's own metadata say this DOI has been retracted?
+
+    Two independent signals, because neither alone is reliable -- checked
+    live on 2026-09-13 against two real retracted papers. The Lancet's
+    Surgisphere retraction carries an `update-to` entry of type
+    "retraction" on the record itself, as the API docs describe. Nature's
+    lutetium-hydride retraction does NOT: that record's own `update-to`
+    list carries only "expression_of_concern" and "correction" entries --
+    the "retraction" relation is attached to the separate retraction
+    notice's DOI instead, not to the original paper. The one signal
+    consistent across both is the publisher's own title prefix, so this
+    checks both and trusts either; relying on `update-to` alone silently
+    misses real, live retractions.
+    """
+    for rel in msg.get("update-to") or []:
+        if isinstance(rel, dict) and rel.get("type") == "retraction":
+            return True
+    title = (msg.get("title") or [""])
+    title = title[0] if title else ""
+    return bool(_RETRACTED_TITLE_RE.match((title or "").strip()))
+
 VERIFY_TTL = 30 * 24 * 3600
 MAX_RESPONSE_BYTES = 2_000_000
 USER_AGENT = ("larp-meter/3.0 (OSINT due-diligence triage; "
@@ -264,6 +295,16 @@ class Verifier:
         authors = [f"{a.get('given', '')} {a.get('family', '')}".strip()
                    for a in msg.get("author", [])]
         self._attribute(claim, authors, f'Paper "{title[:70]}"', url)
+        if _is_retracted(msg):
+            # Recorded as a fact about the artifact regardless of the
+            # attribution outcome above (even a disclaimed citation of
+            # someone else's work is worth knowing is retracted) -- it is
+            # flags.py's job, not this layer's, to decide when retraction
+            # should count against the subject rather than merely inform.
+            claim.retracted = True
+            claim.detail = (claim.detail + " This paper has since been retracted by its "
+                             "publisher -- whatever the reason, it is no longer standing "
+                             "evidence.").strip()
         return claim
 
     def verify_orcid(self, claim):

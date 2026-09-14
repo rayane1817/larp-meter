@@ -487,6 +487,22 @@ def f_contradicted(ctx):
                 UNKNOWN,
                 f"{len(confirmed)} identifier(s) exist, but no --name was given so attribution was "
                 f"never checked — existence alone is not confirmation. Re-run with --name.")
+        # A confirmed DOI is only a contradiction if BOTH facts hold: the
+        # registry says it is a preprint (verify.py's is_preprint, a fact
+        # about the artifact), and the subject's own sentence around that
+        # exact identifier claimed peer review (extract.py's
+        # claimed_peer_reviewed, a fact about the text). Citing a preprint
+        # honestly — the ordinary case — sets only the first; a genuinely
+        # peer-reviewed paper sets only the second. Neither alone means
+        # anything; this flag must not fire on either in isolation.
+        preprint_claimed_reviewed = [c for c in confirmed if c.is_preprint and c.claimed_peer_reviewed]
+        if preprint_claimed_reviewed:
+            return FlagResult(
+                TRIGGERED,
+                f"{len(preprint_claimed_reviewed)} identifier(s) cited as peer-reviewed work are, per "
+                f"the registry, preprints that have not been through peer review — the claim and the "
+                f"record do not match.",
+                [f"{c.subtype} {c.value}: {c.detail}" for c in preprint_claimed_reviewed[:4]])
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their registries.",
                           [f"{c.subtype} {c.value}: {c.detail}" for c in confirmed[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the

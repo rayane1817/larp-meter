@@ -1964,3 +1964,263 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+---
+
+## 2026-09-14
+
+### Open-PR queue — human visibility, not something acted on tonight
+
+**12 open, unmerged, draft `nightly/*` PRs against `master`, none touched
+tonight:** #11 (2026-08-30) through #22 (2026-09-13), all still draft, all
+still open as of this writing. `master`'s last actual merge is still
+`9f71c98` "Merge nightly/2026-08-27" — this queue has now gone **eighteen
+consecutive nights** without a single merge landing. This entry's own
+change branches fresh from `origin/master`'s current tip (unchanged since
+08-27) and does not depend on, or attempt to resolve, any of the twelve —
+per standing instructions, resolving this queue is a human merge decision,
+not something an autonomous run should attempt. Flagging again, louder,
+because the pattern the 2026-08-27 entry warned about (independent
+rediscovery of the same fix by multiple nights because nothing merges) is
+no longer hypothetical: tonight's own primary item overlaps in file and
+in Crossref-response-field with the still-open PR #22 (2026-09-13,
+retraction detection) — both read `msg.get("type")`/`msg.get("update-to")`
+from the same Crossref response in `verify_doi` and both add a new boolean
+`Claim` field consumed by flag 11. They do not conflict in *logic* (this
+branch adds `is_preprint`/`claimed_peer_reviewed`, PR #22 adds `retracted`,
+and neither reads the other's field), but they will very likely conflict
+*textually* in `verify_doi` and in flag 11's `confirmed` branch when both
+eventually land, and whichever merges second should union the two rather
+than silently drop one. Noting this explicitly here so it isn't rediscovered
+as a surprise at merge time.
+
+### CRITICAL tally (BACKLOG.md, 15 total) — unchanged tonight
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight**,
+verified directly against `master`'s current `BACKLOG.md` (grepped `^### `
+under `## CRITICAL (15)`: 10 lines carry `[FIXED]`, 1 carries `[PARTIALLY
+FIXED]`, 4 carry neither). This is an *improvement* on the 2026-08-27
+entry's own "8/1/6" tally — two more CRITICALs were fixed and merged to
+`master` somewhere between 08-27 and now, though no entry in this file
+documents which nights did it (another symptom of the queue: the PRs that
+did those merges evidently landed, but their own NIGHTLY.md entries never
+made it to `master` because — per the queue problem above — most nights'
+entries sit on branches that haven't merged). Tonight's own change touches
+none of the 15 named CRITICALs directly (it is a MAJOR-severity item, the
+tool's own next-highest-value slice per last night's suggested next step),
+so the CRITICAL tally itself does not move.
+
+### What I did
+
+**Primary item:** fixed the *other* half of the MAJOR finding "Nothing
+checks whether a cited paper was retracted, or whether it is peer-reviewed
+at all — and Crossref already returns the fields" — the preprint half, left
+explicitly open by last night's entry (2026-09-13, PR #22) alongside its
+own retraction fix. `verify_doi` fetched the full Crossref record for every
+DOI claim but read only `title`/`author`, so a preprint cited as
+"peer-reviewed work" verified identically to a genuine journal article —
+BACKLOG.md's own motivating example, and a real, checkable form of
+publication LARP (claiming a lower evidentiary bar than the work actually
+cleared).
+
+Chose this over the standing brief's core architectural gap for the same
+reason every entry since 2026-08-15 has: the core gap needs the OpenAlex
+disambiguation groundwork (merged entities, common-name collisions) before
+any verdict stronger than an UNKNOWN-with-evidence line can be trusted, and
+none of the twelve queued PRs attempt it either, so it remains correctly
+deferred rather than newly neglected. Chose it over resuming the retraction
+half specifically because that work already exists, complete and tested, on
+unmerged PR #22 — writing a second copy would have been exactly the
+rediscovery waste the queue-problem section above is about. The preprint
+half was the one piece of this finding nobody had touched yet.
+
+**Design, and the two false-accusation risks it exists to avoid:**
+
+1. *Proximity, not "anywhere in the document".* A first instinct is: does
+   the text contain BOTH a `doi` claim resolving to `type: posted-content`
+   AND a `"peer-review claim"` assertion anywhere at all? Live-tracing this
+   through a realistic counter-example rejected it before writing any code:
+   "I have several peer-reviewed publications in my field. Preliminary
+   results are also up at 10.1101/...". That subject is telling the truth
+   on both counts — genuine peer-reviewed work exists somewhere unstated,
+   and the preprint is honestly labeled as preliminary. Linking the two
+   claims by mere co-occurrence would accuse them of exactly the
+   misrepresentation they did not make. Fixed by making `claimed_peer_reviewed`
+   a fact about one specific `doi` claim, set at extraction time by scanning
+   only the sentence containing that identifier (`extract.py`'s new
+   `_peer_review_claimed_nearby`, bounded to 300 chars each side and
+   stopping at `.;:!?` — the same sentence-boundary approach unmerged PR #15
+   (2026-09-03) independently arrived at for a different bug, `_context`'s
+   fixed-width window; this branch does not touch `_context` itself, to
+   avoid conflicting with that PR when it eventually lands).
+2. *A fixed 60-character radius is not wide enough.* BACKLOG.md's own
+   example — "My peer-reviewed work on room-temperature superconductivity
+   (10.1038/...) established the field" — puts "peer-reviewed" well outside
+   a 60-char window centered on the DOI. Confirmed this live by counting:
+   the qualifier sits ~63 characters before the identifier's own start.
+   `extract.py`'s existing `_context()` (60-char, fixed-width) could not
+   have caught this even if reused as-is, hence the dedicated
+   sentence-scanning helper rather than reusing `claim.context` directly.
+3. *Self-disclosure must only ever suppress, never trigger.* "Our
+   peer-reviewed methodology is also available as a preprint at (DOI) for
+   early access" says "peer-reviewed" and cites the preprint in the same
+   sentence — legitimate cross-posting, not deception. Added
+   `_PREPRINT_DISCLOSURE_RE` (`preprint`, `pre-print`, `not yet
+   peer-reviewed`, `under review`) as a guard that can only ever remove a
+   potential TRIGGER, matching this file's own stated rule for every other
+   guard in it ("failing to recognise a disclosure costs a missed
+   accusation it would have been wrong to make anyway, never a false one").
+
+Two new `Claim` fields, kept deliberately separate rather than combined into
+one: `claimed_peer_reviewed` (set by `extract.py`, a fact about the text)
+and `is_preprint` (set by `verify.py`'s `verify_doi` from Crossref's `type`,
+a fact about the registry record). `flags.py`'s flag 11 is the only place
+that combines them, and only inside the pre-existing `confirmed` branch —
+after the existing `if not ctx.subject_name: return UNKNOWN` guard, so an
+unattributed claim never reaches this check either, for free, the same way
+last night's retraction fix inherited both of flag 11's existing guards.
+Scoped to `doi` only, not `arxiv`: every arXiv paper is structurally
+non-peer-reviewed (no peer-review layer exists there at all), which makes
+it a *more* certain case than the DOI/Crossref-type check, but the same
+cross-posting ambiguity applies and I did not have a real example on hand
+to verify the self-disclosure guard against before writing this entry —
+recorded as the explicit next step in BACKLOG.md rather than guessed at.
+
+### Tests
+
+Wrote 9 new tests first, watched each fail against the unmodified code
+(`AttributeError: 'Claim' object has no attribute 'claimed_peer_reviewed'` /
+`'is_preprint'`, and one genuine assertion failure once both attributes
+existed but the flag logic didn't), then implemented:
+- `tests/test_extract.py::TestPeerReviewClaimProximity` (4 tests): the
+  far-apart-same-sentence case from BACKLOG.md's own example, a
+  different-sentence negative control (the false-accusation risk above), the
+  self-disclosed-preprint guard, and an ordinary DOI citation defaulting to
+  `False`.
+- `tests/test_verify.py::TestPreprintClaimedAsPeerReviewed` (5 tests):
+  `verify_doi` setting `is_preprint` on `posted-content` vs. an ordinary
+  journal article, the full contradiction TRIGGERING through `verify_all` +
+  flag 11 together, and two regression guards — an honestly-cited preprint
+  still PASSES, and a genuinely peer-reviewed paper correctly described as
+  such still PASSES (the two cases a blanket "preprint == bad" rule would
+  have wrongly conflated).
+
+**482 tests green** (473 → 482).
+
+**End-to-end CLI check, live network**, using the backlog's own motivating
+DOI (`10.1101/2020.03.22.20040758`) — live-verified against `api.crossref.org`
+before writing any code: `type: "posted-content"`, real author "Zhaowei
+Chen" confirmed in the response.
+- **Should-flag:** "Zhaowei Chen. ... My peer-reviewed work on
+  hydroxychloroquine efficacy in COVID-19 patients (10.1101/...) established
+  the field." with `--verify --name "Zhaowei Chen"`. Flag 11 TRIGGERED: "1
+  identifier(s) cited as peer-reviewed work are, per the registry, preprints
+  that have not been through peer review — the claim and the record do not
+  match," evidence line showing the Crossref-sourced detail with the
+  `posted-content` note appended.
+- **Should-pass-cleanly (honest preprint):** same subject, same DOI, text
+  changed to "Preliminary results are available as a preprint ... for early
+  access; full peer review is ongoing." Flag 11 PASSED — "All 1 checked
+  identifier(s) confirmed by their registries," confirming the
+  self-disclosure guard actually reaches the real pipeline, not just its
+  unit test.
+- **Should-pass-cleanly (real peer-reviewed paper):** "Charles R. Harris ...
+  Co-author of the peer-reviewed NumPy array programming paper,
+  10.1038/s41586-020-2649-2, published in Nature," `--name "Charles R.
+  Harris"`. Flag 11 PASSED, confirming the ordinary honest case — a real
+  paper correctly described as peer-reviewed — is completely unaffected.
+
+### Cross-boundary check (per the standing review question)
+
+Grepped every reader and writer of both new fields fresh (not trusting
+memory of having just written them): `claimed_peer_reviewed` is written
+only in `extract.py`'s `add()` and read only in `flags.py`'s new line;
+`is_preprint` is written only in `verify.py`'s `verify_doi` and read only in
+that same `flags.py` line. No other file references either name.
+`Claim.to_dict()` (`asdict`) picks up both automatically for the JSON
+report — confirmed live in the end-to-end run above, both fields present
+and correctly valued in the `claims` array. Grepped for any test asserting
+an exact claim dict key set or `report.py` special-casing a claim field by
+name — neither exists, so the new fields cannot silently break a JSON
+consumer or a renderer. Every other artifact subtype (`orcid`, `github`,
+`arxiv`, `nct`, `patent`) gets the dataclass defaults (`False`/`False`) for
+both fields and is never touched by the new `verify_doi`/`extract.py` code
+paths, so the new check is structurally inert for anything but a `doi`
+claim — verified by reading, not assumed from the `subtype == "doi"` guard
+alone.
+
+### Mutation-testing log
+
+Mandatory per-cycle pass, six mutations total: two on tonight's own new
+code (to confirm the new tests actually discriminate, not just pass), and
+one pre-existing-code spot-check in each of the four required files. Full
+suite re-run after each, reverted before the next.
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` (tonight's new code) | `if c.is_preprint and c.claimed_peer_reviewed` → `... or ...` | **Caught** — 2 tests failed (`test_an_honestly_cited_preprint_still_passes`, `test_a_real_peer_reviewed_paper_correctly_claimed_still_passes`), confirming the new AND is load-bearing. |
+| `extract.py` (tonight's own new code) | `_peer_review_claimed_nearby`: dropped the `and not _PREPRINT_DISCLOSURE_RE.search(sentence)` guard | **Caught** — `test_self_disclosed_preprint_is_not_a_false_peer_review_claim` failed exactly as intended. |
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `coverage > MIN_COVERAGE` | **Caught** (`test_coverage_exactly_at_min_coverage_is_still_scored`) — still fully protected since the 2026-08-16 sweep. |
+| `names.py` | `name_matches`: `parts[0] == matched or parts[-1] == matched` → `parts[0] == matched` | **Caught** — 5 tests failed, including the non-Western-surname-order regression this guard exists for. Still fully protected (merged via PR #5, 2026-08-19). |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:` | **Caught** — 3 tests failed. Still fully protected (merged via PR #4, 2026-08-18). |
+| `flags.py` (pre-existing) | flag 11: `if refuted or mismatched:` → `if refuted:` | **Caught** — 2 tests failed, including `test_a_mismatched_identifier_is_a_contradiction`. Still fully protected since the 2026-08-16/17 sweep. |
+
+**Result: all six mutations caught, 482 tests green after each revert.**
+Per-file sweep history unchanged from the 2026-09-13 entry: `scoring.py` full
+sweep 2026-08-16; `flags.py` full sweep 2026-08-16/17; `names.py` full sweep
+merged via PR #5 (commit `460c6ac`); `verify.py` full sweep merged via PR #4
+(commit `99388e9`). All four required files remain fully covered on
+`master` by a full sweep, with tonight adding a fresh spot-check on each
+plus full coverage of tonight's own new code.
+
+### What I learned
+
+- The "is this merged" staleness trap the 2026-09-13 entry named is real and
+  cuts both ways: this entry's own CRITICAL tally (10/1/4) is *better* than
+  the last entry actually present on `master` (8/1/6, from 2026-08-27) even
+  though nothing merged in between that this file documents — the fixes
+  happened, the narrative just never caught up, because the entries
+  documenting them are stuck on unmerged branches. Re-verifying directly
+  against `BACKLOG.md`'s own `[FIXED]` tags on `master`, rather than trusting
+  the last NIGHTLY.md entry's number, is the only way to catch this — did
+  that here, and it changed the number.
+- Two independent, unmerged nights (this one and PR #22) converging on the
+  same function (`verify_doi`) and the same underlying Crossref field
+  (`type`/`update-to`) for two different, correctly-separated findings
+  (preprint-vs-claim, and retraction) is a natural, expected outcome of
+  "keep branches small and independent" applied to a codebase this size —
+  it is not a sign either branch did something wrong, just a sign the merge
+  queue needs to actually run so these compose instead of silently
+  colliding. Worth designing new `Claim` fields (as both nights did) rather
+  than repurposing an existing one specifically so a future merge of both
+  is a union, not a contradiction, regardless of merge order.
+- Constructing a live "should-pass-cleanly, honest preprint" fixture needed
+  the same care last night's entry noted for its own true-positive sample:
+  reusing a real DOI (`10.1101/2020.03.22.20040758`) with an invented
+  "no peer-review claimed" sentence around it was fine, but it had to be
+  checked against the *same* live-fetched author list ("Zhaowei Chen") used
+  for the should-flag sample, not a fresh invented name, or the sample would
+  have exercised the pre-existing MISMATCH path instead of the new
+  preprint-specific one.
+
+### What the next run should pick up first
+
+1. **The open-PR queue is still the single biggest lever available, and
+   still not something an autonomous run can pull** — eighteen nights
+   unmerged now, not the eleven the last entry counted. Flagging a third
+   time, unchanged in substance from the last two entries, because nothing
+   about the situation has changed except its size.
+2. **arXiv's structurally-simpler version of tonight's fix** (see "Not
+   fixed, left open" in BACKLOG.md's updated entry): live-check a handful of
+   real arXiv cross-posting bios ("peer-reviewed elsewhere, also on arXiv as
+   ...") before extending `claimed_peer_reviewed`/self-disclosure detection
+   there — should be small once that check is done.
+3. **Retraction + preprint, once both PR #22 and this branch have merged**:
+   union `Claim.retracted` and the two fields added tonight rather than
+   letting whichever merges second silently drop the other's field, per the
+   queue-conflict note at the top of this entry.
+4. **The core architectural gap** remains fully untouched by any run since
+   2026-08-15 and by all twelve queued PRs. Re-verify the OpenAlex
+   rate-limit/response-shape numbers live before starting — they are now a
+   month old as measured, and the brief itself says not to trust them
+   unverified past that point.

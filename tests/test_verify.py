@@ -205,6 +205,74 @@ class TestAttribution(unittest.TestCase):
         self.assertNotEqual(flag11["status"], TRIGGERED)
 
 
+CROSSREF_PREPRINT = json.dumps({"message": {
+    "type": "posted-content",
+    "title": ["Preliminary Findings on Room-Temperature Superconductivity"],
+    "author": [{"given": "Marcus", "family": "Vane"}]}})
+
+
+class TestPreprintClaimedAsPeerReviewed(unittest.TestCase):
+    """BACKLOG.md: 'Nothing checks whether ... a preprint is presented as
+    peer-reviewed work — and Crossref already returns the fields.' The same
+    response `verify_doi` already fetches for authorship carries `type`:
+    `posted-content` means a preprint, no peer review layer at all, yet the
+    tool certified 'My peer-reviewed work (10.1101/...)' identically to a
+    real journal article."""
+
+    def _flag11(self, claims, subject, text):
+        from larp_meter.flags import AuditContext, FLAG_BY_ID
+        from larp_meter.matching import load_banks
+        ctx = AuditContext(text=text, claims=claims, source_urls=[],
+                           subject_name=subject, banks=load_banks(), verified=True, signals={})
+        return FLAG_BY_ID[11]["fn"](ctx)
+
+    def test_verify_doi_marks_posted_content_as_a_preprint(self):
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1101/xyz")
+        v.verify_doi(claim)
+        self.assertTrue(claim.is_preprint)
+
+    def test_verify_doi_does_not_mark_an_ordinary_journal_article_as_a_preprint(self):
+        v = StubVerifier({"api.crossref.org": (CROSSREF_OK, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertFalse(claim.is_preprint)
+
+    def test_preprint_claimed_as_peer_reviewed_triggers_the_contradiction_floor(self):
+        from larp_meter import extract as ex_mod
+        text = ("My peer-reviewed work on room-temperature superconductivity "
+                "(10.1101/xyz) established the field.")
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Marcus Vane", text)
+        self.assertEqual(result.status, "TRIGGERED")
+        self.assertIn("preprint", result.description.casefold())
+
+    def test_an_honestly_cited_preprint_still_passes(self):
+        """The crucial regression guard: citing a real preprint without
+        claiming it is peer-reviewed must never trigger this flag — a
+        preprint is ordinary, honest scholarly practice, not deception."""
+        from larp_meter import extract as ex_mod
+        text = "Preliminary results are up as a preprint at 10.1101/xyz."
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Marcus Vane", text)
+        self.assertEqual(result.status, "PASSED")
+
+    def test_a_real_peer_reviewed_paper_correctly_claimed_still_passes(self):
+        """Regression guard against a blanket downgrade: an ordinary,
+        genuinely peer-reviewed citation must keep passing."""
+        from larp_meter import extract as ex_mod
+        text = "My peer-reviewed work (10.1000/xyz) established the field."
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_OK, True)}, subject_name="Ada Lovelace")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Ada Lovelace", text)
+        self.assertEqual(result.status, "PASSED")
+
+
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):
         """Owning a repo is not writing it, and citing an employer's repo is

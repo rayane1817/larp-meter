@@ -25,6 +25,49 @@ class TestArtifactExtraction(unittest.TestCase):
         self.assertEqual(ex.claims_by(claims, "artifact"), [])
 
 
+class TestPeerReviewClaimProximity(unittest.TestCase):
+    """verify.py can tell a genuine journal article from a Crossref
+    `posted-content` (preprint) record, but only extraction sees the text —
+    it has to mark which DOI, if any, the subject's own words claim as
+    peer-reviewed, so verify.py knows which claim to hold that word against."""
+
+    def test_peer_reviewed_far_from_the_doi_in_the_same_sentence_is_still_caught(self):
+        """BACKLOG.md's own motivating example: 'peer-reviewed' sits well
+        outside a fixed 60-character radius of the identifier it qualifies."""
+        text = ("My peer-reviewed work on room-temperature superconductivity "
+                "(10.1038/s41586-023-06774-2) established the field.")
+        claims = ex.extract_claims(text)
+        doi = ex.claims_by(claims, "artifact", "doi")[0]
+        self.assertTrue(doi.claimed_peer_reviewed)
+
+    def test_peer_reviewed_in_a_different_sentence_is_not_linked(self):
+        """A subject who genuinely has separate peer-reviewed work must not
+        have that claim pinned onto an unrelated identifier elsewhere in the
+        bio — that would accuse an honest preprint citation of being a lie
+        about a completely different paper."""
+        text = ("I have several peer-reviewed publications in my field. "
+                "Preliminary results are also up at 10.1101/2020.03.22.20040758.")
+        claims = ex.extract_claims(text)
+        doi = ex.claims_by(claims, "artifact", "doi")[0]
+        self.assertFalse(doi.claimed_peer_reviewed)
+
+    def test_self_disclosed_preprint_is_not_a_false_peer_review_claim(self):
+        """Naming something a preprint in the same breath as 'peer-reviewed'
+        is transparency, not deception — e.g. 'peer-reviewed elsewhere; this
+        preprint (DOI) covers early results.' The guard only ever removes a
+        potential trigger, never adds one, per this file's own guiding rule."""
+        text = ("Our peer-reviewed methodology is also available as a preprint "
+                "at 10.1101/2020.03.22.20040758 for early access.")
+        claims = ex.extract_claims(text)
+        doi = ex.claims_by(claims, "artifact", "doi")[0]
+        self.assertFalse(doi.claimed_peer_reviewed)
+
+    def test_ordinary_doi_citation_defaults_to_false(self):
+        claims = ex.extract_claims("See 10.1038/s41586-020-2649-2 for details.")
+        doi = ex.claims_by(claims, "artifact", "doi")[0]
+        self.assertFalse(doi.claimed_peer_reviewed)
+
+
 class TestDegreeExtraction(unittest.TestCase):
     def test_degree_with_institution(self):
         claims = ex.extract_claims("MSc Electrical Engineering, Delft University of Technology, 2015.")

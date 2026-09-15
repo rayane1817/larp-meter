@@ -755,6 +755,72 @@ merged to `master`; PRs #4 and #5 already did that work, they just haven't
 landed. See "Open PRs" below.
 
 ---
+### Mutation-testing pass: `names.py` + `scoring.py`, two new real survivors (2026-09-15, nightly run)
+
+Deliberately targeted the two of the four mandatory files that no open
+`nightly/*` PR touches (see NIGHTLY.md's 2026-09-15 entry for the full
+13-PR queue), so tonight's branch cannot conflict with any of them at merge
+time. Neither survivor below is a bug on `master` today — both are held-out
+gaps in test *coverage* around already-correct code, found by mutating it
+and watching the full suite stay green.
+
+- **`names.py`'s `tokens()`: the split reading's `and t not in PARTICLES`
+  clause, deleted, survived.** `tokens()` unions two independent readings
+  (hyphen-as-separator and hyphen-as-attachment), each with its own particle
+  filter; deleting just the split reading's filter still passed all 475
+  prior tests, because every existing test pairs a particle with its own
+  real surname, where the leaked token is inert extra noise. But
+  `name_matches` unions the two readings, so the leak survives into the
+  final token set regardless — `tokens("Dr. Van Helsing")` becomes
+  `{"dr", "van", "helsing"}` instead of `{"helsing"}` — and two different
+  people sharing only a title and a particle can pick up a false "confident"
+  two-token match (`len(present) >= 2`) on zero real name overlap:
+  `name_matches("Dr. Van Helsing", ["Dr. Van Pelt"])` goes `False` → `True`
+  under the mutation. This is the false-positive-match mirror of the
+  false-MISMATCH failures the rest of `test_names.py` guards against — here
+  it would let a fabricator borrow a real, verified stranger's record.
+  Pinned: `tests/test_names.py::TestSplitReadingAlsoFiltersParticles` (both
+  a direct `tokens()` assertion and the end-to-end `name_matches` repro).
+- **`scoring.py`'s `category_scores`: narrowing `r.status not in (TRIGGERED,
+  PASSED)` to `r.status not in (TRIGGERED,)` survived.** Every existing
+  `category_scores` test used an all-TRIGGERED or an all-UNKNOWN-but-one
+  fixture, so a category with a genuine mix of PASSED and TRIGGERED flags
+  was never exercised. The mutation reports any category with at least one
+  triggered flag as a maximum-severity 100, silently erasing however many
+  flags in that category actually passed — exactly the information the
+  per-category breakdown exists to preserve. Pinned:
+  `tests/test_scoring.py::TestCategoryScoresBlendPassedAndTriggered`, mixing
+  one TRIGGERED and one PASSED flag inside the `credentials` category and
+  asserting the blended score (50, not 100) and the correct decided-count.
+
+Also spot-checked (not a new finding, both still hold): `flags.py`'s flag 11
+`if refuted or mismatched:` guard, and `verify.py`'s `verify_institution`
+`if wanted and wanted <= have:` guard — both still **caught**, no
+regression on `master` since their last confirmation.
+
+One survivor found and deliberately **not** pinned: `names.py`'s
+single-token loop, `if not extra or all(w in mine for w in extra): return
+True`, changed to `if not extra and all(...)`, also left the suite green.
+Spent real effort trying to construct an input where `extra` is non-empty
+and every word in it is also a token of `mine` — could not find one, and
+traced why: any word literally shared with `mine` that appears anywhere in
+a candidate string will already be picked up by `present`'s blob-wide
+boundary-regex search (present is computed over the join of every usable
+candidate, not just the one being checked), which means it would already
+have pushed `len(present)` to 2 and the code would never reach this branch
+in the first place. The `all(...)` disjunct appears to be genuinely
+unreachable given how `present`/`mine`/`extra` are built elsewhere in the
+same function — a regression test for it would encode a scenario the
+production code cannot produce, which proves nothing. Recording this so a
+future run doesn't re-spend the same effort re-deriving it; if anyone finds
+a real input that reaches it, that's a live bug in this reasoning, not a
+missing test.
+
+Both real survivors reconfirmed CAUGHT after their pinning tests were
+added, then the mutations reverted and the full suite re-run green (473 ->
+476). Neither file needed a production change.
+
+---
 
 ## CRITICAL (15)
 

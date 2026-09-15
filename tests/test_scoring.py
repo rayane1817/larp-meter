@@ -270,6 +270,29 @@ class TestCategoryScoresExcludeUndecided(unittest.TestCase):
         self.assertEqual(cats["credentials"]["flags_decided"], 1)
 
 
+class TestCategoryScoresBlendPassedAndTriggered(unittest.TestCase):
+    """category_scores must weigh a PASSED flag against a TRIGGERED one in
+    the same category, not just count the triggered ones. Mutation-testing
+    scoring.py (2026-09-15) found that narrowing the filter from
+    `(TRIGGERED, PASSED)` to `(TRIGGERED,)` left the whole suite green:
+    every existing category_scores test used either an all-TRIGGERED or an
+    all-UNKNOWN-but-one fixture, so a category with a genuine mix of PASSED
+    and TRIGGERED flags was never exercised. That mutation would report any
+    category with at least one triggered flag as a maximum-severity 100,
+    silently erasing however many flags in that same category actually
+    passed -- the one thing the per-category breakdown exists to show is
+    where a profile's problem is concentrated, and this bug would report it
+    as concentrated everywhere at once."""
+
+    def test_a_passed_flag_lowers_its_category_score_even_with_one_trigger(self):
+        results = {s["id"]: FlagResult(UNKNOWN) for s in REGISTRY}
+        results[1] = FlagResult(TRIGGERED)  # credentials, weight 1.5
+        results[2] = FlagResult(PASSED)     # credentials, weight 1.5
+        cats = category_scores(results)
+        self.assertEqual(cats["credentials"]["score"], 50)
+        self.assertEqual(cats["credentials"]["flags_decided"], 2)
+
+
 class TestInsufficientDataSummaryAccuracy(unittest.TestCase):
     def test_decided_count_in_the_summary_matches_the_actual_decided_flags(self):
         """`decided_flags` (used only in the INSUFFICIENT DATA prose) survived

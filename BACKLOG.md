@@ -756,6 +756,54 @@ landed. See "Open PRs" below.
 
 ---
 
+### Mutation-testing pass: `verify.py`, two real survivors in the patent/ROR handlers (2026-09-16, nightly run)
+
+Picked `verify.py` for tonight's full-ish sweep specifically because it is
+the file item 3 of the 2026-09-15 entry's "next run" list named as still
+needing one repeated directly against `master` (PRs #4 and #5, which did
+full sweeps of `verify.py` and `names.py` respectively, are both still
+unmerged — see NIGHTLY.md). Tonight's branch touches only `tests/`, so it
+cannot conflict with any production-code change sitting in the queue.
+
+Six mutations tried; four caught immediately (`_is_ambiguous_acronym`'s
+`<= 5` boundary, arXiv's `"api/errors" in entry_id or title == "error"`
+disjunction, GitHub's `len(published.split()) >= 2` comparability guard,
+and a spot-check re-confirmation of `verify_institution`'s `wanted and
+wanted <= have` guard already pinned on 2026-08-18/19). Two survived:
+
+- **`verify_patent`'s `if not title or "not found" in title.lower():`
+  guard, narrowed to `if not title:`, left the whole suite green.** Live
+  probing against the real Google Patents endpoint (2026-09-16) found that
+  a malformed/nonexistent patent ID returns a genuine HTTP 404 handled
+  entirely by `_get` (empty body, `ok=True` — never reaches this code at
+  all), so the title-text check exists for a *different*, HTTP-200 failure
+  shape: Google's own app-level "not found" page. No existing test drove
+  `verify_patent` through that shape — the only two tests exercising this
+  handler (`tests/test_regressions.py`) cover a real inventor match and a
+  markup-drift scrape failure, neither of which has "not found" in the
+  title. Under the mutation, a fabricated patent number whose page title
+  says as much falls through to inventor-parsing, finds no `<dd
+  itemprop="inventor">` tags (an error page has none), and lands on
+  UNCHECKABLE ("scrape failed") instead of NOT_FOUND ("no such patent") —
+  a materially weaker signal against a fabricated identifier, though not a
+  false-accusation direction. Pinned:
+  `tests/test_regressions.py::TestNoAccusationFromAbsence::test_google_patents_not_found_page_is_not_scraped_as_a_scrape_failure`.
+- **`verify_institution`'s tie-break, `if overlap > best_overlap:` loosened
+  to `>=`, left the whole suite green.** ROR returns `items` pre-sorted by
+  its own relevance ranking; when two candidates tie on overlap, `>`
+  correctly keeps the first (more relevant) one, while `>=` lets a later,
+  equally-scored, less-relevant one silently overwrite it. This only
+  changes the cosmetic "Nearest listed name" hint in a NOT_FOUND detail
+  string, never `claim.status` — low severity, but a real, previously
+  untested behavior. Pinned:
+  `tests/test_verify.py::TestRegistries::test_ror_tie_break_keeps_the_registrys_own_higher_ranked_result`.
+
+Both confirmed failing against the mutated code and passing against the
+restored production code before being kept; `verify.py` itself is
+byte-identical to `master` after this branch — only `tests/` changed.
+
+---
+
 ## CRITICAL (15)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says

@@ -352,6 +352,28 @@ class TestRegistries(unittest.TestCase):
         self.assertIn("COMPLETED", claim.detail)
         self.assertIn("Jane Roe", claim.detail)   # named for a human to judge
 
+    def test_ror_tie_break_keeps_the_registrys_own_higher_ranked_result(self):
+        """ROR returns `items` pre-sorted by its own relevance ranking. When
+        two candidates score an identical overlap against the claim, the
+        first one — the more relevant one, per ROR's own ordering — must
+        stay the reported 'nearest' name. Mutation-testing verify.py found
+        that loosening `overlap > best_overlap` to `>=` left the whole
+        suite green: no existing test ties two candidates' overlap, so a
+        later, less-relevant result would silently overwrite an earlier,
+        equally-scored, better-ranked one."""
+        body = json.dumps({"items": [
+            {"id": "https://ror.org/aaa",
+             "names": [{"value": "Ghent College", "types": ["ror_display"]}], "locations": []},
+            {"id": "https://ror.org/bbb",
+             "names": [{"value": "Antwerp University", "types": ["ror_display"]}], "locations": []},
+        ]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Ghent University")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+        self.assertIn("Ghent College", claim.detail)
+        self.assertNotIn("Antwerp University", claim.detail)
+
     def test_verify_all_only_touches_checkable_subtypes(self):
         v = StubVerifier({"api.ror.org": (json.dumps({"items": []}), True)})
         claims = [Claim(kind="degree", subtype="degree_institution", value="Nowhere University"),

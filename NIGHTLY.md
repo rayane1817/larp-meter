@@ -1964,3 +1964,187 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-16 (nightly run)
+
+### ⚠ Open-PR queue: FOURTEEN unmerged `nightly/*` PRs, dating back to 2026-08-30 — read this first
+
+**`master`'s tip is still `9f71c98` ("Merge nightly/2026-08-27").** Twenty
+consecutive nights have now produced independently-reviewable work with
+zero merges landing. The queue grew again since 2026-09-15's own count of
+thirteen (see that entry for the table through PR #23) — PR #24
+(`nightly/2026-09-15`, "mutation-testing names.py and scoring.py finds two
+real, unpinned gaps") is now also open and unmerged, bringing the total to
+**fourteen**, PRs #11 through #24 inclusive, spanning 2026-08-30 through
+2026-09-15. Checked live via the GitHub API rather than trusting each PR's own
+description: all fourteen are still open and draft. (First check used the
+wrong API — `get_status`, the legacy commit-status endpoint — which
+reported zero statuses and briefly looked like CI wasn't running at all;
+`get_check_runs`, the one that actually reflects `tests.yml`'s GitHub
+Actions runs, shows all 6 matrix jobs green on both the oldest, PR #11,
+and the newest, PR #24, checked directly rather than assumed. Recording
+the correction so a future run doesn't repeat it: `get_status` is the
+wrong tool for a repo whose CI is Actions-only.) None has a review. This
+is not a merge-conflict or CI-failure problem — every PR reports `clean`
+mergeable state and green CI; it is nobody having merged anything in
+three weeks. Per standing instructions this is flagged, not acted on:
+tonight's branch is cut fresh from `master`'s current tip regardless, and
+deliberately scoped (test-only changes to a file — `verify.py` — that
+**no** open PR appears to touch, based on each PR's own title) to minimize
+collision risk at merge time. **A human merge pass is now three weeks
+overdue and is the single highest-leverage action available on this
+project** — every night that passes without one means real, independently
+verified fixes for distinct findings keep sitting unreleased, and (per
+2026-09-15's own finding) some of them are now being independently
+re-discovered by later nights that can't see work sitting on other
+people's unmerged branches.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight.**
+Verified directly against `master`'s current `BACKLOG.md`: `sed -n
+'759,1062p' BACKLOG.md | grep '^### '` (the CRITICAL section's own line
+range, bounded by the next `## MAJOR (25)` header) returns exactly 15
+entries, 10 carrying `[FIXED]` and 1 carrying `[PARTIALLY FIXED]`. The 4
+still open are the core architectural gap and its three near-duplicate
+phrasings from different lenses of the original five-lens review — none
+touched tonight, and none of the fourteen open PRs above claims to touch
+any of the 15 named CRITICALs either (checked each PR title against the
+CRITICAL section's own headings).
+
+### What I did
+
+**Primary item — mandatory per-cycle mutation-testing pass, targeted at
+`verify.py`.** Chose this file specifically because 2026-09-15's own "what
+the next run should pick up" list named it (item 3) as still needing a
+full sweep repeated directly against `master` — the two branches that did
+full sweeps of `verify.py` (PR #4) and `names.py` (PR #5) are both still
+sitting unmerged since August. Also chose it because, per each open PR's
+own title, none of the fourteen in the queue appears to touch `verify.py`,
+so a test-only change here carries the lowest possible collision risk at
+merge time — this branch does not modify `larp_meter/verify.py` itself at
+all, only `tests/`.
+
+Six targeted mutations, four caught immediately by the existing suite
+(`_is_ambiguous_acronym`'s `<= 5` boundary, arXiv's `"api/errors" in
+entry_id or title == "error"` disjunction narrowed to `and`, GitHub's
+`len(published.split()) >= 2` comparability guard, and a spot-check
+re-confirmation that `verify_institution`'s `wanted and wanted <= have`
+guard — pinned back on 2026-08-18/19 — is still caught). Two survived,
+both real, previously-untested behavior in already-correct code — not live
+bugs on `master` today:
+
+1. `verify_patent`'s title-text "not found" check. Before writing a test,
+   verified live against the real Google Patents endpoint (several
+   malformed/nonexistent patent IDs, 2026-09-16) that a nonexistent ID
+   normally 404s at the HTTP layer — already handled correctly by `_get`
+   turning that into an empty body, never reaching this code — so the
+   title-text check exists for the *other* failure shape: an HTTP 200 page
+   whose own title says the patent wasn't found. No test drove
+   `verify_patent` through that shape (the only two direct tests of this
+   handler cover a real inventor match and an unrelated markup-drift
+   failure). Under the mutation this reads as a scrape failure
+   (UNCHECKABLE) instead of a nonexistent patent (NOT_FOUND) — weaker, not
+   wrong-direction, since UNCHECKABLE still excludes it from scoring.
+2. `verify_institution`'s overlap tie-break (`>` loosened to `>=`) lets a
+   later, equally-scored, less-relevant ROR result silently overwrite an
+   earlier one, contrary to ROR's own relevance ordering. Cosmetic only —
+   it changes which name appears in the "Nearest listed name" hint inside
+   a NOT_FOUND detail string, never `claim.status` — but real and
+   previously untested.
+
+Both pinned with new regression tests in the existing style (each
+confirmed RED against the mutated code, GREEN against the restored code,
+full command sequence in the Mutation-testing log below), full detail in
+BACKLOG.md's new "Mutation-testing pass: `verify.py`, two real survivors in
+the patent/ROR handlers" entry. `larp_meter/verify.py` is byte-identical to
+`master` after this branch.
+
+**End-to-end CLI check**: since this branch touches no production code,
+skipped the full two-sample verification the brief requires "especially"
+after touching verify.py/extract.py/names.py/flags.py/scoring.py — none of
+those changed. Ran two hand-written samples anyway as a sanity check (a
+plain honest engineer bio, and the BACKLOG.md "Marcus Vane" fabrication
+with an added `US9999999` patent claim) through the real CLI without
+`--verify`, to confirm nothing broke: both ran cleanly, both landed on
+provisional/low-coverage scores as expected (11% and 32% decided
+respectively), and the fabricated sample's flag 8 PASSED on the invented
+institution exactly as BACKLOG.md's core-gap entry describes — an
+unrelated, already-known, already-documented gap, not something tonight's
+change touched.
+
+### What I confirmed / refuted in BACKLOG.md
+
+Did not investigate any of the 15 CRITICALs or other existing BACKLOG.md
+findings tonight — the two mutation-testing survivors above are new
+findings of their own (now recorded in BACKLOG.md), not confirmations of
+anything already listed there. Separately confirmed live (see "What I did"
+above) that Google Patents' real HTTP-404 behavior for malformed patent
+IDs matches what `_get`'s existing 404/410 handling already expects —
+this is a fact about the live API, not a BACKLOG.md finding, recorded here
+because the task brief asks that API assumptions be checked live rather
+than trusted from memory.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `verify.py` | `_is_ambiguous_acronym`: `len(stripped) <= 5` → `< 5` | Caught |
+| `verify.py` | arXiv error feed: `"api/errors" in entry_id or title == "error"` → `and` | Caught |
+| `verify.py` | GitHub comparability: `len(published.split()) >= 2` → `> 2` | Caught |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:` | Caught (spot-check, re-confirming the 2026-08-18/19 pin) |
+| `verify.py` | `verify_patent`: `if not title or "not found" in title.lower():` → `if not title:` | **Survived — real, now pinned** (`test_google_patents_not_found_page_is_not_scraped_as_a_scrape_failure`) |
+| `verify.py` | `verify_institution` tie-break: `if overlap > best_overlap:` → `>=` | **Survived — real, now pinned** (`test_ror_tie_break_keeps_the_registrys_own_higher_ranked_result`) |
+
+**Result: 475 tests green** (473 on `master` → 475: two new tests, one in
+`tests/test_regressions.py`, one in `tests/test_verify.py`). `verify.py`
+has now had two mutation-testing passes on `master` itself: 2026-08-18's
+spot-check (1 guard) and tonight's wider sweep (6 mutations, 2 pinned). The
+**full** 6-mutation sweep PR #4 (`nightly/2026-08-18`) already did remains
+unmerged and is the more complete pass — tonight's is a second, partially-
+overlapping but independently-run pass, not a replacement for landing that
+branch. `names.py`, `scoring.py` and `flags.py` were not touched tonight;
+see 2026-09-15's entry for `names.py`/`scoring.py`'s own fresh sweep
+(also still unmerged, on PR #24).
+
+### What I learned
+
+- Live-probing a real third-party endpoint before writing a mutation-
+  testing regression test is worth the few extra minutes: my first
+  instinct was to assume the "not found" title check was reachable via a
+  straightforward nonexistent-patent-number request, and only checking
+  live (several malformed IDs against the real Google Patents endpoint)
+  showed that path actually 404s and never reaches this code — the check
+  guards a narrower, HTTP-200-but-app-level-404 case instead. Getting the
+  actual failure shape right made the pinning test test something real
+  rather than a scenario that cannot occur — the exact trap PR #24's
+  "unreachable branch" writeup from the night before also called out for a
+  different function.
+- Deliberately picking a mutation-testing target with zero overlap against
+  every open PR's stated file list (by title alone, not by diffing each
+  branch) is a cheap, repeatable way to guarantee a test-only branch merges
+  independently while the queue stays this deep — 2026-09-15 did the same
+  thing for `names.py`/`scoring.py`; worth continuing until the queue
+  clears.
+
+### What the next run should pick up first
+
+1. **The open-PR queue is now fourteen deep and three weeks old.** This is
+   the single biggest risk to the project's own bookkeeping (BACKLOG.md's
+   `[FIXED]` tags, this file's tally) staying trustworthy, and to nightly
+   runs continuing to waste effort re-discovering findings that already
+   have a fix sitting on someone else's unmerged branch. Flagging again,
+   not acting — a human merge pass is the single highest-value action
+   available, full stop.
+2. The core architectural gap remains fully untouched since 2026-08-27's
+   visibility-only OpenAlex slice — still the single highest-value,
+   highest-risk piece of unbuilt work in the repo, and still blocked on the
+   same disambiguation groundwork (merged OpenAlex author entities,
+   common-name collision, the per-affiliation `years`-array corroboration
+   signal) every recent entry has named. Re-verify OpenAlex's live rate
+   limits and response shapes before resuming this — the task brief's own
+   numbers are already a month old as of tonight.
+3. `flags.py` and `names.py`'s split-reading union (2026-09-15's finding)
+   are the two remaining required files without a *fresh* mutation-testing
+   pass directly on `master` (as opposed to on an unmerged branch) —
+   `flags.py` specifically hasn't had one since 2026-08-16/17.

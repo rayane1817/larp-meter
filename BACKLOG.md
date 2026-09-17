@@ -48,6 +48,55 @@ against the restored, unmutated file. Neither file needed a production change �
 already correct, just unasserted on `master`.
 
 ---
+### Mutation-testing pass: `flags.py`'s "No Independent Validation" word-count floor, one real survivor (nightly/2026-09-17)
+
+Full per-cycle sweep, all four required files, direct against `master`'s tip
+(`9f71c98`). Thirteen targeted mutations across `flags.py`, `scoring.py`,
+`names.py` and `verify.py`; twelve caught immediately, one real survivor:
+
+**`flags.py`'s flag 10 (`f_output` — "No Independent Validation"): `if
+ctx.word_count >= 40 and find_terms(...)` survived as `>= 20` with the
+suite still green.** Two pins already existed from 2026-08-17
+(`test_a_short_bio_is_not_condemned_for_lacking_press`, a 9-word bio, and
+`test_validation_triggers_at_exactly_40_words`, exactly 40 words), but they
+only anchor the two extremes — well below any plausible threshold, and
+exactly at the real one. Neither rules out a threshold lowered into the gap
+between them. Confirmed live: a real 29-word bio with a leadership claim
+("Founder") and a tech claim ("hardware", "satellite"), zero source URLs
+and zero press language returns UNKNOWN ("too little material") on
+`master`'s actual code, and would incorrectly flip to TRIGGERED
+("substantial claims with zero third-party validation") under the `>= 20`
+mutant — a mid-length, ordinarily-terse bio wrongly condemned for a
+silence a short profile has no room to fill. This is a fairness gap in the
+same family the task brief calls out (short/thin profiles scored as
+deception), just one the threshold's own pins didn't previously rule out.
+Pinned in `tests/test_flags.py::TestIndividualFlags::test_a_mid_length_bio_below_40_words_stays_undecided`
+— confirmed RED against the `>= 20` mutant, GREEN against the restored
+40-word threshold. No production code changed; `flags.py` is
+byte-identical to `master`.
+
+The other twelve mutations (all caught, already correctly pinned):
+`flags.py`'s `f_education` (`not credentials and not degrees` boundary),
+`f_self_referential` (`partners and owned`), `f_experience` (`not titles
+or not claimed`), `f_timeline` (future-date detection),
+`f_fundraising` (`not asks`, `traction_claims` truthiness),
+`f_credentials` (`not institutions`), `f_logo_wall` (`>= 4` partner
+threshold), `f_validation`'s `search_ok is False` guard, `f_title_inflation`'s
+`has_doctorate` check; `scoring.py`'s `coverage >= MIN_COVERAGE` boundary
+and its floor-severity `<=` comparison; `names.py`'s script-mismatch guard
+(`mine_is_latin != blob_is_latin`), its `len(present) >= 2` confidence
+threshold, and its end-of-name check in the single-token-match branch;
+`verify.py`'s `_attribute`'s `elif match is None` branch (the exact
+None-as-False caller-boundary bug class the task brief warns about,
+confirmed still correctly guarded) and its `not self.subject_name` branch.
+All discovered a bytecode-cache trap worth recording for future runs: after
+mutating a `.py` file in place and re-running `unittest`, always `rm -rf`
+every `__pycache__` first — a stale compiled module from a prior mutation
+run silently produced a false "still triggers" result once, undetected
+until the restored-file run also showed a failure that made no sense
+against the visibly-restored source.
+
+---
 ### Flag 6: a genuine negative OpenAlex search becomes visible in the report (nightly/2026-08-27)
 
 First slice of the core architectural gap's own recommended first step (see

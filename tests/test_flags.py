@@ -117,6 +117,22 @@ class TestIndividualFlags(unittest.TestCase):
         self.assertEqual(len(text.split()), 40)
         self.assertEqual(status_of(text, 10), TRIGGERED)
 
+    def test_a_mid_length_bio_below_40_words_stays_undecided(self):
+        """Mutation-tested (2026-09-17): `ctx.word_count >= 40` survived as
+        `>= 20` with the suite still green. The two existing pins only
+        anchor the extremes — a 9-word one-liner (well below any
+        threshold) and exactly 40 words (right at the real one) — neither
+        rules out a lowered boundary in between. A 29-word bio with a
+        real leadership/tech claim and no press must still read as 'too
+        little material to expect validation signals', not get
+        prematurely condemned for a silence that a genuinely short
+        profile has no room to fill."""
+        text = ("Founder building satellite hardware to serve customers around the world "
+                "every single day of the year with our growing team right now across "
+                "every region we operate in today.")
+        self.assertEqual(len(text.split()), 29)
+        self.assertEqual(status_of(text, 10), UNKNOWN)
+
     def test_buzzword_density_and_variety_trigger_at_the_exact_thresholds(self):
         """Mutation-tested (2026-08-17): both `len(distinct) >= 4` and
         `density >= 2.0` survived as `>` with the suite green — every

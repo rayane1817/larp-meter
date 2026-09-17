@@ -1964,3 +1964,195 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-17 (nightly run)
+
+### ⚠ Open-PR queue: FIFTEEN unmerged `nightly/*` PRs, dating back to 2026-08-30 — still the single biggest risk, read this first
+
+**`master`'s tip is still `9f71c98` ("Merge nightly/2026-08-27").** Three
+weeks and three days since the last merge. The queue grew again since
+2026-09-16's count of fourteen: PR #25 (`nightly/2026-09-16`, "a
+fabricated patent's Google 404 page and a ROR tie-break were both
+untested in verify.py") is also open and unmerged, bringing the total to
+**fifteen**, PRs #11 through #25, spanning 2026-08-30 through 2026-09-16.
+Spot-checked two directly via the GitHub API rather than trusting each
+PR's own description (`pull_request_read get` on the oldest, #11, and the
+newest, #25): both report `mergeable_state: clean`, still open, still
+draft, no reviews. Per every recent entry's own finding, this is a
+human-merge-queue problem, not a code problem — flagging again, not
+attempting to resolve it myself (that would mean rewriting other people's
+unmerged branches, which the standing instructions rule out).
+
+| PR | Branch | What it claims |
+|----|--------|-----------------|
+| #11 | nightly/2026-08-30 | Flag an OpenAlex "best" pick that's likely a merged entity |
+| #12 | nightly/2026-08-31 | An ordinary CV mistaken for a LinkedIn paste silently lost content |
+| #13 | nightly/2026-09-01 | Confidential and pre-revenue work is not deception |
+| #14 | nightly/2026-09-02 | A word-wrap can hide a denial from `is_negated` |
+| #15 | nightly/2026-09-03 | A fixed-width context window clipped a disclaiming phrase far from its identifier |
+| #16 | nightly/2026-09-04 | A self-applied doctoral title in lowercase or all-caps was invisible to flag 13 |
+| #17 | nightly/2026-09-08 | A current student's own study dates read as a fabricated future claim |
+| #18 | nightly/2026-09-09 | Pin flags.py's buzzword carve-out lower boundary |
+| #19 | nightly/2026-09-10 | The "own account" caveat only credited Wikipedia, never a genuine OpenAlex hit |
+| #20 | nightly/2026-09-11 | A truthful career read as impossible when only its most recent role was dated |
+| #21 | nightly/2026-09-12 | An honest institution ROR doesn't index read as a fabricated credential |
+| #22 | nightly/2026-09-13 | A retracted paper cited as your own published work read as VERIFIED |
+| #23 | nightly/2026-09-14 | A preprint cited as your own peer-reviewed work verified identically to a real journal article |
+| #24 | nightly/2026-09-15 | Mutation-testing names.py and scoring.py finds two real, unpinned gaps |
+| #25 | nightly/2026-09-16 | A fabricated patent's Google 404 page and a ROR tie-break were both untested in verify.py |
+
+Per standing instructions, tonight's branch is cut fresh from `master`'s
+tip regardless, and scoped as a **test-only change to `flags.py`'s test
+file** — no open PR's title claims to touch `tests/test_flags.py`'s flag
+10 boundary, so this should merge independently of all fifteen. I flagged
+this to the user directly this run (a notification, not just this file)
+given how long it's been sitting — see below.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight.**
+Verified directly against `master`'s current `BACKLOG.md`
+(`awk '/^## CRITICAL/,/^## MAJOR/' BACKLOG.md | grep -c '\[FIXED\]'` → 10,
+`grep -c '\[PARTIALLY FIXED\]'` → 1, 15 `### ` headings total under the
+CRITICAL section). The 4 still open are the core architectural gap and its
+three near-duplicate phrasings — untouched tonight. Tonight's mutation-
+testing finding is new (not one of the 15 named CRITICALs), so the tally
+itself doesn't move.
+
+### What I did
+
+**Primary item — mandatory per-cycle mutation-testing pass, all four
+required files, direct against `master`'s tip.** Chose `flags.py` as the
+main target since 2026-09-16's own "what the next run should pick up"
+list named it as the file without a *fresh* pass directly on `master`
+since 2026-08-16/17 (its only unmerged fresh pass sits on PR #18, still
+open). Thirteen targeted mutations total: nine in `flags.py`, two each in
+`scoring.py` and `names.py`, two in `verify.py`. Twelve caught immediately
+by the existing suite. One real, previously-unpinned survivor:
+
+**`flags.py`'s flag 10 ("No Independent Validation"): `if ctx.word_count
+>= 40 and find_terms(...)` survived as `>= 20`.** Two pins already existed
+from 2026-08-17 — a 9-word bio (well below any threshold) and exactly
+40 words (right at the real one) — but neither rules out a threshold
+lowered into the 20–39 word gap between them. Verified live against the
+real, unmutated pipeline: a 29-word bio with a leadership claim
+("Founder") and tech claims ("hardware", "satellite"), no source URLs, no
+press language, correctly returns UNKNOWN ("too little material to expect
+validation signals") today. Under the `>= 20` mutant it flips to TRIGGERED
+("substantial claims with zero third-party validation") — a mid-length,
+ordinarily terse bio wrongly condemned for a silence it has no room to
+fill. This is the same fairness family the task brief calls out (short
+profiles scored as deception), just a specific gap the existing pins
+didn't close. Pinned with a new regression test
+(`tests/test_flags.py::TestIndividualFlags::test_a_mid_length_bio_below_40_words_stays_undecided`),
+confirmed RED against the mutant, GREEN against the restored code. No
+production file changed — `larp_meter/flags.py` is byte-identical to
+`master`; only `tests/test_flags.py` differs, chosen deliberately to keep
+this branch's merge-collision risk as low as possible against the
+fifteen-deep queue.
+
+Full mutation-by-mutation list, including the twelve caught (already
+correctly pinned) mutations across all four files, is in BACKLOG.md's new
+"Mutation-testing pass: `flags.py`'s 'No Independent Validation' word-count
+floor" entry.
+
+**End-to-end CLI check**: ran two hand-written samples through the real
+CLI (`python3 -m larp_meter --text ... --name ...`, no `--verify`, matching
+the standing brief's requirement to run the actual pipeline, not just call
+flag functions directly). A clean, honest firmware-engineer bio (BSc
+Electrical Engineering, named employers, an open-source library) and the
+BACKLOG.md "Dr. Marcus Vane" fabrication archetype (soft output claims,
+self-referential partners, an active funding ask). Both landed
+INSUFFICIENT DATA as expected given each profile's thinness — coverage
+14% and 24% respectively, both below `MIN_COVERAGE`. The fabricated sample
+correctly TRIGGERED flag 10 (well past the real 40-word threshold, with a
+leadership+tech claim and no press) and flag 7 (fundraising with zero
+traction); the honest sample TRIGGERED flag 6 only because "working on" is
+in `building_claims` with no cited artifact — an already-documented,
+unrelated instance of the core architectural gap (a truthful "I build
+firmware" reads as an unverifiable claim exactly like a fabricator's would,
+because nothing here reaches a registry), not something this branch
+touched or should try to fix in passing.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed** (live repro, not by reading a PR description): the flag 10
+  word-count boundary gap above is real and reproduces on `master`'s
+  actual, unmutated code exactly as described — new finding, now recorded.
+- **Confirmed** (live repro): `verify.py`'s `_attribute` — the exact
+  "a function's return contract grew a `None` case, a caller
+  mis-handled it as `False`" bug class the standing instructions use as
+  their worked cautionary example — is correctly guarded on `master`
+  today (`elif match is None:` is a distinct branch from `elif match:`,
+  and mutating it back to a bare truthy check is caught by the suite).
+  Re-confirming this each cycle is cheap insurance given how much damage
+  a regression here would do.
+- Did not re-investigate any of the 15 CRITICALs or other existing
+  BACKLOG.md entries beyond the mutation-testing spot-checks above.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` | flag 10: `ctx.word_count >= 40` → `>= 20` | **Survived — real, now pinned** |
+| `flags.py` | `f_education`: `not credentials and not degrees` → `or` | Caught |
+| `flags.py` | `f_self_referential`: `partners and owned` → `or` | Caught |
+| `flags.py` | `f_experience`: `not titles or not claimed` → `and` | Caught |
+| `flags.py` | `f_timeline`: future-date detection dropped | Caught |
+| `flags.py` | `f_fundraising`: `not asks` → `asks` | Caught |
+| `flags.py` | `f_fundraising`: `traction_claims` → `not traction_claims` | Caught |
+| `flags.py` | `f_credentials`: `not institutions` → `institutions` | Caught |
+| `flags.py` | `f_logo_wall`: `>= 4` partner threshold → `>= 3` | Caught |
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught |
+| `scoring.py` | floor-severity `<=` → `<` | Caught |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught |
+| `names.py` | `len(present) >= 2` → `>= 1` | Caught |
+| `verify.py` | `_attribute`'s `elif match is None:` → `elif match:` | Caught |
+| `verify.py` | `_attribute`'s `not self.subject_name` guard dropped | Caught |
+
+**Result: 474 tests green** (473 on `master` → 474: one new test in
+`tests/test_flags.py`). All four required files now have at least one
+mutation-testing pass whose *pin* lives directly on `master` (flags.py:
+tonight; scoring.py: 2026-08-16; names.py: the zero-candidates guard pinned
+2026-08-27, script-mismatch/confidence-threshold spot-checked tonight;
+verify.py: the `wanted`/`have` guard pinned 2026-08-27, `_attribute`
+spot-checked tonight) — though the *full, exhaustive* sweeps for
+`names.py` and `verify.py` still only exist on unmerged PRs #5 and #4
+respectively.
+
+### What I learned
+
+- **A stale bytecode cache produced a false result mid-session.** After
+  mutating `flags.py`, running the suite, and restoring the file via
+  `git checkout`, a follow-up direct call to `f_validation` on the
+  restored, verified-byte-identical source still returned the *mutated*
+  behavior — until `find . -name __pycache__ -exec rm -rf {} +` was run.
+  Python does check source mtimes against `.pyc` timestamps, but rapid
+  mutate/restore/mutate cycles within the same second (or a restore that
+  doesn't bump mtime past the cached one) can defeat that check. Any
+  future mutation-testing pass should clear `__pycache__` before *every*
+  single test run, mutated or restored — not just once at the start —
+  or risk chasing a phantom bug for several minutes, as happened here.
+- Keeping tonight's change to a test file only (zero production diff)
+  continues to be the cheapest way to guarantee a branch merges
+  independently while the queue stays this deep — the third night in a
+  row to do this deliberately (2026-09-15 for names.py/scoring.py,
+  2026-09-16 for verify.py, tonight for flags.py).
+
+### What the next run should pick up first
+
+1. **The open-PR queue is now fifteen deep and over three weeks old.**
+   Notified the user directly about this tonight (not just this file) —
+   it has now roughly doubled since 2026-08-27's seven-PR warning with
+   zero merges in between. This remains the single highest-leverage
+   action available on this project, full stop.
+2. The core architectural gap remains untouched since 2026-08-27's
+   visibility-only OpenAlex slice (plus PR #11's still-unmerged
+   merge-risk qualifier). Still blocked on the same disambiguation
+   groundwork every recent entry has named — re-verify OpenAlex's live
+   rate limits and response shapes before resuming, the brief's numbers
+   are now over a month old.
+3. `names.py` and `verify.py` still only have their *exhaustive* sweeps
+   sitting on unmerged PRs #5 and #4 — once the queue clears, `master`
+   inherits full coverage for both; until then, tonight's and previous
+   nights' spot-checks are a stopgap, not a substitute.

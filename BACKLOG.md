@@ -756,6 +756,76 @@ landed. See "Open PRs" below.
 
 ---
 
+### Mutation-testing sweep of `verify_institution`'s ROR ranking/messaging logic (nightly/2026-09-20)
+
+Mandatory per-cycle pass. One candidate mutation each in `scoring.py`
+(`coverage >= MIN_COVERAGE` → `>`, and the severity-floor `<=` → `<`),
+`names.py` (`at_an_end`'s `or` → `and`, `len(present) >= 2` → `> 2`, and the
+script-mismatch `!=` → `==`) and `flags.py` (the buzzword `len(distinct) >=
+4` → `> 4`, the leadership `word_count >= 40` → `> 40`, and flag 11's
+`if refuted or mismatched:` → `and`) — all seven **caught**, no production
+change needed in those three files tonight.
+
+`verify.py` got a focused sweep of `verify_institution` and its two helper
+functions (`_is_ambiguous_acronym`, the ROR item-ranking loop), since prior
+nights' sweeps of this file concentrated on the `wanted <= have` subset
+guard and hadn't touched the ranking/tie-break/messaging code around it.
+Three real survivors, none of them able to move `claim.status` off VERIFIED/
+NOT_FOUND on their own — two previously-unpinned, one an independent
+reconfirmation of an unmerged PR's already-known finding:
+
+- **`for item in items[:25]:` → `for item in items[:1]:` survived.** ROR's
+  query endpoint is fuzzy and does not reliably rank the actual named
+  institution first; every existing fixture happened to put the true match
+  at `items[0]`, so nothing proved the `[:25]` scan of lower-ranked hits was
+  actually load-bearing. This is the fairness-relevant one of the three: a
+  real, generic-sounding institution that ROR ranks 20th behind noise would
+  silently read as NOT_FOUND if this slice ever regressed to checking only
+  the top hit — punishing an honest person's credential, not accusing
+  anyone, but still exactly the class of harm this project audits for.
+  Pinned: `tests/test_mutation_guards.py::test_a_real_institution_ranked_below_the_top_25_ror_hits_still_verifies`
+  (20 irrelevant "noise" items ranked ahead of the real, matching one).
+- **`_is_ambiguous_acronym`'s `stripped.isupper()` half survived being
+  dropped.** Every existing acronym fixture ('MIT', 'UCLAN') was already
+  all-caps, so nothing distinguished "short and spaceless" from "short,
+  spaceless, AND written as an acronym". Without the `isupper()` check, an
+  ordinary short proper name in normal title case ('Delft') would pick up
+  the "ambiguous — confirm which institution is meant" caveat on an
+  otherwise clean VERIFIED, for no real reason. Message-only (status stays
+  VERIFIED either way), but still a real, previously-unpinned gap in what
+  the report tells a reader. Pinned:
+  `tests/test_mutation_guards.py::test_ambiguous_acronym_check_requires_uppercase_not_just_short_and_spaceless`.
+- **The tie-break `if overlap > best_overlap:` → `>=` also survived** — but
+  this is not a new finding, and not even a second one. It was first found
+  by PR #16 (`nightly/2026-09-04`), independently re-found and re-pinned by
+  PR #21 (`nightly/2026-09-12`) and again by PR #25 (`nightly/2026-09-16`) —
+  three separate nights, none merged, each writing its own copy of
+  essentially the same test. Reconfirmed live a fourth time tonight rather
+  than trusting any of those PR descriptions — reverting the guard on a
+  scratch copy still leaves the (then-475-test) suite green — but
+  deliberately did **not** write a fourth copy of the same test; recording
+  the confirmation here instead, per this project's own standing practice
+  for a fix that is correct but stuck on an unmerged branch (see the
+  2026-08-27 entry above for the precedent). Sixteen days, four independent
+  discoveries, zero merges — this single guard is the clearest evidence yet
+  that the open-PR queue (see tonight's NIGHTLY.md entry) is now costing
+  more effort in rediscovery than the underlying bugs would take to fix.
+
+Both of the first two reconfirmed CAUGHT by their new tests against the
+mutated code, then reconfirmed PASSING once the mutation was reverted,
+before the tests were added to this branch. No production code changed
+tonight — all three guards above were already correct; only the
+mutation-testing gap around the first two is closed, and the third is now
+independently reconfirmed (matching PR #25 exactly) for the second time.
+Ran the full suite (473 → 475 tests) green throughout, and
+smoke-tested the real end-to-end pipeline (`python larp-meter.py --text ...
+--name ... --verify`) against a live ROR lookup for "Massachusetts Institute
+of Technology" to confirm the institution-verification path this file's
+tests exercise is still the one the real CLI actually reaches — the
+project's own standing lesson from the dead-ROR-check bug.
+
+---
+
 ## CRITICAL (15)
 
 ### Verification is a one-way, claim-anchored funnel: the tool can only check identifiers the subject volunteered, never what the subject's actual public record says

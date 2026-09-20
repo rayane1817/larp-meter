@@ -1964,3 +1964,192 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-20 (nightly run)
+
+### ⚠ Open-PR queue: SIXTEEN unmerged `nightly/*` PRs, dating back to 2026-08-30 — no notification sent tonight, see why below
+
+**`master`'s tip is still `9f71c98` ("Merge nightly/2026-08-27").** Twenty-
+four days since the last merge. The queue grew by exactly one PR since
+2026-09-17's count of fifteen: PR #26 (`nightly/2026-09-17`, "flags.py's
+'No Independent Validation' word-count floor had a real gap between two
+existing pins") is also open and unmerged, bringing the total to
+**sixteen**, PRs #11 through #26, spanning 2026-08-30 through 2026-09-17.
+Confirmed via the GitHub API rather than trusting titles alone: spot-
+checked #16, #21, #25 and #26 directly (`pull_request_read`), all report
+`mergeable_state: clean`, still open, still draft, no reviews.
+
+| PR | Branch | What it claims |
+|----|--------|-----------------|
+| #11 | nightly/2026-08-30 | Flag an OpenAlex "best" pick that's likely a merged entity |
+| #12 | nightly/2026-08-31 | An ordinary CV mistaken for a LinkedIn paste silently lost content |
+| #13 | nightly/2026-09-01 | Confidential and pre-revenue work is not deception |
+| #14 | nightly/2026-09-02 | A word-wrap can hide a denial from `is_negated` |
+| #15 | nightly/2026-09-03 | A fixed-width context window clipped a disclaiming phrase far from its identifier |
+| #16 | nightly/2026-09-04 | A self-applied doctoral title in lowercase or all-caps was invisible to flag 13 |
+| #17 | nightly/2026-09-08 | A current student's own study dates read as a fabricated future claim |
+| #18 | nightly/2026-09-09 | Pin flags.py's buzzword carve-out lower boundary |
+| #19 | nightly/2026-09-10 | The "own account" caveat only credited Wikipedia, never a genuine OpenAlex hit |
+| #20 | nightly/2026-09-11 | A truthful career read as impossible when only its most recent role was dated |
+| #21 | nightly/2026-09-12 | An honest institution ROR doesn't index read as a fabricated credential |
+| #22 | nightly/2026-09-13 | A retracted paper cited as your own published work read as VERIFIED |
+| #23 | nightly/2026-09-14 | A preprint cited as your own peer-reviewed work verified identically to a real journal article |
+| #24 | nightly/2026-09-15 | Mutation-testing names.py and scoring.py finds two real, unpinned gaps |
+| #25 | nightly/2026-09-16 | A fabricated patent's Google 404 page and a ROR tie-break were both untested in verify.py |
+| #26 | nightly/2026-09-17 | flags.py's "No Independent Validation" word-count floor had a real gap between two existing pins |
+
+**No push notification sent tonight, on purpose.** Per PR #20's (09-11) and
+PR #26's (09-17) own entries, the human maintainer has already been
+notified about this queue twice — once when it first became the dominant
+risk, again when it had "roughly doubled" between those two dates. Since
+09-17, exactly one PR was added, at the same one-per-night cadence every
+recent entry describes, with no new blocker, no CI failure, and no change
+in mergeable state — this is "+1 PR, +3 days," the same shape of update
+PR #21 (09-12) itself judged not worth repeating. Manufacturing a third
+notification with nothing qualitatively new to report would just be noise
+against a signal the human has already received twice; the honest thing
+is to keep this file current and stay quiet until something actually
+changes (a merge, a conflict, CI turning red, or the gap crossing some
+much larger threshold). Per standing instructions, tonight's branch is cut
+fresh from `master`'s tip regardless, and scoped to touch only
+`tests/test_mutation_guards.py` and `BACKLOG.md` — no open PR's title
+claims that file, so this should merge independently of all sixteen.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight.**
+Verified directly against `master`'s current `BACKLOG.md` (counted `###`
+headings under `## CRITICAL (15)` by hand: 10 carry `[FIXED]`, 1 carries
+`[PARTIALLY FIXED]`, 4 carry neither). The 4 still open are the core
+architectural gap and its three near-duplicate phrasings — untouched
+tonight. Tonight's mutation-testing findings are new (not among the 15
+named CRITICALs), so the tally itself doesn't move.
+
+### What I did
+
+**Primary item — mandatory per-cycle mutation-testing pass, all four
+required files.** One candidate mutation each in `scoring.py` (the
+`coverage >= MIN_COVERAGE` boundary, the severity-floor `<=`), `names.py`
+(`at_an_end`'s `or` → `and`, `len(present) >= 2` → `> 2`, the script-
+mismatch `!=` → `==`) and `flags.py` (the buzzword `len(distinct) >= 4`,
+the leadership `word_count >= 40`, flag 11's `if refuted or mismatched:`)
+— all seven caught immediately; no production change needed in those
+three files tonight.
+
+Spent the remaining time-box on a focused sweep of `verify.py`'s
+`verify_institution` and its two helper functions, since every prior
+sweep of this file concentrated on the `wanted <= have` subset guard and
+none had touched the ROR item-ranking, tie-break or acronym-messaging code
+around it. Three real survivors:
+
+1. **`for item in items[:25]:` → `items[:1]` survived — new finding.** ROR's
+   query endpoint is fuzzy and does not reliably rank the actual named
+   institution first; every existing fixture happened to put the true
+   match at `items[0]`, so nothing proved the scan past the first hit was
+   load-bearing. This is the fairness-relevant one: a real, generic-
+   sounding institution ROR ranks 20th behind noise would silently read as
+   NOT_FOUND if this slice ever regressed — punishing an honest person's
+   credential. Pinned with a 20-noise-item fixture:
+   `tests/test_mutation_guards.py::test_a_real_institution_ranked_below_the_top_25_ror_hits_still_verifies`.
+2. **`_is_ambiguous_acronym`'s `stripped.isupper()` half survived being
+   dropped — new finding.** Every acronym fixture ('MIT', 'UCLAN') was
+   already all-caps, so nothing distinguished "short and spaceless" from
+   "actually acronym-shaped." Message-only (status stays VERIFIED either
+   way) but real. Pinned:
+   `tests/test_mutation_guards.py::test_ambiguous_acronym_check_requires_uppercase_not_just_short_and_spaceless`.
+3. **The tie-break `if overlap > best_overlap:` → `>=` survived — NOT a new
+   finding.** Checked before writing a third test: this exact guard was
+   first found by PR #16 (2026-09-04), independently re-found by PR #21
+   (2026-09-12), and again by PR #25 (2026-09-16) — three separate nights,
+   none merged. Reconfirmed live a fourth time rather than trusting any
+   PR's description, then deliberately did **not** write a fourth copy of
+   the same test — recorded the reconfirmation in BACKLOG.md instead, per
+   this project's own standing practice (see the 2026-08-27 entry). Full
+   detail on all three in BACKLOG.md's new 2026-09-20 entry.
+
+**End-to-end CLI check**: ran the real pipeline (`python3 larp-meter.py
+--text ... --name ... --verify`, live network, no stubs) against "Jane
+Smith holds a PhD in Physics from the Massachusetts Institute of
+Technology and has published in Nature." — the `degree_institution` claim
+correctly reached `verify_institution` through the actual dispatch path
+and came back VERIFIED against the real ROR record for MIT
+(`https://ror.org/042nb2s44`), confirming the institution-verification
+path these new tests exercise is still the one the real CLI actually
+reaches — the project's own standing lesson from the dead-ROR-check bug.
+Did not run a second, flagged sample tonight since the change is test-only
+and touches no scoring or extraction path; the live VERIFIED check above
+is what mattered given tonight's specific finding (a real hit ranked low
+in ROR's results).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed** (live repro): `verify.py`'s ROR item-ranking `items[:25]`
+  and `_is_ambiguous_acronym`'s `isupper()` check are both real,
+  previously-unpinned gaps — now pinned directly on this branch.
+- **Confirmed** (live repro, fourth independent confirmation): the ROR
+  tie-break `>` guard is real and still unpinned on `master` — matches
+  PRs #16/#21/#25's descriptions exactly. Not re-pinned; see above.
+- Did not re-investigate any of the 4 still-open CRITICALs or other
+  existing BACKLOG.md entries beyond tonight's mutation-testing spot-checks.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught |
+| `scoring.py` | severity-floor `<=` → `<` | Caught |
+| `names.py` | `at_an_end`'s `or` → `and` | Caught |
+| `names.py` | `len(present) >= 2` → `> 2` | Caught |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught |
+| `flags.py` | buzzword `len(distinct) >= 4` → `> 4` | Caught |
+| `flags.py` | leadership `word_count >= 40` → `> 40` | Caught |
+| `flags.py` | flag 11 `if refuted or mismatched:` → `and` | Caught |
+| `verify.py` | `verify_institution`'s `items[:25]` → `items[:1]` | **Survived — new, now pinned** |
+| `verify.py` | `_is_ambiguous_acronym`'s `isupper()` dropped | **Survived — new, now pinned** |
+| `verify.py` | ROR tie-break `overlap > best_overlap` → `>=` | **Survived — 4th confirmation, not re-pinned** |
+
+**Result: 475 tests green** (473 on `master` → 475: two new tests in
+`tests/test_mutation_guards.py`). All four required files now have at
+least one mutation-testing pass whose *pin* lives directly on `master`
+(scoring.py: 2026-08-16; names.py: the zero-candidates guard, 2026-08-27,
+spot-checked again tonight; verify.py: the `wanted`/`have` guard,
+2026-08-27, plus tonight's two new ranking/messaging pins; flags.py:
+2026-08-16/17) — though the *full, exhaustive* sweeps for `names.py` and
+`verify.py` still only exist on unmerged PRs #5 and #4 respectively.
+
+### What I learned
+
+- **The tie-break guard's four-night rediscovery history is the clearest
+  concrete evidence yet of the queue's real cost.** It is not just "work
+  sitting idle" — it is the *same* work being redone by four different
+  sessions (2026-09-04, 09-12, 09-16, tonight), each one paying the full
+  cost of finding, verifying live, and writing up a guard that was already
+  correct and already described three times over. The queue is not merely
+  blocking progress; it is actively consuming nightly budget that could go
+  toward the untouched core gap instead.
+- Choosing `verify_institution`'s ranking/messaging code specifically
+  (rather than another pass over already-well-covered guards) paid off:
+  two of three survivors were genuinely new despite this being, by my
+  count, at least the sixth distinct mutation-testing pass over `verify.py`
+  across the unmerged queue and master's own history. There is still more
+  here — `_ror_names`'s v1/v2 schema fallback and `_ror_country`'s two
+  fallback paths were not attempted tonight for lack of time.
+
+### What the next run should pick up first
+
+1. **The open-PR queue is sixteen deep and 24 days stale.** Not
+   re-notifying tonight was a deliberate judgment call (see above), not
+   inattention — if the next run finds the queue has jumped by more than
+   the steady one-per-night pace, or a PR's mergeable state has turned
+   `dirty`, or CI has gone red on any of them, that *would* be new
+   information worth a fresh notification.
+2. The core architectural gap remains untouched since 2026-08-27's
+   visibility-only OpenAlex slice. Still blocked on the same
+   disambiguation groundwork every recent entry has named — re-verify
+   OpenAlex's live rate limits and response shapes before resuming (the
+   brief's own numbers are now over a month old, measured 2026-08-14).
+3. `verify.py`'s `_ror_names` (v1/v2 ROR schema fallback) and
+   `_ror_country` (its own v1/v2 fallback) have not had a dedicated
+   mutation pass yet — natural next target given tonight's ranking/
+   messaging sweep already turned up two real gaps nearby in the same
+   function.

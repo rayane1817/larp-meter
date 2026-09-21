@@ -13,6 +13,70 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### `is_linkedin_paste` misfired on an ordinary CV, and the parser then silently dropped most of its content (2026-08-31, nightly run)
+
+Not from the original 63 findings — flagged as untested speculation in the
+2026-08-17 entry's "worth a dedicated look" list ("`is_linkedin_paste`'s
+signal-scoring could plausibly misfire on an ordinary CV that uses bare
+'Experience'/'Education' as section headers"). Reproduced live before
+touching anything, and it's real and severe:
+
+`is_linkedin_paste`'s signal count gives bare `"Experience"`/`"Education"`
+section headers +2 each (4 total, already past the `signals >= 4` gate) with
+no requirement that anything else in the text is actually LinkedIn-specific.
+A plain resume using those two words as headers — the single most common CV
+shape there is — clears the threshold on headers alone, or on headers plus a
+bare `"2019 - Present"` date range (`_YEAR_RANGE_RE`), which is just as
+common in an ordinary CV as in a LinkedIn paste. Neither signal is actually
+LinkedIn-specific; only the month-based `"Jan 2020 - Present · 2 yrs"`
+date/duration combo, the `"· Full-time"` employment-type suffix, and UI
+chrome (`Message`/`Follow`, a connections count, endorsements) are.
+
+The consequence is not a mislabelling — it's content loss. Once
+`is_linkedin_paste` returns True, `cli._maybe_normalise` replaces the entire
+audited text with `parse_linkedin_paste(text).to_prose()`.
+`_parse_experiences` only tags an experience group as "dated" via the
+month-based pattern above; a plain `"2019 - Present"` line doesn't match, so
+every group in an ordinary CV is (wrongly) tagged `has_date=False` and all of
+them get folded into one entry via the "merge a no-date group into the
+preceding one" step, whose non-date branch keeps only the first two lines
+(title, company) of the resulting blob. Concretely, on a two-job hand-written
+CV fixture: the entire second job and both achievement sentences vanished —
+75 words of pasted CV became 31 words of prose — before `extract_claims` ever
+ran. This is data loss against an honest person's real claims, not a false
+accusation, but it's still a real defect: an audited profile that no longer
+contains what the subject actually wrote.
+
+Fixed by requiring at least one genuinely LinkedIn-specific marker
+(`has_linkedin_marker`: the date/duration regex, the employment-type regex,
+or ≥2 chrome lines) in addition to the existing `signals >= 4` and
+`(has_experience or has_education)` gates. This narrows detection, never
+widens it — the module's own docstring already states the correct bias
+("false positives are worse than false negatives... raw paste still works,
+just with weaker extraction"), so trading a hypothetical false-negative
+(an unusual LinkedIn paste with no month-based dates, no chrome, and no
+"Full-time"/etc. suffix) for eliminating this false-positive is the right
+direction per the module's own stated design intent.
+
+Two tests, written first and watched fail against the unmodified code:
+`test_ordinary_cv_with_bare_headers_is_not_mistaken_for_linkedin_paste`
+(unit, `is_linkedin_paste` directly) and
+`TestOrdinaryCvContentSurvives.test_second_job_and_achievements_survive_the_real_pipeline`
+— the latter runs the real `larp_meter.cli.main()` end-to-end, per this
+repo's standing lesson that a unit test on `is_linkedin_paste` alone proves
+nothing about whether the real `--text` pipeline still contains the dropped
+content once it gets there (the same shape as the ROR/HANDLERS dead-code bug
+and the `_attribute`/`None` bug). Confirmed both existing LinkedIn fixtures
+(`LINKEDIN_PASTE`, `MINIMAL_PASTE`) still detect correctly — both already
+carry a real month-based date/duration match. 473 → 475 tests, green
+throughout. Required end-to-end CLI check run on two additional hand-written
+samples beyond the test suite: a clean LinkedIn paste with genuine markers
+(still detected and normalised, `mode: text:linkedin`) and a fabricator's
+plain-text CV with a self-applied "Dr." title and no matching credential
+(no longer normalised, `mode: text`, flag 13 correctly TRIGGERED once
+`--name` is supplied — UNKNOWN with no `--name`, exactly as flag 13's own
+documented contract requires).
+
 ### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
 
 Not a full sweep (that's `nightly/2026-08-18`'s and `nightly/2026-08-19`'s work, still

@@ -1966,6 +1966,7 @@ merge pass.
    a third, fresh pass turns up anything neither of them caught.
 
 ## 2026-08-30 (nightly run)
+## 2026-08-31 (nightly run)
 
 ### Open-PR check (do this first, every night)
 
@@ -2188,3 +2189,154 @@ all four fronts after the merge queue landed:
    `master`'s history — not urgent, but worth a human's attention if it
    indicates the nightly schedule itself missed two firings rather than
    firing and finding nothing worth doing.
+**one open `nightly/*` PR, #11 (`nightly/2026-08-30`)**, draft, based cleanly
+on `master`'s current tip (`9f71c98`) — not stale, just unmerged. No CI
+configured on this repo (`pull_request_read get_status` returns zero
+statuses) and no reviews yet. It adds `providers._affiliation_institution_count()`
+and a `merge_risk` flag on OpenAlex's `best` candidate (institution_count
+>= 15) — a real, tested, narrow slice of the core-gap's disambiguation
+groundwork. Nothing to act on from a nightly run here per the standing
+instructions (merging is the human's gate); noting it so it isn't missed.
+Branched tonight's work fresh from `master`'s tip regardless, and kept it to
+`linkedin.py` + its tests specifically so it cannot conflict with #11's
+`flags.py`/`providers.py` diff at merge time.
+
+### Running backlog tally (15 CRITICAL findings)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight**
+(re-counted directly against `BACKLOG.md`'s `## CRITICAL (15)` section on
+`master`'s tip: grepped every `### ` header, 10 carry `[FIXED]`, 1 carries
+`[PARTIALLY FIXED]`, matching the 2026-08-30 entry's own count exactly — no
+merges landed since then to move it). The 4 still open are the core
+architectural gap and its three near-duplicate write-ups. Tonight's fix is
+filed under BACKLOG.md's "Shipped since the original review" section, not
+against any of the 15, since it isn't one of the original findings.
+
+### What I did
+
+**Primary item:** confirmed and fixed a bug flagged as untested speculation
+since the 2026-08-17 `linkedin.py` red-team pass — `is_linkedin_paste`
+misfiring on an ordinary CV that uses bare "Experience"/"Education" as
+section headers. Reproduced live first: a hand-written two-job CV fixture
+with plain `"2019 - Present"` date ranges (no LinkedIn-specific formatting
+at all) scored `signals=5` (headers alone give 4, a bare year-range line
+gives a 5th) against the `signals >= 4` gate, with no requirement that
+anything in the text is actually LinkedIn-specific. `cli._maybe_normalise`
+then replaced the entire audited text with
+`parse_linkedin_paste(text).to_prose()`, whose experience parser only
+recognises a group as "dated" via LinkedIn's own month-based
+`"Jan 2020 - Present · 2 yrs"` pattern — a plain `"2019 - Present"` line
+doesn't match, so every group gets folded into one entry and only the first
+two lines (title, company) survive. Concretely: the fixture's entire second
+job and both achievement sentences vanished, 75 words of CV becoming 31
+words of prose, *before `extract_claims` ever ran*. Not a mislabelling —
+silent content loss against an honest person's real, true claims.
+
+Fixed by requiring at least one genuinely LinkedIn-specific marker (the
+month-based date/duration regex, the `"· Full-time"`-style employment-type
+regex, or ≥2 lines of UI chrome) alongside the existing header/signal gates.
+This only narrows detection — consistent with the module's own docstring,
+which already states false positives are worse than false negatives here
+because raw paste still works, just with weaker extraction. Both existing
+LinkedIn fixtures (`LINKEDIN_PASTE`, `MINIMAL_PASTE`) still detect correctly
+since both already carry a real month-based date match.
+
+**TDD, tests written first and watched fail against unmodified code:**
+`test_ordinary_cv_with_bare_headers_is_not_mistaken_for_linkedin_paste`
+(unit) and `TestOrdinaryCvContentSurvives` (real `larp_meter.cli.main()`
+end-to-end, checking `report["mode"]` and `report["word_count"]`) — the
+latter specifically because, per this repo's standing lesson (the
+ROR/HANDLERS dead-code bug, and the `_attribute`/`None` bug one layer up), a
+unit test on `is_linkedin_paste` alone proves nothing about whether the
+dropped content is still missing once the real `--text` pipeline runs.
+473 → 475 tests, green throughout.
+
+**Required end-to-end CLI check**, two additional hand-written samples
+beyond the test suite (mandatory after touching `linkedin.py`): a clean
+LinkedIn paste with genuine markers (Message/Follow chrome, a connections
+count, a real `"Jan 2021 - Present · 5 yrs 8 mos"` line) — still detected
+and normalised, `mode: text:linkedin`, as before. A fabricator's plain-text
+CV with a self-applied "Dr." title and no matching credential in the stated
+education — no longer normalised (`mode: text`), and flag 13 correctly
+TRIGGERED once `--name` is supplied (UNKNOWN with no `--name`, which is
+flag 13's own documented, unrelated contract — not a regression from
+tonight's change; verified by rerunning with `--name` set).
+
+**Mandatory per-cycle mutation-testing spot-check**, one mutation in each of
+the four standing files, full suite run after each, reverted before the
+next — all four **caught**, confirming `master` is still fully protected on
+all four fronts (no full sweep needed tonight; all four already have a
+dedicated pass recorded in earlier entries):
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `coverage >` | **Caught** (1 failure) |
+| `flags.py` | `if refuted or mismatched:` → `if refuted and mismatched:` | **Caught** (4 failures) |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:` | **Caught** (3 failures) |
+| `names.py` | `name_matches`: deleted `if not usable: return None` | **Caught** (4 failures) |
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: full sweep 2026-08-16 (12 mutations, 6 real, all pinned).
+  Spot-checked again tonight (1 mutation), still caught.
+- `flags.py`: full sweep 2026-08-16/17 (33 mutations, 13 real, all pinned).
+  Spot-checked again tonight (1 mutation), still caught.
+- `names.py`: full sweep 2026-08-19 (PR #5, now merged onto `master`).
+  Spot-checked again tonight (1 mutation), still caught.
+- `verify.py`: full sweep 2026-08-18 (PR #4, now merged onto `master`).
+  Spot-checked again tonight (1 mutation), still caught.
+
+**All four files now have a full sweep on `master` itself** (the 2026-08-27
+entry's caveat — that the `names.py`/`verify.py` sweeps only existed on
+unmerged branches — no longer applies now that the merge queue has cleared).
+
+### BACKLOG.md: confirmed / refuted
+
+- **Confirmed live** (not from the 2026-08-17 entry's own speculation alone):
+  `is_linkedin_paste` genuinely misfires on an ordinary CV using bare
+  "Experience"/"Education" headers, and the resulting normalisation
+  genuinely drops real content (75 → 31 words on the hand-written fixture).
+  Fixed and pinned as described above; recorded as a new "Shipped" entry in
+  BACKLOG.md.
+- Did not re-verify any other BACKLOG.md entry tonight, including the two
+  other items on the 2026-08-17 list (`_DEGREE_LEVEL_RE`'s English-only
+  vocabulary, `_parse_educations`'s institution-is-line-one assumption) or
+  any of the 4 still-open CRITICALs. Don't assume those are still accurate
+  without a fresh look.
+
+### What I learned
+
+- The "worth a dedicated look, not verified live" caveats earlier entries
+  leave behind are worth taking literally — this was flagged as plausible
+  speculation two weeks ago (2026-08-17) and sat untouched until tonight's
+  live repro confirmed it was not just plausible but immediately
+  reproducible on the first hand-written fixture tried.
+- `_YEAR_RANGE_RE` (a bare `"YYYY - YYYY"`/`"YYYY - Present"` line) is not
+  actually a LinkedIn-specific signal — it's just as common in an ordinary
+  resume's date formatting. Worth remembering if `is_linkedin_paste` is
+  touched again: the only genuinely distinguishing markers found in this
+  file are the month-based date/duration combo, the employment-type suffix,
+  and UI chrome. Section headers and bare year ranges are necessary but not
+  sufficient.
+
+### What the next run should pick up first
+
+1. **The core gap, continued** (unchanged from the last several entries):
+   PR #11's `merge_risk` flag exists but `best` is still chosen by
+   `works_count` alone even when `merge_risk` is true. Use the per-affiliation
+   `years` array to cross-check temporal overlap against the subject's own
+   claimed career — the actual reconciliation step every entry since
+   2026-08-15 has deferred. Re-verify OpenAlex's live rate-limit posture
+   first (PR #11 found `/authors?search=` fully $0-rate-limited on
+   2026-08-30; check whether that's still true before assuming a live
+   end-to-end check against the real API is possible on any given night).
+2. **`linkedin.py`, remaining untouched leads from the 2026-08-17 list**:
+   `_DEGREE_LEVEL_RE`/`_DEGREE_FIELD_RE`'s English-only vocabulary (a French
+   "Licence en Droit" or German "Diplom-Ingenieur" won't bind to its
+   institution — a fairness gap, not an evasion one) and
+   `_parse_educations`'s assumption that the institution is always the
+   first line of the group (worth a live re-check against LinkedIn's current
+   markup before changing anything, since it may have shifted).
+3. PR #11 is still open and unmerged as of tonight — worth a human merge
+   pass before it joins the kind of queue the 2026-08-26/27 entries had to
+   flag as the project's biggest bottleneck.

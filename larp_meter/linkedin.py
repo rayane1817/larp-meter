@@ -343,7 +343,27 @@ def is_linkedin_paste(text):
     if sum(1 for l in text.splitlines() if _is_chrome(l)) >= 2:
         signals += 1
 
-    return signals >= 4 and (has_experience or has_education)
+    # Bare "Experience"/"Education" section headers and plain "YYYY - YYYY"
+    # date ranges are just as common in an ordinary resume as in a LinkedIn
+    # paste -- neither is actually LinkedIn-specific. Without at least one
+    # genuine LinkedIn UI marker (a month-based "Jan 2020 - Present · 2 yrs"
+    # date/duration combo, an "· Full-time" employment-type suffix, or two
+    # or more lines of UI chrome such as "Message"/"Follow" or a connections
+    # count), those two signals alone already clear the threshold below for
+    # the single most common CV shape there is. parse_linkedin_paste() then
+    # rewrites it assuming LinkedIn's exact layout -- it groups a section by
+    # blank lines and only recognises a group as dated via the month-based
+    # pattern above, so a plain-dated entry gets folded into its neighbour
+    # and loses everything but a title and company line. See
+    # tests/test_linkedin.py's TestOrdinaryCvContentSurvives for what that
+    # costs a real CV: an entire second job, silently gone.
+    has_linkedin_marker = (
+        bool(_DATE_DURATION_RE.search(text))
+        or bool(_EMPLOYMENT_TYPE_RE.search(text))
+        or sum(1 for l in text.splitlines() if _is_chrome(l)) >= 2
+    )
+
+    return signals >= 4 and (has_experience or has_education) and has_linkedin_marker
 
 
 # ── Paste parsing ─────────────────────────────────────────────────────

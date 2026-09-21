@@ -285,6 +285,67 @@ A subject with zero identifiers in their bio but a real, name-matched OpenAlex a
 Mandatory per-cycle sweep. `scoring.py` (`_apply_floors`'s `<=` tie-break), `names.py` (`name_matches`'s `len(present) >= 2` threshold), and `flags.py` (`f_contradicted`'s `if refuted or mismatched:`) were each mutated one line at a time and **all three were caught** — no new production gap in those three tonight.
 
 `verify.py`'s ROR nearest-name tie-break (`verify_institution`: `if overlap > best_overlap:` → `>=`) **still survives on `master`**, confirmed live tonight. This is not new — `nightly/2026-09-04` (PR #16) already found and pinned it with `test_nearest_name_tie_break_is_deterministic_not_last_writer_wins`, and `nightly/2026-09-09`/`nightly/2026-09-10` both re-confirmed it live and declined to write a sixth copy of the same test, per the 2026-08-27 entry's own precedent ("the actual fix here is merging... not writing this test again"). Doing the same tonight — this is now the fourth or fifth independent re-confirmation. `master` remains exposed to it until PR #16 (or any of the later PRs that inherited its fix) merges.
+### Flag 6: an ambiguous OpenAlex match no longer credits the subject with a stranger's scholarly record (2026-09-21, nightly run)
+
+Red-team finding, not from the original 63: adopting the "cheapest evasion a
+fabricator hits naturally" mindset the task brief asks for, and reading
+`providers.py`'s own live-measured OpenAlex constraints (a common name can
+resolve to several distinct author entities, or to one entity that is itself
+hundreds of merged people — the brief's own "Wei Wang": 2470 works across
+863 institutions). `providers.OpenAlex.search` already detects the
+multi-entity case and sets `signals["ambiguous_identity"] = matches` when
+more than one distinct entity name-matches the subject — but it still picks
+`best` as whichever matching entity has the highest `works_count`,
+regardless of ambiguity, and hands that candidate to `signals["openalex"]`.
+
+`f_output` (flag 6) read only `scholar.get("works")` before crediting a
+PASSED "Independent scholarly record found: N works with M citations
+(OpenAlex)" — with no check of `ambiguous_identity` at all. Confirmed live
+(`tests/test_flags.py`'s new
+`test_an_ambiguous_openalex_match_does_not_credit_someone_elses_record`,
+watched RED before the fix): a subject who merely shares a name with a
+prolific researcher was credited with that researcher's entire work and
+citation count as PASSED, weight 1.5 toward the score — the exact
+"existence is not attribution" failure the verify layer's own docstrings
+warn against, just reached through the web-mode provider path instead of
+the identifier-verification path. This is a real evasion, not a contrived
+one: nothing about it requires the fabricator to try — an ordinary common
+name is enough to launder someone else's publication record into the
+report.
+
+Fix, minimal: `f_output`'s PASSED branch now additionally requires `not
+ctx.signals.get("ambiguous_identity")`; the case falls through to the
+"only unsourced assertions" / building / no-output branches exactly as if
+no OpenAlex match had matches, and `_openalex_search_note()` gained a third
+branch (alongside "no key" and "key present, genuinely empty") so the
+"assertion"-only UNKNOWN message names the ambiguity explicitly rather than
+going silent. Status is UNKNOWN, never TRIGGERED — an ambiguous match is
+not evidence the subject lied, only that this particular signal cannot
+settle the question, consistent with "prefer missing a fraud to accusing an
+innocent."
+
+**Verification:** 2 new tests in `tests/test_flags.py` (the positive case
+above, plus a negative control confirming a genuinely cited artifact — a
+DOI, patent or repository named directly in the text — still PASSES
+regardless of OpenAlex ambiguity, since that credit never depended on the
+provider signal). Ran the real `larp_meter.audit.run_audit` pipeline
+directly (the same function `cli.py` calls, not the flag function in
+isolation — per this repo's own standing ROR/HANDLERS lesson) with a
+synthetic ambiguous-identity signal: flag 6 correctly lands on UNKNOWN with
+the hedge message and does not manufacture coverage; the same pipeline with
+a real cited artifact still PASSES. Traced every other reader of
+`ctx.signals["openalex"]` and `ambiguous_identity` (`report.py`, `cli.py`):
+both only ever drive the separate "N different people share this name"
+warning banner, never re-derive flag 6's own verdict, so nothing else could
+disagree with the corrected flag.
+
+**Not fixed by this**: the harder case from the same brief section — a
+*single* OpenAlex entity that is itself a merged cluster of several real
+people (no `ambiguous_identity` signal fires at all, since only one entity
+name-matched). That needs the disambiguation groundwork the core-gap
+CRITICAL entry below already names (per-affiliation `years` corroboration,
+institutional cross-checking) and is out of scope for tonight's
+single-guard fix.
 
 ### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
 

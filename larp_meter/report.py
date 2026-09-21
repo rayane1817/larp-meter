@@ -95,10 +95,14 @@ def caveats(report):
     # `signals["openalex"]` is `None`, not just falsy-and-absent, only when a
     # search genuinely completed and found nothing (see flags.py's
     # `_openalex_search_note`), so that distinction is safe to reuse here too.
+    # ...and only an unambiguous one: when several OpenAlex entities share
+    # the name, flag 6 declines to credit the top hit as the subject's, so
+    # it must not silence this caveat either.
     scholar = signals.get("openalex")
     if (report.get("level") in ("GREEN", "YELLOW") and not report.get("verification_effective")
             and not signals.get("wikipedia_about_subject")
-            and not (scholar and scholar.get("works"))):
+            and not (scholar and scholar.get("works")
+                     and not signals.get("ambiguous_identity"))):
         out.append("Nothing here was checked against an outside source: the passing flags rest on "
                    "the subject's own account of themselves. A well-written fabrication passes "
                    "this easily — treat a clean result as 'no internal contradictions found', "

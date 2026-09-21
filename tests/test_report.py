@@ -232,5 +232,30 @@ class TestSaveAll(unittest.TestCase):
             self.assertTrue(Path(written[0]).exists())
 
 
+
+class TestOwnAccountCaveatIgnoresNamesakes(unittest.TestCase):
+    def test_an_ambiguous_openalex_hit_does_not_silence_the_own_account_caveat(self):
+        """Two merged nights disagreed about the same signal. One taught the
+        "nothing here was checked against an outside source" caveat to stand
+        down for a genuine OpenAlex hit; the other stopped flag 6 crediting
+        that hit when several OpenAlex entities share the subject's name,
+        because the one with the most works is not shown to be theirs. Left
+        as merged, a namesake's record the flag refused to credit still
+        silenced the warning -- the report would read as if an outside
+        source had corroborated the subject when nothing had."""
+        from larp_meter.report import caveats
+        report = {"level": "GREEN", "verification_effective": False, "flags": [],
+                  "claims": [], "mode": "text", "verified": False,
+                  "signals": {"openalex": {"works": 40}, "ambiguous_identity": 3}}
+        self.assertTrue(any("Nothing here was checked" in c for c in caveats(report)))
+
+    def test_an_unambiguous_openalex_hit_still_silences_it(self):
+        from larp_meter.report import caveats
+        report = {"level": "GREEN", "verification_effective": False, "flags": [],
+                  "claims": [], "mode": "text", "verified": False,
+                  "signals": {"openalex": {"works": 40}}}
+        self.assertFalse(any("Nothing here was checked" in c for c in caveats(report)))
+
+
 if __name__ == "__main__":
     unittest.main()

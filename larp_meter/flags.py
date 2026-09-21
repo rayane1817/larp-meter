@@ -384,18 +384,31 @@ def f_credentials(ctx):
             f"identified in the text — not enough to judge either way.")
     # Only an actual registry lookup can contradict; without --verify the
     # status is UNCHECKED and says nothing.
-    fake = [i for i in institutions if i.status == ex.NOT_FOUND] if ctx.verified else []
-    if fake:
-        # ROR indexes research organizations. A vocational school, a small
-        # private college or a non-research institute can be legitimately
-        # absent, so this is a lead to check by hand — not proof of invention.
+    unresolved = [i for i in institutions if i.status == ex.NOT_FOUND] if ctx.verified else []
+    if unresolved:
+        # This used to TRIGGER. Live-measured against ROR's real API: a
+        # faculty/sub-unit of a parent university, a school merged or
+        # renamed since the subject attended (London Guildhall -> London
+        # Metropolitan in 2002; Supélec -> CentraleSupélec in 2015), a
+        # non-research institution (ROR indexes research organizations), or
+        # simply a name spelled differently than ROR's preferred label all
+        # come back NOT_FOUND — the identical signal a fabricated name
+        # produces. The token-overlap ROR offers against its nearest
+        # candidate does not separate the two either (real institutions
+        # measured at 0.25-0.67 overlap; a fabricated "Institute of Advanced
+        # Fictional Studies" measured at 0.75, higher than most of them), so
+        # no threshold on this signal can catch invention without also
+        # accusing real institutions. A registry that cannot settle the
+        # question must not accuse — see tests/test_flags.py's
+        # test_a_verified_ror_miss_is_a_lead_not_an_accusation.
         return FlagResult(
-            TRIGGERED,
-            f"Named institution has no match in the Research Organization Registry: "
-            f"{', '.join(i.value for i in fake[:3])}. Worth confirming directly — ROR indexes "
-            f"research organizations, so a small or non-research institution may be absent "
-            f"legitimately.",
-            [f"{i.value} — {i.detail}" for i in fake[:3]])
+            UNKNOWN,
+            f"Named institution has no exact match in the Research Organization Registry: "
+            f"{', '.join(i.value for i in unresolved[:3])}. ROR indexes research organizations "
+            f"under their current name, so a small, non-research, merged or renamed institution "
+            f"is routinely absent — worth confirming by hand, but not itself evidence of "
+            f"fabrication.",
+            [f"{i.value} — {i.detail}" for i in unresolved[:3]])
     # "Named in the text" and "confirmed by a registry" are different claims,
     # and this flag used to report both as the same PASSED. It read as
     # corroboration while ROR had never been contacted.

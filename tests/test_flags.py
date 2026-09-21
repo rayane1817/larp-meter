@@ -217,15 +217,27 @@ class TestIndividualFlags(unittest.TestCase):
         text = "My research is peer-reviewed and widely cited in the field."
         self.assertEqual(status_of(text, 6), UNKNOWN)
 
-    def test_credential_flag_triggers_on_a_verified_ror_miss(self):
-        """Mutation-tested (2026-08-17): comparing against `ex.UNCHECKED`
-        instead of `ex.NOT_FOUND` survived with the suite green — every
-        flag-8 test in this file only ever exercises the PASSED/UNKNOWN
-        branches (no test here ever sets `verified=True` with a
-        registry-refuted institution), even though this is the exact
-        dead-ROR-check bug shape this repo has hit before: the TRIGGERED
-        branch existing in the source without any test ever reaching it
-        through `evaluate()`."""
+    def test_a_verified_ror_miss_is_a_lead_not_an_accusation(self):
+        """BACKLOG.md's 'ROR absence is scored as a triggered credential
+        flag' finding: this branch used to TRIGGER outright on any ROR
+        miss. Live-measured against ROR's real API before this fix: several
+        genuinely real institutions come back with the *identical* NOT_FOUND
+        signal a fabricated name produces -- Rotterdam School of Management
+        (a business faculty, not its own ROR entity), London Guildhall
+        University (merged into London Metropolitan in 2002), École
+        Supérieure d'Électricité (merged into CentraleSupélec in 2015),
+        Karachi Grammar School, Yeshiva Torah Vodaath and École 42 all
+        return NOT_FOUND, and the token-overlap ROR itself offers as the
+        nearest candidate does not separate them from invention either: a
+        genuinely fabricated 'Institute of Advanced Fictional Studies'
+        overlaps its nearest ROR hit at 0.75, HIGHER than four of those six
+        real institutions (0.25-0.67). There is no threshold on this signal
+        that catches the fabrication without also accusing the real
+        institutions above it, so a miss here must read UNKNOWN with an
+        honest caveat -- never a triggered finding. (Ex-mutation-guard,
+        updated rather than deleted: it used to also confirm `ex.NOT_FOUND`
+        is compared by value, not `ex.UNCHECKED`; see the paired UNCHECKED
+        test below for that half now.)"""
         text = "PhD in Astrophysics from the Institute of Advanced Fictional Studies."
         claims = ex.extract_claims(text)
         for cl in claims:
@@ -233,7 +245,21 @@ class TestIndividualFlags(unittest.TestCase):
                 cl.status, cl.detail = ex.NOT_FOUND, "ROR has no match for this name."
         c = ctx_for(text, verified=True)
         c.claims = claims
-        self.assertEqual(evaluate(c)[8].status, TRIGGERED)
+        result = evaluate(c)[8]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertIn("not itself evidence of fabrication", result.description.lower())
+
+    def test_an_unchecked_institution_is_not_reported_as_a_ror_miss(self):
+        """Companion to the test above: an institution claim that was never
+        actually resolved (`UNCHECKED`, e.g. --verify wasn't passed, or this
+        particular claim never reached the verifier) must not be described
+        as a registry miss -- that message specifically means ROR was asked
+        and came back empty, which did not happen here."""
+        text = "PhD in Astrophysics from the Institute of Advanced Fictional Studies."
+        c = ctx_for(text, verified=True)  # claims default to UNCHECKED, never mutated
+        result = evaluate(c)[8]
+        self.assertEqual(result.status, PASSED)
+        self.assertNotIn("no exact match", result.description.lower())
 
     def test_timeline_does_not_trigger_at_exactly_the_three_year_slack_boundary(self):
         """Mutation-tested (2026-08-17): `claimed > available + 3` survived

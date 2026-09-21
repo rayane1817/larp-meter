@@ -54,7 +54,7 @@ LOCAL_NEGATORS = {
 # "beyond" ("beyond 40 customers" means more of them, not none).
 
 _WORD_RE = re.compile(r"[\w']+")
-_CLAUSE_END_CHARS = ".;:!?\n•|"
+_CLAUSE_END_CHARS = ".;:!?•|"
 _CLAUSE_LOOKBACK_TOKENS = 6
 _LOCAL_LOOKBACK_TOKENS = 2
 # Six tokens fit comfortably; the cap only bounds the scan on pathological
@@ -62,6 +62,32 @@ _LOCAL_LOOKBACK_TOKENS = 2
 # punctuation the whole prefix was re-tokenized for every single match, which
 # cost 19s on a 50k-character document.
 _MAX_LOOKBACK_CHARS = 200
+# A bare '\n' is not treated as a clause end char above: an ordinary
+# word-wrap ("We are not\nraising a round") is not a clause boundary, and
+# treating every newline as one silently dropped "not" from the negator's
+# lookback window — a plain-text paste, PDF extraction or hard-wrapped email
+# that denies a claim across a line break had the denial ignored, and the
+# denied claim counted as asserted. A genuine paragraph break (a blank line)
+# or a new list item still has to stop negation, though, or "no revenue" in
+# one bullet would wrongly suppress an unrelated claim in the next one.
+_BULLET_START_RE = re.compile(r"[ \t]*(?:[•▪‣*\-–—]|\d{1,2}[.)])[ \t]")
+
+
+def _hard_newline_before(text, start, limit):
+    """Position right after the nearest newline in text[limit:start] that is a
+    genuine paragraph/list break, or None if every newline in that range is
+    just a word-wrap. Bounded to `limit` so it shares the same worst-case cost
+    as the lookback window, rather than re-scanning the whole document."""
+    pos = start
+    while True:
+        nl = text.rfind("\n", limit, pos)
+        if nl == -1:
+            return None
+        is_blank_line = (nl + 1 < len(text) and text[nl + 1] == "\n") or \
+            (nl > 0 and text[nl - 1] == "\n")
+        if is_blank_line or _BULLET_START_RE.match(text, nl + 1):
+            return nl + 1
+        pos = nl
 
 
 def is_negated(text, start):
@@ -77,6 +103,11 @@ def is_negated(text, start):
         i = text.rfind(ch, 0, start)
         if i >= boundary:
             boundary = i + 1
+
+    limit = max(0, start - _MAX_LOOKBACK_CHARS)
+    nl_boundary = _hard_newline_before(text, start, limit)
+    if nl_boundary is not None and nl_boundary >= boundary:
+        boundary = nl_boundary
 
     window = max(boundary, start - _MAX_LOOKBACK_CHARS)
     prefix = text[window:start].casefold().replace("'", "")

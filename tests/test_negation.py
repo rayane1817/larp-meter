@@ -56,6 +56,54 @@ class TestIsNegated(unittest.TestCase):
         self.assertFalse(has_term("no revenue", "revenue", skip_negated=True))
 
 
+class TestNewlineClauseBoundary(unittest.TestCase):
+    """A bare '\\n' is not always a clause boundary. v4 treated every newline
+    as a hard stop, which meant an ordinary word-wrap ("We are not\\nraising a
+    Series A") silently dropped "not" from the negator's lookback window —
+    the identical text with the wrap removed was correctly read as denied.
+    That is a false accusation waiting to happen: any plain-text paste, PDF
+    extraction, or hard-wrapped email that denies a claim across a line break
+    would have the denial ignored and the claim counted as asserted.
+
+    The fix has to hold in both directions: a mid-sentence wrap must not
+    break negation scope, but a genuine paragraph or list-item break must
+    still stop it, or "no revenue" in one bullet would wrongly suppress a
+    real, unrelated claim asserted in the next one.
+    """
+
+    def test_word_wrapped_negation_still_applies(self):
+        text = "We are not\nraising a Series A at this time."
+        self.assertTrue(is_negated(text, text.index("raising")))
+
+    def test_word_wrap_mid_phrase_still_applies(self):
+        text = "We have no\ncustomers or revenue to speak of yet."
+        self.assertTrue(is_negated(text, text.index("customers")))
+        self.assertTrue(is_negated(text, text.index("revenue")))
+
+    def test_paragraph_break_still_stops_negation(self):
+        # No other punctuation before the blank line, and "no" sits inside the
+        # 6-token lookback window so the boundary — not the window cap — has
+        # to be what stops it.
+        text = "No revenue here\n\nWe are raising a round"
+        self.assertFalse(is_negated(text, text.index("raising")))
+
+    def test_hyphen_bullet_list_item_stops_negation(self):
+        # A hyphen isn't itself one of _CLAUSE_END_CHARS, so this can only
+        # pass via the newline's own bullet-start check, not by accident.
+        text = "- No revenue yet\n- Raising a Series A"
+        self.assertFalse(is_negated(text, text.index("Raising")))
+
+    def test_numbered_list_item_stops_negation(self):
+        # A closing paren, not a period, so the boundary can't come from an
+        # unrelated _CLAUSE_END_CHARS hit on the list marker itself.
+        text = "1) No revenue yet\n2) Raising a Series A"
+        self.assertFalse(is_negated(text, text.index("Raising")))
+
+    def test_find_terms_respects_word_wrapped_negation(self):
+        text = "We are not\nraising a Series A at this time."
+        self.assertEqual(find_terms(text, ["raising"], skip_negated=True), [])
+
+
 class TestFundraisingFlag(unittest.TestCase):
     RAISING = "Founder building deep tech AI hardware. Seeking investment. "
 
@@ -74,6 +122,15 @@ class TestFundraisingFlag(unittest.TestCase):
     def test_denied_fundraising_is_not_treated_as_fundraising(self):
         text = ("Founder building deep tech AI hardware for satellites. We are not seeking "
                 "investment and are not raising. We have 40 customers.")
+        self.assertEqual(flag(text, 7)["status"], UNKNOWN)
+
+    def test_word_wrapped_denial_of_fundraising_is_not_treated_as_fundraising(self):
+        """Same denial as above, wrapped across an ordinary line break — the
+        input shape a hard-wrapped paste or PDF extraction actually produces.
+        Before the newline-boundary fix this read as an active, traction-free
+        raise and TRIGGERED instead of UNKNOWN."""
+        text = ("Founder building deep tech AI hardware for satellites. We are not\n"
+                "seeking investment and are not raising. We have 40 customers.")
         self.assertEqual(flag(text, 7)["status"], UNKNOWN)
 
 

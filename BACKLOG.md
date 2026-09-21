@@ -1539,7 +1539,51 @@ The extractor produces `role/owned_org`, `role/leadership` and `partnership/part
 
 ### [PARTIALLY FIXED] Nothing checks whether a cited paper was retracted, or whether it is peer-reviewed at all — and Crossref already returns the fields
 
-`verify_doi` fetches the full Crossref record and reads exactly two fields: `title` and `author`. The same response carries `type` (`journal-article` vs `posted-content` — i.e. a preprint), `update-to` (populated with a `retraction` relation when the work has been retracted), `is-referenced-by-count`, and `published`. So the tool will certify a retracted paper as VERIFIED, and will certify a preprint as satisfying an explicit "peer-reviewed" claim. That claim is even extracted — `SOFT_EVIDENCE` records `"peer-review claim"` as an `artifact/assertion` — but `assertion` has no handler, and flag 6 explicitly gives up on it. Retraction and preprint-inflation are two of the highest-signal, most-checkable forms of publication LARP, and the tool is blind to both while already holding the data.
+**Fixed 2026-09-14, preprint half only.** `verify_doi` now reads `msg.get("type")` from
+the same Crossref response already fetched for authorship (zero extra network
+cost, exactly the fix direction below) and sets a new `Claim.is_preprint`
+when it is `"posted-content"`. Separately, `extract_claims` now records
+`Claim.claimed_peer_reviewed` on a `doi` claim when a sentence-bounded scan
+(not a fixed-width window — see extract.py's `_peer_review_claimed_nearby`)
+finds "peer-reviewed" in the *same sentence* as that specific identifier,
+deliberately not linked to a "peer-review claim" assertion anywhere else in
+the document — crediting an honest, separately-cited peer-reviewed paper to
+an unrelated preprint mention would have been a new false accusation, not a
+fix. A sentence that discloses the preprint itself ("also available as a
+preprint at...") is explicitly exempted, since that is transparency, not
+deception. `flags.py`'s flag 11 TRIGGERS only when a claim is BOTH
+attributed to the subject (`--name`, confirmed) AND has both facts set —
+live-verified end-to-end against the backlog's own motivating DOI
+(`10.1101/2020.03.22.20040758`, real medRxiv preprint, real author "Zhaowei
+Chen"): claiming it as peer-reviewed work TRIGGERS with the new message;
+citing the same DOI as an honest preprint, or a real peer-reviewed paper
+correctly described as such, both still PASS. 9 new tests
+(`tests/test_extract.py::TestPeerReviewClaimProximity`,
+`tests/test_verify.py::TestPreprintClaimedAsPeerReviewed`).
+
+**Not fixed, left open:**
+- **Retraction** (the other half of this same finding) is a *separate*,
+  already-written fix sitting on unmerged branch `nightly/2026-09-13` (PR
+  #22, open as of this writing) — added independently tonight rather than
+  building on that branch's `Claim.retracted` field, per this project's own
+  "keep tonight's branch small and independent" rule for an already-deep
+  unmerged-PR queue. Whichever of the two merges second should union the
+  new `Claim` fields, not treat the other as done.
+- **arXiv** identifiers are structurally always non-peer-reviewed (arXiv has
+  no peer-review layer, full stop) but were left out of tonight's scope:
+  unlike the DOI case, "peer-reviewed" and an arXiv ID in the same sentence
+  is genuinely ambiguous when the sentence is legitimately cross-posting
+  ("our peer-reviewed methodology, also on arXiv as ..."), and reusing the
+  DOI-side self-disclosure guard for this case wasn't verified against real
+  examples before writing this note. Next run should live-check a handful
+  of real arXiv cross-posting bios before extending this pattern there.
+- OpenAlex works-by-DOI (`is_retracted`, `is_in_doaj`, citation counts) and
+  the `mailto=` polite-pool addition are both still entirely open, as
+  described in the original fix direction below.
+
+---
+
+**Original finding, kept for context:** `verify_doi` fetches the full Crossref record and reads exactly two fields: `title` and `author`. The same response carries `type` (`journal-article` vs `posted-content` — i.e. a preprint), `update-to` (populated with a `retraction` relation when the work has been retracted), `is-referenced-by-count`, and `published`. So the tool will certify a retracted paper as VERIFIED, and will certify a preprint as satisfying an explicit "peer-reviewed" claim. That claim is even extracted — `SOFT_EVIDENCE` records `"peer-review claim"` as an `artifact/assertion` — but `assertion` has no handler, and flag 6 explicitly gives up on it. Retraction and preprint-inflation are two of the highest-signal, most-checkable forms of publication LARP, and the tool is blind to both while already holding the data.
 
 **Evidence:** larp_meter/verify.py:203-209 — `msg = json.loads(body)["message"]`, then only `msg.get("title")` and `msg.get("author")` are used. larp_meter/extract.py:51 `(re.compile(r"\bpeer[\s-]reviewed\b", re.I), "peer-review claim")` → larp_meter/extract.py:180 `add("artifact", "assertion", label, ...)`; `assertion` is absent from larp_meter/verify.py:415-419; larp_meter/flags.py:263-264 `return FlagResult(UNKNOWN, "Only unsourced assertions of output (e.g. 'peer-reviewed') — no identifiers to check.")`. larp_meter/flags.py:404-405 restricts flag 11 to `("doi", "orcid", "github", "arxiv", "nct", "patent")`, so an assertion can never be refuted.
 
@@ -1697,7 +1741,13 @@ The `Crossref` provider resolves the subject by name and builds `Finding(f"https
 
 ---
 
-### Crossref already returns preprint status, retraction links and citation counts — the verifier throws them away
+### [PARTIALLY FIXED] Crossref already returns preprint status, retraction links and citation counts — the verifier throws them away
+
+Duplicate of the "Nothing checks whether a cited paper was retracted, or
+whether it is peer-reviewed at all" finding above — see that entry for what
+was fixed 2026-09-14 (the preprint-vs-peer-review-claim half only) and what
+is still open (retraction on unmerged PR #22, arXiv, OpenAlex works-by-DOI,
+`mailto=`, citation-count surfacing).
 
 `verify_doi` fetches the full Crossref work record with no `select` filter, so `type`, `publisher`, `member`, `is-referenced-by-count`, `relation` and `update-to` all arrive in the response body. The code reads only `title` and `author`. The result is that the tool can confirm a DOI resolves and names the subject, but cannot distinguish a peer-reviewed article from a preprint, a live paper from a retracted one, or a heavily cited work from one with zero citations. These are the three questions a 'published researcher' claim actually turns on, and answering them costs zero extra API calls. OpenAlex (already a dependency, providers.py:174) exposes `is_retracted` and `primary_location.source.is_in_doaj` on the work object for the same purpose.
 

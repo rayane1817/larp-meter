@@ -553,13 +553,28 @@ def f_contradicted(ctx):
                 f"does not by itself mean the subject misrepresented anything — check whether the "
                 f"profile discloses it.",
                 [f"{c.subtype} {c.value}: {c.detail}" for c in retracted[:4]])
-        note = (f" Note: {len(retracted)} of them ha{'s' if len(retracted) == 1 else 've'} since "
-                f"been retracted by the publisher and no longer stand{'s' if len(retracted) == 1 else ''} "
-                f"as evidence — worth checking whether the profile discloses it."
-                if retracted else "")
+        # A DOI cited as peer-reviewed that Crossref types as a preprint is
+        # handled the same way, for the same reason: the registry cannot
+        # settle it. Work later published in a journal is often cited by its
+        # preprint DOI, and Crossref does not reliably link the two -- live-
+        # verified on a Nature paper whose bioRxiv record carries no
+        # is-preprint-of relation at all. Authorship is still confirmed.
+        preprint_claimed_reviewed = [c for c in confirmed if c.is_preprint and c.claimed_peer_reviewed]
+        notes = []
+        if retracted:
+            notes.append(f"{len(retracted)} of them ha{'s' if len(retracted) == 1 else 've'} since been "
+                         f"retracted by the publisher and no longer stand{'s' if len(retracted) == 1 else ''} "
+                         f"as evidence")
+        if preprint_claimed_reviewed:
+            notes.append(f"{len(preprint_claimed_reviewed)} cited as peer-reviewed "
+                         f"{'is' if len(preprint_claimed_reviewed) == 1 else 'are'} recorded by Crossref "
+                         f"as a preprint, which a later journal version would not always be linked to")
+        note = (" Note: " + "; ".join(notes) + " — worth checking by hand.") if notes else ""
+        flagged = retracted + [c for c in preprint_claimed_reviewed if c not in retracted]
+        rest = [c for c in confirmed if c not in flagged]
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their "
                                   f"registries.{note}",
-                          [f"{c.subtype} {c.value}: {c.detail}" for c in (retracted + standing)[:4]])
+                          [f"{c.subtype} {c.value}: {c.detail}" for c in (flagged + rest)[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the
     # registries were unreachable, or they answered about existence only
     # (a repository's owner, a trial's sponsor) which cannot confirm authorship.

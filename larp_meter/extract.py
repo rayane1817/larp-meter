@@ -49,6 +49,12 @@ class Claim:
     source: str = ""           # URL consulted by the verifier
     negated: bool = False      # the text denies this ("no customers", "not raising")
     retracted: bool = False    # the registry itself marks this artifact retracted
+    # Set at extraction time for a "doi" claim only: does the identifier's own
+    # sentence assert it is peer-reviewed? verify.py sets the matching fact
+    # (`is_preprint`, from Crossref's `type`) at verification time, and flags.py
+    # is the only place the two are ever combined -- see its docstring.
+    claimed_peer_reviewed: bool = False
+    is_preprint: bool = False  # Crossref `type` == "posted-content" (a preprint)
 
     def to_dict(self):
         return asdict(self)
@@ -64,13 +70,66 @@ ARTIFACT_PATTERNS = [
     ("patent", re.compile(r"\b((?:US|EP|WO)\s?\d{7,11}(?:\s?[ABC]\d?)?)\b")),
 ]
 
+# Named separately from SOFT_EVIDENCE (which uses it too) because
+# _peer_review_claimed_nearby below needs the same pattern to check a DOI's
+# own sentence, not just whether the word appears anywhere in the document.
+_PEER_REVIEWED_RE = re.compile(r"\bpeer[\s-]reviewed\b", re.I)
+
 # Claims of regulatory clearance — checkable in principle, but not via a free API
 SOFT_EVIDENCE = [
     (re.compile(r"\b(?:FDA|CE)[\s-](?:cleared|approved|marking|marked|certified)\b", re.I),
      "regulatory clearance"),
-    (re.compile(r"\bpeer[\s-]reviewed\b", re.I), "peer-review claim"),
+    (_PEER_REVIEWED_RE, "peer-review claim"),
     (re.compile(r"\bISO\s?\d{4,5}\b", re.I), "ISO certification"),
 ]
+
+# Naming something a preprint in the same sentence that also says
+# "peer-reviewed" is transparency, not deception -- e.g. "peer-reviewed
+# elsewhere; this preprint (DOI) covers early results." This guard, like
+# every guard in this file, only ever REMOVES a potential trigger, never
+# adds one: failing to recognise a disclosure costs a missed accusation it
+# would have been wrong to make anyway, never a false one.
+_PREPRINT_DISCLOSURE_RE = re.compile(
+    r"\bpreprint\b|\bpre-print\b|\bnot yet peer[\s-]reviewed\b|\bunder review\b", re.I)
+
+# Bounds the sentence scan on a pathological document with no punctuation at
+# all -- matching.py's is_negated hit the identical quadratic-cost trap for
+# the same reason (unbounded rfind/find over the whole prefix) and fixed it
+# the same way.
+_MAX_PROXIMITY_SCAN = 300
+
+
+def _peer_review_claimed_nearby(text, match):
+    """Does the sentence containing `match` (a DOI) also assert peer review,
+    without itself disclosing that the cited work is a preprint?
+
+    A fixed-width window is not enough here: BACKLOG.md's own motivating
+    example, "My peer-reviewed work on room-temperature superconductivity
+    (10.1038/...) established the field", puts the qualifier well outside a
+    60-character radius of the identifier it describes. Scanning to the
+    sentence boundary instead catches that case while still refusing to
+    reach into an unrelated sentence elsewhere in the bio -- crediting a
+    genuinely separate peer-reviewed claim to a different, honestly-cited
+    preprint would be exactly the false accusation this tool exists to avoid.
+    """
+    start, end = match.start(), match.end()
+    lo = max(start - _MAX_PROXIMITY_SCAN, 0)
+    hi = min(end + _MAX_PROXIMITY_SCAN, len(text))
+
+    before = lo
+    for ch in ".;:!?":
+        i = text.rfind(ch, lo, start)
+        if i + 1 > before:
+            before = i + 1
+
+    after = hi
+    for ch in ".;:!?":
+        i = text.find(ch, end, hi)
+        if i != -1 and i < after:
+            after = i
+
+    sentence = text[before:after]
+    return bool(_PEER_REVIEWED_RE.search(sentence)) and not _PREPRINT_DISCLOSURE_RE.search(sentence)
 
 # Institution-type words in the languages this tool is likely to meet. Matching
 # only the English spellings made the credential flag fire on how a university
@@ -255,19 +314,23 @@ def extract_claims(text):
     claims = []
     seen = set()
 
-    def add(kind, subtype, value, context, negated=False):
+    def add(kind, subtype, value, context, negated=False, claimed_peer_reviewed=False):
         key = (kind, subtype, value.casefold())
         if key in seen:
             return
         seen.add(key)
         claims.append(Claim(kind=kind, subtype=subtype, value=value, context=context,
-                            negated=negated))
+                            negated=negated, claimed_peer_reviewed=claimed_peer_reviewed))
 
     for subtype, rx in ARTIFACT_PATTERNS:
         for m in rx.finditer(text):
             value = m.group(1).strip().rstrip(".,;)")
             # A bare "github.com/user" is a profile, not a repo — keep both, verify differently
-            add("artifact", subtype, value, _context(text, m))
+            # Only a DOI can come back from Crossref typed "posted-content" (a
+            # preprint); an ORCID/GitHub/NCT/patent number has no such field to
+            # contradict, so there is nothing for this check to do there.
+            peer_reviewed = subtype == "doi" and _peer_review_claimed_nearby(text, m)
+            add("artifact", subtype, value, _context(text, m), claimed_peer_reviewed=peer_reviewed)
 
     for rx, label in SOFT_EVIDENCE:
         m = rx.search(text)

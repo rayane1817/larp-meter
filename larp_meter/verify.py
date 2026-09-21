@@ -314,6 +314,13 @@ class Verifier:
         title = (msg.get("title") or ["untitled"])[0]
         authors = [f"{a.get('given', '')} {a.get('family', '')}".strip()
                    for a in msg.get("author", [])]
+        # Crossref's `type` field is in the same response already fetched for
+        # authorship, at no extra network cost. "posted-content" is a
+        # preprint: no peer-review layer at all. Recorded as a fact about the
+        # artifact, independent of attribution — extract.py separately records
+        # whether the subject's own text claims peer review for this specific
+        # DOI, and flags.py is the only place the two are combined.
+        claim.is_preprint = msg.get("type") == "posted-content"
         self._attribute(claim, authors, f'Paper "{title[:70]}"', url)
         if _is_retracted(msg):
             # Recorded as a fact about the artifact regardless of the
@@ -325,6 +332,9 @@ class Verifier:
             claim.detail = (claim.detail + " This paper has since been retracted by its "
                              "publisher -- whatever the reason, it is no longer standing "
                              "evidence.").strip()
+        if claim.is_preprint:
+            claim.detail += (' Crossref lists this record\'s type as "posted-content" — '
+                             "a preprint that has not been through peer review.")
         return claim
 
     def verify_orcid(self, claim):

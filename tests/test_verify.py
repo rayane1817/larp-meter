@@ -377,6 +377,106 @@ class TestRetraction(unittest.TestCase):
         self.assertNotIn("Held at", report["summary"])
 
 
+CROSSREF_PREPRINT = json.dumps({"message": {
+    "type": "posted-content",
+    "title": ["Preliminary Findings on Room-Temperature Superconductivity"],
+    "author": [{"given": "Marcus", "family": "Vane"}]}})
+
+
+class TestPreprintClaimedAsPeerReviewed(unittest.TestCase):
+    """BACKLOG.md: 'Nothing checks whether ... a preprint is presented as
+    peer-reviewed work — and Crossref already returns the fields.' The same
+    response `verify_doi` already fetches for authorship carries `type`:
+    `posted-content` means a preprint, no peer review layer at all, yet the
+    tool certified 'My peer-reviewed work (10.1101/...)' identically to a
+    real journal article."""
+
+    def _flag11(self, claims, subject, text):
+        from larp_meter.flags import AuditContext, FLAG_BY_ID
+        from larp_meter.matching import load_banks
+        ctx = AuditContext(text=text, claims=claims, source_urls=[],
+                           subject_name=subject, banks=load_banks(), verified=True, signals={})
+        return FLAG_BY_ID[11]["fn"](ctx)
+
+    def test_verify_doi_marks_posted_content_as_a_preprint(self):
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1101/xyz")
+        v.verify_doi(claim)
+        self.assertTrue(claim.is_preprint)
+
+    def test_verify_doi_does_not_mark_an_ordinary_journal_article_as_a_preprint(self):
+        v = StubVerifier({"api.crossref.org": (CROSSREF_OK, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertFalse(claim.is_preprint)
+
+    def test_preprint_claimed_as_peer_reviewed_is_surfaced_not_accused(self):
+        """As first merged this TRIGGERED flag 11 and floored the verdict at
+        ORANGE. The registry cannot settle it: a researcher who cites the
+        bioRxiv DOI of work later published in a journal is telling the
+        truth when they call it peer-reviewed, and Crossref does not
+        reliably link the two (see the live-record test below). So the
+        mismatch is named for a human, never used as a refutation."""
+        from larp_meter import extract as ex_mod
+        text = ("My peer-reviewed work on room-temperature superconductivity "
+                "(10.1101/xyz) established the field.")
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Marcus Vane", text)
+        self.assertNotEqual(result.status, "TRIGGERED")
+        self.assertIn("preprint", result.description.casefold())
+
+    def test_a_published_papers_unlinked_preprint_does_not_floor_its_author(self):
+        """Live-verified against api.crossref.org on 2026-09-21: the bioRxiv
+        record 10.1101/2020.03.22.002386 (Gordon et al.'s SARS-CoV-2
+        interaction map, published in Nature as 10.1038/s41586-020-2286-9)
+        is typed posted-content and carries NO `relation` field at all --
+        no is-preprint-of link to the journal version. An author calling
+        that work peer-reviewed while citing the preprint DOI is correct,
+        and nothing in the record can tell them apart from a fabricator."""
+        from larp_meter import extract as ex_mod
+        from larp_meter.scoring import score
+        from larp_meter.flags import AuditContext, evaluate
+        from larp_meter.matching import load_banks
+        body = json.dumps({"message": {
+            "type": "posted-content",
+            "title": ["A SARS-CoV-2-Human Protein-Protein Interaction Map Reveals Drug Targets"],
+            "author": [{"given": "David E.", "family": "Gordon"}]}})
+        text = ("David E. Gordon, virologist. My peer-reviewed Nature paper "
+                "(10.1101/2020.03.22.002386) mapped the SARS-CoV-2 interactome.")
+        claims = ex_mod.extract_claims(text)
+        StubVerifier({"api.crossref.org": (body, True)},
+                     subject_name="David E. Gordon").verify_all(claims)
+        results = evaluate(AuditContext(text=text, claims=claims, subject_name="David E. Gordon",
+                                        banks=load_banks(), verified=True))
+        self.assertNotEqual(results[11].status, "TRIGGERED")
+        self.assertNotIn("Held at", score(results)["summary"])
+
+    def test_an_honestly_cited_preprint_still_passes(self):
+        """The crucial regression guard: citing a real preprint without
+        claiming it is peer-reviewed must never trigger this flag — a
+        preprint is ordinary, honest scholarly practice, not deception."""
+        from larp_meter import extract as ex_mod
+        text = "Preliminary results are up as a preprint at 10.1101/xyz."
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_PREPRINT, True)}, subject_name="Marcus Vane")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Marcus Vane", text)
+        self.assertEqual(result.status, "PASSED")
+
+    def test_a_real_peer_reviewed_paper_correctly_claimed_still_passes(self):
+        """Regression guard against a blanket downgrade: an ordinary,
+        genuinely peer-reviewed citation must keep passing."""
+        from larp_meter import extract as ex_mod
+        text = "My peer-reviewed work (10.1000/xyz) established the field."
+        claims = ex_mod.extract_claims(text)
+        v = StubVerifier({"api.crossref.org": (CROSSREF_OK, True)}, subject_name="Ada Lovelace")
+        v.verify_all(claims)
+        result = self._flag11(claims, "Ada Lovelace", text)
+        self.assertEqual(result.status, "PASSED")
+
+
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):
         """Owning a repo is not writing it, and citing an employer's repo is

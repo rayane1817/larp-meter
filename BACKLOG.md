@@ -262,6 +262,24 @@ count itself has not changed since 08-27 (no CRITICAL item was marked
 either way in between), so 8/1/6 appears to have been a miscount at the
 time it was written, not a stale-but-then-accurate figure. See NIGHTLY.md's
 2026-09-09 entry for the full per-item breakdown.
+### The "own account" caveat only checked Wikipedia, never a genuine OpenAlex hit (nightly/2026-09-10)
+
+Not from the original 63 findings — found while reading `report.py`'s `caveats()`, a file with no full mutation-testing pass and untouched by any of the eight then-open `nightly/*` PRs (see NIGHTLY.md's 2026-09-10 entry for the queue state). `caveats()`'s single most consequential disclaimer — "Nothing here was checked against an outside source: the passing flags rest on the subject's own account of themselves" — is meant to fire only when a GREEN/YELLOW verdict rests on nothing but the subject's own text. It already excused itself correctly when `signals["wikipedia_about_subject"]` was set (the 2026-08-15 registry-wiring work), but never checked `signals["openalex"]` at all, even though flag 6 (`f_output`) reads that exact signal to PASS with "Independent scholarly record found: N works with M citations (OpenAlex)" — genuine outside-source corroboration, from the same `_subject_registry_signals` gather that sets `wikipedia_about_subject`.
+
+**Confirmed live before touching anything:**
+```python
+>>> caveats({"level": "GREEN", "verification_effective": False,
+...          "signals": {"openalex": {"works": 12, "citations": 340}}})
+["Nothing here was checked against an outside source: the passing flags rest on the "
+ "subject's own account of themselves. A well-written fabrication passes this easily..."]
+```
+A subject with zero identifiers in their bio but a real, name-matched OpenAlex author record — the exact case the 2026-08-15 registry-wiring work exists to give credit for — got told nothing had been externally checked, one paragraph below a flag whose own evidence text said the opposite. This doesn't manufacture a false accusation (the underlying score/level is unaffected), but it actively misleads a reader about how much of the report is unverified self-report versus how much rests on a real outside source — exactly the distinction this caveat exists to draw.
+
+**Fix:** `caveats()` now also treats a real OpenAlex hit (`scholar and scholar.get("works")`, mirroring flag 6's own truthiness check exactly) as outside-source corroboration, alongside `wikipedia_about_subject`. A completed-but-empty OpenAlex search (`signals["openalex"]` is `None` — the genuine "asked, and found nothing" case the 2026-08-27 entry made visible) is deliberately NOT treated as corroboration and still gets the full caveat; pinned as its own test so the fix doesn't overcorrect into silencing the disclaimer on a negative or absent result.
+
+**Verification:** 3 new tests — 2 in `tests/test_report.py` (the fix itself, and the negative-search-must-not-silence-it guard) and 1 true end-to-end test in `tests/test_cli_registry_wiring.py` running the real `cmd_text` → `run_audit` → `caveats` chain with the network stubbed, confirming `_subject_registry_signals`'s OpenAlex signal reaches `caveats()` in the exact shape it expects rather than only a hand-built dict in a report.py-only test. All three written first and confirmed to fail against the unmodified code (and, for the two isolated tests, re-confirmed by reverting the fix and re-running — both failed identically to the pre-fix repro above), then pass after the fix. Mutation-tested the new code directly (dropping the new clause entirely; renaming `"works"` to a wrong key) — both caught. Full suite: 473 → 476 tests, green throughout.
+
+**Also, a mutation-testing spot-check finding, not duplicated as a fifth test:** the mandatory per-cycle sweep found `verify.py`'s ROR nearest-name tie-break (`if overlap > best_overlap:` → `>=`) still **survives** on current `master`. This is not new — it's the same survivor `nightly/2026-09-04` (PR #16, still unmerged as of tonight) already found and pinned with `test_nearest_name_tie_break_is_deterministic_not_last_writer_wins` — but that fix lives only on the unmerged branch, so `master` itself is still exposed. Per the 2026-08-27 entry's own precedent ("the actual fix here is merging... not writing this test again"), recorded here rather than re-pinned a second time. `scoring.py` (`LEVELS` cut boundary), `names.py` (`present`-count boundary) and `flags.py` (`f_contradicted`'s `or`/`and`) were all spot-checked the same way and remain caught — no new gap in those three.
 
 ### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
 

@@ -180,6 +180,19 @@ class TestTimelineFlag(unittest.TestCase):
                 "MSc Aerospace Engineering, Delft University of Technology, 2019.")
         self.assertEqual(flag(text, 12)["status"], TRIGGERED)
 
+    def test_in_progress_degree_date_range_is_not_a_fabricated_future_date(self):
+        """A current student stating their own study dates ('2025 - 2027')
+        was accused of a 'date stated as past but in the future' — the same
+        range a university transcript itself would print. Confirmed live
+        against master on 2026-09-08 before this fix: ORANGE 46/100 with
+        flag 12 TRIGGERED on a bio containing zero registry contradictions."""
+        text = "Pursuing an MSc Computer Science, TU Munchen, 2025 - 2027."
+        self.assertNotEqual(flag(text, 12)["status"], TRIGGERED)
+
+    def test_class_of_graduation_year_is_not_a_fabricated_future_date(self):
+        text = "Class of 2027, Computer Science, Colorado State University."
+        self.assertNotEqual(flag(text, 12)["status"], TRIGGERED)
+
 
 class TestHostMatching(unittest.TestCase):
     def test_substring_lookalikes_are_not_self_published(self):

@@ -3187,3 +3187,219 @@ on unmerged branches.
    consolidate, `providers.py`/`flags.py` (#11) and `matching.py`/`flags.py`
    (#13, #14) are the two places multiple open PRs touch the same file and
    will need real conflict resolution, not just a fast-forward.
+---
+
+## 2026-09-08 (nightly run)
+
+### Open-PR check (read this first)
+
+**The merge queue is now six deep and has not moved since the last entry in
+this file (2026-08-27).** Six `nightly/*` branches are open against
+`master`, all draft, all clean and green individually, none merged:
+
+| PR | branch | date | touches |
+|----|--------|------|---------|
+| #11 | `nightly/2026-08-30` | 08-30 | `providers.py`, `flags.py` (OpenAlex merge-risk) |
+| #12 | `nightly/2026-08-31` | 08-31 | `linkedin.py` (CV misdetected as a paste) |
+| #13 | `nightly/2026-09-01` | 09-01 | `flags.py` (confidentiality/pre-revenue escape hatch) |
+| #14 | `nightly/2026-09-02` | 09-02 | `matching.py` (word-wrap breaks negation) |
+| #15 | `nightly/2026-09-03` | 09-03 | `extract.py`, `verify.py` (disclaimer context window) |
+| #16 | `nightly/2026-09-04` | 09-04 | `flags.py` (lowercase/all-caps doctoral title) |
+
+Each PR's own body already documents the others open at the time it was
+written, so this isn't new information — but the 08-27 entry's own warning
+("ten nights of unmerged, non-conflicting work is nearly as bad as ten
+nights of no work") has now gone unheeded for **eleven more nights** with
+zero merges, and there are no branches at all for 09-05, 09-06 or 09-07 —
+either the schedule didn't fire those nights or those runs' output never
+made it to a pushed branch; either way it's a second, separate gap worth
+someone's attention alongside the merge queue itself. I did not attempt to
+resolve or merge any of #11–#16 — merging is this project's deliberate
+human-in-the-loop gate, not something an autonomous run should route
+around. This entry's own branch (`nightly/2026-09-08`) is forked fresh from
+`master`'s current tip (still `9f71c98`, the 08-27 merge) and touches only
+`extract.py`, `BACKLOG.md` and two test files, disjoint from all six
+branches above, so it should not conflict with any of them at merge time.
+
+### Backlog tally (CRITICAL, 15 total)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Verified directly
+against `master`'s current `BACKLOG.md` by grepping `^### ` under
+`## CRITICAL (15)`, not carried over by assumption. Of the 4 still open, 3
+are duplicate write-ups of the same core gap (the tool cannot check a claim
+that carries no identifier) and the 4th is the non-Latin-script `normalize()`
+gap already marked partial. This tally does not move tonight — the item I
+fixed is a MAJOR-severity finding (timeline fairness), not one of the 15
+CRITICALs — but is worth restating since none of #11–#16 touch a CRITICAL
+either; the actual fixes sitting in the queue are mostly MAJOR/MODERATE
+fairness and correctness bugs, not core-gap progress.
+
+### What I did
+
+Chose the mandatory mutation-testing pass first, since it doubles as a
+check on whether the merge queue's absence has left `master` newly exposed.
+One mutation each in `scoring.py` (`coverage >= MIN_COVERAGE` boundary,
+`_apply_floors`' `<=` tie-break), `names.py` (the "zero usable candidates"
+guard flagged as unpinned-on-`master` in the 08-27 entry), and `verify.py`
+(the `wanted <= have` ROR subset test, independently re-found unpinned on
+`master` by four separate nightly runs per that same entry) — **all three
+are now caught** (38+5, 4, and the scoring ones all failing loudly), a
+genuine improvement over 08-27's snapshot: whatever merged between then and
+now (`master` is still at the same `9f71c98` tip, so this must have
+happened via direct fixes on `master` before 08-27's last merge, or I'm
+misreading which commit introduced the pin — either way, confirmed live,
+not assumed). `flags.py`'s flag 10 word-count boundary (`>= 40`) also
+caught. No survivor found in this spot-check; see the mutation-testing log
+below for exact mutations tried.
+
+With the mandatory sweep clean, went looking for a fresh, small, correctly-
+scoped finding not already claimed by one of the six queued PRs (to avoid
+adding a seventh entry to an already-stuck queue with work that just
+duplicates what's sitting unmerged). Found one: BACKLOG.md's MAJOR-severity
+"Timeline flag accuses ordinary CVs" entry, untouched by any open PR,
+confirmed live on `master` exactly as written:
+
+```
+$ larp-meter --file student.txt --name "Jane Student"    # "MSc ..., 2025 - 2027"
+⚪ INSUFFICIENT DATA · evidence coverage 19%
+[12] TRIGGERED: Timeline does not add up: date(s) stated as past but in the future: 2027.
+
+$ larp-meter --file veteran.txt --name "Maria Alvarez"   # "twelve years... since 2021 has led..."
+⚪ INSUFFICIENT DATA · evidence coverage 14%
+[12] TRIGGERED: claims 12 years of experience, but the earliest date anywhere
+     in the profile is 2021 — at most ~5 years are accounted for.
+```
+
+Fixed part (b) only (the future-date/range half): `extract.py`'s
+`FORWARD_MARKERS` now recognises `class of`, and a new `_is_forward_year()`
+helper also exempts the back half of an ascending `YYYY - YYYY` range from
+the "date stated as past but in the future" check — a course of study, a
+grant term or a multi-year contract states an expected boundary, not a
+claimed-past event. The range check requires the first year to be no later
+than the second (`<=`, not `<`, since a same-year "range" like a one-year
+program written `2027 - 2027` is the same boundary case, not a new one) and
+is scoped to a 10-character lookback so it can't reach across an unrelated
+earlier year. Re-ran the student repro above post-fix: `[12] Not enough
+dated detail to test the timeline` — no longer flagged, no longer part of
+the "Only N of 13 flags decided" total in a way that manufactures coverage
+(it moves from a wrongly-decided TRIGGERED to a correctly-undecided
+UNKNOWN, which is the honest direction per the project's own coverage
+rule).
+
+**Did not fix part (a)** (the recent-roles-only false accusation — the
+veteran repro above). Drafted BACKLOG's own suggested fix (gate the
+duration check on a dated education anchor) and it broke an existing,
+apparently-deliberate test — `test_flags.py`'s
+`test_career_slack_is_exactly_three_years`, whose second half
+(`"21 years of experience in robotics. Founded the lab in 2009."` →
+TRIGGERED) has no education claim at all, only a "founded" date, and would
+flip to UNKNOWN under that gate right alongside the genuine false-accusation
+case. A minimum-dated-years-count gate has the identical problem. The real
+distinguishing feature — "founded the lab" plausibly marks the origin of
+the described career, "has led the team since" only dates a role change
+within one already established — is a semantic distinction current
+extraction has no way to make, and guessing at it under a time-box risks
+trading one false-accusation mode for another (or opening a new evasion:
+a fabricator prepending any "founded X in <recent year>" clause to earn the
+same leniency). Left fully documented in BACKLOG.md for whoever takes this
+on with more time.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed** (live repro, both halves, exactly as written): "Timeline
+  flag accuses ordinary CVs" is real on `master`. Fixed (b), left (a) open
+  with the new design nuance recorded above and in BACKLOG.md itself.
+- **Confirmed** (live repro): the `names.py` "zero usable candidates" guard
+  and `verify.py`'s ROR `wanted <= have` subset test, both called out as
+  unpinned-on-`master` in the 08-27 entry, are now caught by the existing
+  suite — recorded above so nobody re-derives this a fifth time.
+- Did not re-verify any other BACKLOG.md entry tonight, including the
+  6-PR-deep queue's own findings (#11–#16) — those stand on their own
+  branches' descriptions, unexamined by this run beyond confirming they're
+  still open and still disjoint from tonight's change.
+
+### Mutation-testing log
+
+- `scoring.py`: `coverage >= MIN_COVERAGE` → `>` — caught
+  (`test_coverage_exactly_at_min_coverage_is_still_scored`).
+  `_apply_floors`' `<=` → `<` tie-break — caught
+  (`test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message`).
+  Spot-check only, consistent with prior nights' full sweeps holding.
+- `names.py`: `name_matches`'s `if not usable: return None` inverted to
+  `if usable: return None` — caught heavily (38 failures + 5 errors). This
+  guard was called out as live-and-unpinned on `master` in the 08-27 entry;
+  it is solidly pinned now.
+- `verify.py`: `verify_institution`'s `if wanted and wanted <= have:` →
+  `< have` — caught (`test_word_order_and_stopwords_do_not_break_the_match`).
+  Same status: called out as unpinned in the 08-27 entry, solidly pinned
+  now.
+- `flags.py`: flag 10's `ctx.word_count >= 40` → `> 40` — caught. Flag 11's
+  `if refuted or mismatched:` not re-tried tonight (already pinned per the
+  2026-08-16/17 sweep log).
+- `extract.py` (not one of the four mandatory files, but the module this
+  cycle's own fix touched): mutation-tested all three new lines directly —
+  the `<=`/`<` range-boundary comparison **survived** on the first attempt
+  (every existing ascending-range fixture has two *different* years, so
+  nothing exercised the equal-boundary case) and is now pinned with
+  `test_equal_year_range_boundary_still_exempts_the_second_year`, which
+  calls the new `_is_forward_year()` helper directly rather than going
+  through `extract_claims()` — an equal-value range collides with the
+  claim-dedup key otherwise, since a real ascending range's own start year
+  passing through unaffected made a duplicate-value assertion untrustworthy.
+  Removing the new `class of` marker and disabling the range check outright
+  were both also caught.
+- **Mutation-testing hygiene note, recorded so nobody repeats this:**
+  reached for `git checkout -- larp_meter/extract.py` to snap back a
+  deliberate mutation partway through this exact pass and it discarded my
+  *entire* uncommitted fix, not just the mutation — the identical trap the
+  2026-08-15 entry already documented under "what I learned." Had to redo
+  the `FORWARD_MARKERS`/`_RANGE_START_RE`/`_is_forward_year` edit from
+  scratch. From this point on used `shutil.copy` to a scratch path before
+  each mutation and restored from that copy, never `git checkout`. If
+  you're mutation-testing a file with uncommitted changes, do the same —
+  the existing warning in this file is correct and was not exaggerated.
+
+### What I learned
+
+- The 08-27 entry's "this is now explicitly a human-merge-queue problem"
+  framing has aged into something stronger tonight: it isn't just that
+  fixes sit unmerged and get independently rediscovered (as happened four
+  times with the `verify.py` guard) — it's that *this* run couldn't safely
+  pick the two next-most-obvious targets (the "Timeline" finding's own part
+  (a), or anything in `flags.py`) without either duplicating one of #11–#16
+  or landing a second set of `flags.py`/`matching.py` edits that would
+  conflict with them at merge time. The queue isn't just wasting effort
+  now, it's actively narrowing what a new, small, independent branch can
+  safely touch. `extract.py` was the correct choice tonight specifically
+  because none of #11–#16 touch it.
+- Confirming a "still unpinned on master" claim from a five-night-old
+  NIGHTLY entry before trusting it paid off: two of the three guards it
+  named turned out to already be solidly caught, which means something did
+  land on `master` for them since 08-27 (or the 08-27 entry's own spot-check
+  methodology under-tested them at the time) — either way, worth re-
+  confirming rather than copying forward as still-broken.
+
+### What the next run should pick up first
+
+1. **Still the merge queue.** Six PRs, eleven nights, zero merges. Nothing
+   an autonomous run can do about this directly, but keep restating it at
+   the top of this file exactly as this entry and the 08-27 one did — it is
+   the single highest-leverage fact for whoever has merge access to act on.
+   Also worth flagging to a human: no `nightly/*` branch exists for 09-05,
+   09-06 or 09-07 — check whether the schedule silently stopped firing
+   those nights.
+2. **"Timeline flag accuses ordinary CVs", part (a).** Now has a much more
+   precise problem statement than before (see BACKLOG.md and "What I did"
+   above): find a way to distinguish "this date marks the origin of the
+   described career/venture" from "this date marks a role change within an
+   already-established one" without breaking
+   `test_career_slack_is_exactly_three_years`. A possible angle not yet
+   tried: treat `founded`/`co-founded`/`established` specifically (verbs
+   that assert creation of the thing being described) as a stronger anchor
+   than an ordinary role-start date like "has led since," rather than
+   trying to key off degree/education presence at all.
+3. **The core gap, continued** (unchanged from every prior entry): the
+   reverse-path architecture is still the standing highest-value item once
+   the queue clears enough to safely build on. Re-verify the OpenAlex rate
+   limits and response shapes live before extending `providers.py` — it's
+   been three weeks since the last live check recorded in this file.

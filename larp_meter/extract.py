@@ -164,10 +164,20 @@ YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\b")
 
 # A stated goal is not a falsified credential. "Full deployment is targeted for
 # 2030" must not be read as a date the subject claims to have lived through.
+# "Class of 2027" is the same kind of forward statement written the way a
+# graduating cohort names itself, with no other cue word anywhere nearby.
 FORWARD_MARKERS = re.compile(
     r"\b(?:by|target(?:ed|ing)?|projected|expected|planned|planning|roadmap|horizon|"
     r"due|forecast|goal|aim(?:ing)?|launch(?:ing)?|shipping|will|anticipated|"
-    r"scheduled|from now until|through)\b[^.;\n]{0,40}$", re.I)
+    r"scheduled|class\s+of|from now until|through)\b[^.;\n]{0,40}$", re.I)
+
+# The back half of an ascending "YYYY - YYYY" range -- a course of study, a
+# grant term, a multi-year contract -- is a stated boundary, not a date the
+# subject claims to have already lived through. "2025 - 2027" says when a
+# degree is expected to finish; it is not a claim that 2027 is already past.
+# Deliberately requires the first year to be no later than the second: a
+# descending pair is not a range at all and must not exempt anything.
+_RANGE_START_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\s*[-–—]\s*$")
 
 
 def experience_years(raw):
@@ -306,10 +316,20 @@ def extract_claims(text):
     # date and the profile was accused of an impossible timeline.
     masked = _mask_non_dates(text)
     for m in YEAR_RE.finditer(masked):
-        forward = bool(FORWARD_MARKERS.search(masked[max(0, m.start() - 60):m.start()]))
+        forward = _is_forward_year(masked, m.start(), m.group(1))
         add("timeline", "year_target" if forward else "year", m.group(1), _context(text, m))
 
     return claims
+
+
+def _is_forward_year(masked, pos, year_str):
+    """True if the year at `pos` is a stated goal or boundary rather than a
+    date the subject claims to have already lived through: a forward marker
+    word nearby, or the second half of an ascending "YYYY - YYYY" range."""
+    if FORWARD_MARKERS.search(masked[max(0, pos - 60):pos]):
+        return True
+    range_start = _RANGE_START_RE.search(masked[max(0, pos - 10):pos])
+    return bool(range_start and int(range_start.group(1)) <= int(year_str))
 
 
 def _mask_non_dates(text):

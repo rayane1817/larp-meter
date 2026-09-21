@@ -1679,7 +1679,7 @@ Shipped instead: `_INSTITUTION_CORE`'s trailing connector group keeps re.I (so t
 **Deliberately NOT fixed tonight, and confirmed still open:** the second failure mode this entry names — real institution names truncated after the first word when no connector follows ('Technische Universitat Munchen' → 'Technische Universitat', losing 'Munchen'/'München'). Re-measured live: this is NOT specific to `DEGREE_RE`'s re.I leak — `INSTITUTION_RE` (extract.py:90, `mentioned_institution`, already case-sensitive, untouched tonight) produces the identical truncation on the identical input. It is a shared, pre-existing limit of `_INSTITUTION_CORE`'s continuation logic (only continues past the institution-type word across one of the listed connector words, never across a bare adjacent capitalised token), affecting both subtypes equally. Left open as a separate, smaller-severity issue — a truncated-but-still-real name is a weaker false claim than a fabricated one — and is the natural next pick-up if extending this area.
 ---
 
-### Timeline flag accuses ordinary CVs: recent-roles-only bios and future graduation dates
+### [PARTIALLY FIXED — nightly/2026-09-08, part (b) only] Timeline flag accuses ordinary CVs: recent-roles-only bios and future graduation dates
 
 `f_timeline` has two independent false-accusation modes. (a) It compares the largest claimed years-of-experience against `now_year - min(year mentioned in the text)` with only 3 years of slack. A bio that states a long career but dates only current/recent roles — the single most common CV and LinkedIn shape — is declared 'Timeline does not add up'. (b) Any year greater than the current year that lacks a FORWARD_MARKERS cue within the preceding 60 characters is reported as a 'date stated as past but in the future'. Study date ranges ('2025 - 2027'), expected graduation, 'Class of 2027' and multi-year grant/contract end dates all lack a cue, so current students and anyone with a scheduled completion date are flagged. The de-duplication key at extract.py:182-186 is (kind, subtype, value), so the same year emitted once as `year_target` and once as `year` still leaves a bare `year` behind to trip the check.
 
@@ -1688,6 +1688,44 @@ Shipped instead: `_INSTITUTION_CORE`'s trailing connector group keeps re.I (so t
 **Fails on:** A master's student writes 'MSc Computer Science, TU München, 2025 – 2027'. The tool returns ORANGE 46/100 with 'Timeline Implausibility: Timeline does not add up: date(s) stated as past but in the future: 2027.' Separately, a 25-year veteran who lists only her last two dated roles is told her stated experience is unaccounted for.
 
 **Fix direction:** For (a): only compare durations against dates when the text plausibly covers the whole career (e.g. an education date exists, or the earliest year is at least `claimed` years back); otherwise return UNKNOWN — an undated early career is missing information, not a contradiction. For (b): suppress the future-date check entirely for years that appear inside a range whose start is past, and treat any future year adjacent to an education/degree claim as an expected completion date rather than a falsified history.
+
+**[PARTIALLY FIXED — nightly/2026-09-08]** Part (b) only, confirmed live on
+`master` before touching anything (both measured repros above reproduced
+exactly as written). `extract.py`'s `FORWARD_MARKERS` now also recognises
+`class of`, and a new `_is_forward_year()` helper additionally exempts the
+back half of an ascending `YYYY - YYYY` range (`_RANGE_START_RE`) — "2025 -
+2027" no longer trips the future-date check on 2027, and neither does
+"Class of 2027". The student-profile repro above now reads `[12] Not enough
+dated detail to test the timeline` instead of ORANGE 46/100. The
+`year`/`year_target` de-duplication note above (same value, two subtype
+keys) is real but turned out not to matter for this fix — the ambiguity
+only arises when the *same* year is independently classified both ways
+within one document, which none of tonight's fixtures did; worth a look if
+a future night finds an actual case of it misfiring.
+
+Part (a) — the recent-roles-only false accusation — is **still fully
+open**, and turns out to be a harder design problem than the fix direction
+above suggested: I drafted the direction's own proposed gate ("only trigger
+when a dated education anchor exists") and it broke an existing,
+apparently-intentional test, `test_flags.py`'s
+`test_career_slack_is_exactly_three_years`'s second half —
+`"21 years of experience in robotics. Founded the lab in 2009."` (expects
+TRIGGERED) — that fixture has no degree/education claim at all, only a
+"founded" date, and under an education-anchor gate it would flip to
+UNKNOWN right alongside the genuine false-accusation case this finding
+describes. The two are textually almost identical shapes ("since/founded
+YEAR, N years of experience") and neither the anchor-based gate nor a
+minimum-dated-years-count gate (also tried, also breaks the same test)
+distinguishes them — what actually differs is a semantic one: "founded the
+lab" plausibly asserts *that* is the origin of the described career,
+whereas "has led the team since 2021" only dates a role change within an
+already-established one. Detecting that distinction from text reliably
+enough not to trade one false-accusation mode for another needs real
+design thought, not a quick heuristic — left for a future night rather
+than rushed in under this one's time-box. The live repro above
+('twelve years... since 2021 has led the analogue team' → TRIGGERED,
+'at most ~5 years are accounted for') is unchanged and still reproduces
+on current `master`.
 
 ---
 

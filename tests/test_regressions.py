@@ -67,6 +67,23 @@ class TestNoAccusationFromAbsence(unittest.TestCase):
         v.verify_patent(claim)
         self.assertEqual(claim.status, UNCHECKABLE)
 
+    def test_google_patents_not_found_page_is_not_scraped_as_a_scrape_failure(self):
+        """Google Patents can answer a malformed/nonexistent ID with an HTTP 200
+        page whose own title says the patent was not found, distinct from the
+        HTTP 404 case _get already turns into an empty body (and distinct from
+        the *scrape failed* case above, where a real patent's page has no
+        parseable inventor list). Mutation-testing verify.py found that
+        dropping the title-text check left the whole suite green: nothing
+        drove verify_patent through this exact page shape, so the code would
+        find no <dd itemprop="inventor"> tags on this page either and land on
+        UNCHECKABLE ('a scrape failure') instead of NOT_FOUND ('no such
+        patent') — a materially weaker signal against a fabricated number."""
+        body = "<html><title>US9999999 - Not Found - Google Patents</title><body></body></html>"
+        v = StubVerifier({"patents.google.com": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="patent", value="US9999999")
+        v.verify_patent(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+
     def test_patent_inventor_entities_are_decoded_before_comparison(self):
         body = ("<html><title>US10123456 - A Widget</title>"
                 "<dd itemprop=\"inventor\">Jos&#233; &#193;lvarez</dd></html>")

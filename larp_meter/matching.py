@@ -228,6 +228,24 @@ DEFAULT_BANKS = {
         "looking for investors", "open to investors", "seed round", "funding ask",
         "investment opportunity", "capital raise",
     ],
+    # A stated reason why building_claims/funding_ask can't be backed by a
+    # public artifact or a traction figure. NDA'd, classified and proprietary
+    # work, and a pre-revenue raise, are the normal shape of whole industries
+    # (defense, deep tech, biotech, anything pre-launch) — punishing their
+    # absence the same way as an unexplained one scores the industry, not
+    # the person. See f_output/f_fundraising.
+    "confidentiality_reasons": [
+        "nda", "non-disclosure", "non disclosure", "confidential",
+        "confidentiality agreement", "proprietary", "classified",
+        "export controlled", "itar", "trade secret", "cannot be disclosed",
+        "cannot be published", "cannot share details", "under embargo",
+        "stealth mode",
+    ],
+    "pre_revenue_stage": [
+        "pre-revenue", "pre revenue", "pre-seed", "pre seed", "pre-product",
+        "pre product", "not yet generating revenue", "no revenue yet",
+        "early stage startup", "early-stage startup", "yet to launch",
+    ],
     "deep_collab": [
         "co-authored", "joint paper", "joint research", "co-developed",
         "integration partner", "technology partner", "reseller", "oem",

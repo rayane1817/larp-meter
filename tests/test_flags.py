@@ -73,6 +73,30 @@ class TestIndividualFlags(unittest.TestCase):
         text = "We build robots for ports and have done so for a decade with our team."
         self.assertEqual(status_of(text, 7), UNKNOWN)
 
+    def test_confidential_work_does_not_trigger_output_flag(self):
+        """A satellite-power engineer whose work is under customer NDAs was
+        scored identically to a LARPer citing nothing at all: TRIGGERED,
+        'yet cites no checkable artifact'. Proprietary/classified/NDA'd work
+        has no public artifact by construction — that is a description of
+        the industry, not evidence of fabrication, so a stated reason must
+        move this to UNKNOWN (the absence is still real, just explained),
+        not silently PASS."""
+        text = ("Building radiation-tolerant power electronics for satellites. "
+                "Most of this work is covered by customer NDAs and cannot be published.")
+        self.assertEqual(status_of(text, 6), UNKNOWN)
+
+    def test_stealth_mode_does_not_trigger_output_flag(self):
+        text = "Building a new hardware platform. We are operating in stealth mode for now."
+        self.assertEqual(status_of(text, 6), UNKNOWN)
+
+    def test_pre_revenue_fundraising_does_not_trigger(self):
+        """A pre-seed, pre-product deep-tech round has no customer or revenue
+        figure to cite by definition — that is the normal state of an early
+        raise in deep tech and biotech, not evidence the company doesn't
+        exist."""
+        text = "Raising a pre-seed round for our pre-product deep tech venture."
+        self.assertEqual(status_of(text, 7), UNKNOWN)
+
     def test_degree_without_institution_is_undecidable_not_an_accusation(self):
         """Failure to parse an institution is not concealment. Institution names
         this extractor cannot read are common outside English, and triggering on

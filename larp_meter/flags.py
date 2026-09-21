@@ -300,6 +300,20 @@ def f_output(ctx):
         return FlagResult(PASSED, f"{len(hard)} independently checkable artifact(s) cited.",
                           [f"{c.subtype}: {c.value}" for c in hard[:4]])
     if building:
+        reason = find_terms(ctx.text, ctx.banks["confidentiality_reasons"], skip_negated=True)
+        if reason:
+            # NDA'd, classified and proprietary work has no public artifact by
+            # construction — that describes whole industries (defense, deep
+            # tech, contract engineering), not deception. The absence is
+            # still real, so this stays short of PASSED; it just stops being
+            # an accusation.
+            return FlagResult(
+                UNKNOWN,
+                f"Claims to be {building[0]} something with no checkable artifact, but the text "
+                f"states a reason it wouldn't have one ('{reason[0]}') — proprietary, classified "
+                f"or NDA-covered work is not expected to have a public DOI, patent, repository or "
+                f"trial registration.",
+                building[:3] + reason[:2])
         return FlagResult(
             TRIGGERED,
             f"Claims to be {building[0]} something, yet cites no checkable artifact — no DOI, "
@@ -327,6 +341,16 @@ def f_fundraising(ctx):
                           [c.value for c in traction_claims[:3]])
     if traction_terms:
         return FlagResult(PASSED, f"Fundraising with stated traction ({', '.join(traction_terms[:3])}).")
+    stage = find_terms(ctx.text, ctx.banks["pre_revenue_stage"], skip_negated=True)
+    if stage:
+        # A pre-seed/pre-product raise has no customer or revenue figure to
+        # cite by definition — that's the normal, years-long state of a deep
+        # tech or biotech company, not evidence nothing is happening.
+        return FlagResult(
+            UNKNOWN,
+            f"Actively raising ('{asks[0]}') with no traction figure, but the text states this is "
+            f"a {stage[0]} raise — no customer or revenue figure is expected at this stage.",
+            [asks[0], stage[0]])
     return FlagResult(
         TRIGGERED,
         f"Actively raising ('{asks[0]}') with no customer, revenue or usage figure of any kind.")

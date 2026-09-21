@@ -187,3 +187,31 @@ class TestZeroCandidatesIsUnanswerable(unittest.TestCase):
 
     def test_a_latin_name_with_no_candidates_is_also_unanswerable(self):
         self.assertIsNone(names.name_matches("Ada Lovelace", []))
+
+
+class TestSplitReadingAlsoFiltersParticles(unittest.TestCase):
+    """tokens() unions two readings on purpose (see its own docstring: hyphen-
+    as-separator and hyphen-as-attachment), and each reading filters
+    particles and honorifics with its own independent `t not in PARTICLES`
+    clause -- there is no single shared filter applied after the union.
+    Mutation-testing names.py (2026-09-15) found that dropping just the split
+    reading's clause left the entire suite green: every existing test pairs
+    a particle with its own real surname, where the leaked token is extra
+    noise that never flips a decided verdict on its own. But the union keeps
+    whatever either reading produces, so the leak still poisons the final
+    token set -- 'dr' and 'van' become exactly as significant as 'helsing' --
+    and two people who share only a title and a particle, not one real name
+    token, can earn a 'confident' two-token match (len(present) >= 2) on
+    nothing but ceremony. That is the false-positive-match mirror image of
+    the false-MISMATCH failures the rest of this file guards against: a
+    fabricator borrowing someone else's real, verified record.
+    """
+
+    def test_a_title_and_particle_alone_are_not_significant_tokens(self):
+        self.assertEqual(names.tokens("Dr. Van Helsing"), {"helsing"})
+
+    def test_two_people_sharing_only_a_title_and_particle_do_not_match(self):
+        """Real repro of the leak's consequence: 'Dr. Van Helsing' and 'Dr.
+        Van Pelt' share zero actual name tokens -- only a title and a
+        particle -- and must not be reported as the same person."""
+        self.assertFalse(names.name_matches("Dr. Van Helsing", ["Dr. Van Pelt"]))

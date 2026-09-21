@@ -5455,3 +5455,20 @@ fuller sweeps still live only on unmerged branches.
    same two bugs; a third fresh pass once the queue clears might turn up
    what neither caught, but has now been deferred long enough that a fresh
    pass is lower priority than actually merging what's already found.
+
+---
+
+## 2026-09-22 (interactive session — not a nightly run)
+
+The reverse path has a first slice on master: `larp_meter/reconcile.py`,
+wired into `audit.run_audit` (under `--verify`, never in web modes) and into
+flag 11. Read its module docstring and BACKLOG.md's newest "Shipped since"
+entry before touching it. The one rule to keep: only `reconcile.gate()` may
+turn a reconciliation into CONTRADICTED, and every new source or claim type
+must go through it rather than setting an outcome directly.
+
+Good next nights, one per night, each a small PR: the official Zefix API and
+UK Companies House behind optional environment-variable keys (degrading to
+UNCHECKABLE without one, as `GITHUB_TOKEN` already does in verify.py);
+reading departed officers from the gazette; then "published extensively"
+against a confidently matched OpenAlex author.

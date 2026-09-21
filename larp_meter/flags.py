@@ -17,6 +17,7 @@ from . import TRIGGERED, PASSED, UNKNOWN
 from . import extract as ex
 from . import domains as dom
 from . import names
+from . import reconcile as rc
 from .matching import (find_terms, count_occurrences, find_non_overlapping,
                        host_matches, load_banks)
 
@@ -43,6 +44,7 @@ class AuditContext:
     banks: dict = field(default_factory=load_banks)
     verified: bool = False          # did a verification pass actually run?
     signals: dict = field(default_factory=dict)   # structured facts from providers
+    reconciliations: list = field(default_factory=list)   # reconcile.Reconciliation, --verify only
     now_year: int = field(default_factory=lambda: datetime.now().year)
     _domain_profile: dict = field(default=None, repr=False)
 
@@ -508,8 +510,34 @@ def f_contradicted(ctx):
     # rather than counted here as a contradiction.
     checkable = [c for c in ctx.claims if c.subtype in
                  ("doi", "orcid", "github", "arxiv", "nct", "patent")]
-    if not checkable:
+    # Register-implying claims checked without any identifier (reconcile.py).
+    # Only CONTRADICTED can count against the subject, and reconcile.gate()
+    # is the only thing that can produce it.
+    recs = list(ctx.reconciliations or [])
+    rec_contra = [r for r in recs if r.outcome == rc.CONTRADICTED]
+    rec_confirmed = [r for r in recs if r.outcome == rc.CONFIRMED]
+    rec_notes = [f"company {r.company}: {r.detail}" for r in recs
+                 if r.outcome not in (rc.CONTRADICTED, rc.CONFIRMED)]
+    if not checkable and not recs:
         return FlagResult(UNKNOWN, "No claim carries an identifier that a registry could confirm or refute.")
+    if not checkable:
+        if rec_contra:
+            return FlagResult(
+                TRIGGERED,
+                f"{len(rec_contra)} claimed company role(s) contradicted by the commercial register. A "
+                f"claim contradicted by its own registry is the strongest single signal this tool can "
+                f"produce.",
+                [f"company {r.company}: {r.detail}" for r in rec_contra[:5]])
+        if rec_confirmed:
+            return FlagResult(
+                PASSED,
+                f"The commercial register names the subject at {len(rec_confirmed)} claimed "
+                f"compan{'y' if len(rec_confirmed) == 1 else 'ies'}.",
+                [f"company {r.company}: {r.detail}" for r in rec_confirmed[:4]])
+        return FlagResult(
+            UNKNOWN,
+            f"{len(recs)} claimed company role(s) looked up in a commercial register; none could be "
+            f"confirmed or contradicted for this subject.", rec_notes[:5])
     if not ctx.verified:
         return FlagResult(UNKNOWN,
                           f"{len(checkable)} checkable identifier(s) present but no verification pass ran "
@@ -517,7 +545,7 @@ def f_contradicted(ctx):
     refuted = [c for c in checkable if c.status == ex.NOT_FOUND]
     mismatched = [c for c in checkable if c.status == ex.MISMATCH]
     confirmed = [c for c in checkable if c.status == ex.VERIFIED]
-    if refuted or mismatched:
+    if refuted or mismatched or rec_contra:
         # A refuted identifier doesn't exist, full stop — that is independent
         # of whose name was given. This must fire regardless of --name.
         bits = []
@@ -525,11 +553,14 @@ def f_contradicted(ctx):
             bits.append(f"{len(refuted)} identifier(s) do not exist in the relevant registry")
         if mismatched:
             bits.append(f"{len(mismatched)} exist but do not list the subject")
+        if rec_contra:
+            bits.append(f"{len(rec_contra)} claimed company role(s) contradicted by the commercial register")
         return FlagResult(
             TRIGGERED,
             "; ".join(bits) + ". A claim contradicted by its own registry is the strongest "
             "single signal this tool can produce.",
-            [f"{c.subtype} {c.value}: {c.detail}" for c in (refuted + mismatched)[:5]])
+            ([f"{c.subtype} {c.value}: {c.detail}" for c in (refuted + mismatched)]
+             + [f"company {r.company}: {r.detail}" for r in rec_contra])[:5])
     if confirmed:
         if not ctx.subject_name:
             # Without a name, `_attribute` deliberately marks every EXISTING
@@ -585,6 +616,12 @@ def f_contradicted(ctx):
         return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their "
                                   f"registries.{note}",
                           [f"{c.subtype} {c.value}: {c.detail}" for c in (flagged + rest)[:4]])
+    if rec_confirmed:
+        return FlagResult(
+            PASSED,
+            f"The commercial register names the subject at {len(rec_confirmed)} claimed "
+            f"compan{'y' if len(rec_confirmed) == 1 else 'ies'}; no identifier could be attributed.",
+            [f"company {r.company}: {r.detail}" for r in rec_confirmed[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the
     # registries were unreachable, or they answered about existence only
     # (a repository's owner, a trial's sponsor) which cannot confirm authorship.

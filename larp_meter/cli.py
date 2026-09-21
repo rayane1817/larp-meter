@@ -423,6 +423,12 @@ def cmd_explain(args):
     Several people sharing the name is reported as a caveat, never resolved
     silently to one of them.
 
+    --verify also checks claimed roles at registered Swiss companies ("President
+    of X AG since 2004") against the commercial register, even when the text
+    names no identifier. Only a board-level role claimed before the company was
+    incorporated, with no predecessor on record, counts against the subject;
+    anything the register cannot settle is shown as a note. Not run in web mode.
+
   LIMITS
     Keyword and pattern heuristics, not semantics. Sarcasm, negation and
     non-English text will fool it. Use the output as a list of things to check

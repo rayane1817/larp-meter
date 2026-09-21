@@ -95,6 +95,8 @@ Search engines now answer automated requests with anti-bot pages. Instead of one
 
 A provider that fails contributes nothing and is reported as unavailable. **A network failure is never treated as evidence against the subject.**
 
+**Company roles are checked against the commercial register.** A claim such as *"President of X AG since 2004"* implies an entry in Switzerland's commercial register, so under `--verify` it is looked up there — no identifier needed. The register can confirm the subject (they are named in the company's own gazette entries) or contradict the claim (a board role dated before the company was incorporated, with no predecessor business, name change or takeover on record). Everything the register cannot settle — no entry under that exact name, several matching entries, a company older than the gazette history the register serves (about April 2016), a founder role that could predate incorporation, a role attributed to someone else in the text — is reported as a note and never counted against the subject. The lookup uses the endpoint Zefix's own web front end uses; it needs no key, and if it changes, lookups come back uncheckable rather than as findings. It is not run in web mode, whose corpus is about many people.
+
 Wikipedia and OpenAlex are also queried from `--text`, `--file`, `--from-json` and `--url` mode whenever `--verify --name` is given, not only from a bare-name web audit — a pasted bio with no DOI or ORCID in it still gets checked against a real scholarly and encyclopedic record. Crossref and DuckDuckGo stay web-mode-only: DuckDuckGo returns hits for the *name*, not the subject, and mixing its results into a text audit's evidence would credit the subject with material never confirmed to be theirs.
 
 ---

@@ -13,6 +13,45 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### The reverse path, first slice: company roles against the Swiss commercial register (2026-09-22, interactive session)
+
+Partially closes the top CRITICAL ("Verification is a one-way, claim-anchored
+funnel"). `larp_meter/reconcile.py` checks what a profile *claims* against
+what a register holds, without needing any identifier from the subject.
+
+- **Frame.** Six outcomes (CONFIRMED, CONTRADICTED, EXISTS, AMBIGUOUS,
+  NO_RECORD, UNCHECKABLE). Only CONTRADICTED can count against the subject,
+  and only `reconcile.gate()` can produce it: confident identity AND a claim
+  that implies a register entry AND a register complete for the
+  jurisdiction. Results feed flag 11 (same charter, same ORANGE floor) rather
+  than a new flag, because a new flag's weight would have lowered every
+  profile's coverage whether it applied or not.
+- **Source.** Zefix through the keyless endpoint its web front end uses,
+  verified live 2026-09-22. It returns name, UID, seat, status, name history,
+  takeovers, and the official gazette (SHAB) entries, which name the people
+  registered with the company.
+- **What can be contradicted.** A board-level role (president, chair, board
+  member, managing director) claimed more than a year before the company's
+  articles date, with no predecessor, name change or takeover in the record.
+- **What cannot, by design.** Founder/CEO roles (work often predates
+  incorporation), companies registered before about April 2016 (the gazette
+  history Zefix serves starts there, so the founding year is unknown), no
+  entry under the exact name, several entries, a claim without a Swiss
+  location whose subject is not named in the register, a role attributed to
+  someone else in the text, and anything in web mode.
+- **Verified.** 37 tests (all against response shapes captured live), a
+  20-mutation sweep (all caught after 3 survivors were pinned), and live CLI
+  runs against the real register: a fabricated tenure at a 2016 company with
+  no identifiers anywhere came out RED; the same sentence about a colleague,
+  and the same claim at an older company, stayed notes.
+
+**Next slices, each small enough for one night:** the official Zefix API
+with optional `ZEFIX_API_USER`/`ZEFIX_API_PASSWORD` (untested here — needs a
+free account), UK Companies House with optional `COMPANIES_HOUSE_KEY`
+(same), using the gazette's "Ausgeschiedene Personen" to spot a present-tense
+claim about a role the subject has left, and step 3 of the plan:
+"published extensively" against a confidently matched OpenAlex author.
+
 ### `is_linkedin_paste` misfired on an ordinary CV, and the parser then silently dropped most of its content (2026-08-31, nightly run)
 
 Not from the original 63 findings — flagged as untested speculation in the

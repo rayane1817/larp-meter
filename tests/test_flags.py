@@ -162,6 +162,26 @@ class TestIndividualFlags(unittest.TestCase):
         self.assertEqual(len(text.split()), 25)
         self.assertEqual(status_of(text, 4), PASSED)
 
+    def test_buzzword_flag_still_uses_the_short_text_carve_out_at_24_words(self):
+        """Mutation-tested (2026-09-09): `ctx.word_count < 25` survived as
+        `< 24` with the suite green. The sibling test above pins the upper
+        edge (25 words must NOT get the carve-out) but nothing pinned the
+        lower edge, and the two directions are not symmetric: a 24-word text
+        with NO hype language is PASSED either way (the carve-out's own "no
+        distinct terms" branch and the ordinary density calculation both land
+        on 0 distinct, same status, different message), which is exactly why
+        this survived undetected. The gap only shows with a SPARSE hit — one
+        buzzword in 24 words is real hype but far too little text to say
+        whether it's disproportionate. Under `< 25` that must stay UNKNOWN
+        ("too short to judge"); under `< 24` it falls through to the ordinary
+        density formula (1/24*100 ~= 4.2%, below the >=4-distinct trigger
+        gate) and comes back PASSED ("density is normal") instead --
+        manufacturing a decided, coverage-counting verdict for a profile with
+        the wrong-side data to distinguish from a genuinely dense one."""
+        text = " ".join(["synergy"] + ["team"] * 23)
+        self.assertEqual(len(text.split()), 24)
+        self.assertEqual(status_of(text, 4), UNKNOWN)
+
     def test_vague_partnerships_trigger_at_exactly_two_with_zero_concrete(self):
         """Mutation-tested (2026-08-17): `len(vague) >= 2` survived as `> 2`
         with the suite green — every fixture used 3+ vague terms."""

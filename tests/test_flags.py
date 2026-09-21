@@ -402,6 +402,20 @@ class TestTitleInflationFlag(unittest.TestCase):
                 "Patient Alliance Europe. BASc Physiotherapy.")
         self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), UNKNOWN)
 
+    def test_a_lowercase_honorific_is_just_as_self_applied_as_title_case(self):
+        """`_DOCTORAL_HONORIFIC_RE` had no `re.I` — it matched the exact title
+        case 'Dr'/'Prof'/'Professor' and nothing else. That is a free evasion
+        a fabricator hits without even trying to game anything: an
+        all-lowercase bio (a common LinkedIn-paste and casual-CV style) or an
+        all-caps resume header self-applies exactly the same title while
+        typing it in a different case, and the flag simply never looked. The
+        motivating fixture from the first test in this class, unchanged
+        except for the honorific's case, must trigger identically."""
+        text = ("dr. Anke Verstraeten, President of Example AG.\n\n"
+                "Education: BASc Physiotherapy, MBA Healthcare Management, "
+                "MSc European Public Health.")
+        self.assertEqual(status_of(text, 13, subject_name="Anke Verstraeten"), TRIGGERED)
+
 
 class TestMutationSurvivorsFlags(unittest.TestCase):
     """Regression tests closing gaps found by a mutation sweep of flags.py.
@@ -672,6 +686,32 @@ class TestMutationSurvivorsFlags(unittest.TestCase):
             REGISTRY.remove(spec)
         self.assertEqual(results[999].status, UNKNOWN)
         self.assertIn("evaluator error", results[999].description)
+
+    # ── flag 13: the same-line tail window that keeps a title tied to
+    #    whoever it's actually next to ────────────────────────────────
+    def test_a_far_away_same_line_mention_of_the_subject_is_not_a_self_applied_title(self):
+        """Mutation widening the tail slice `[:60]` to `[:600]` survived.
+
+        `f_title_inflation`'s own comment explains why the honorific's tail is
+        capped short: a raw window can run past the person the title actually
+        belongs to and snag an unrelated mention of the subject much later on
+        the same physical line. Every existing fixture keeps the subject's
+        name within a few words of the honorific (or on the next line
+        entirely, which `line_end` already handles) — none of them has a long
+        run of unrelated prose between someone else's title and a distant
+        mention of the subject's own name, so the 60-character cap itself was
+        never exercised.
+
+        Here "Dr. Schilt" and "Jane Doe" share one physical line, but Jane Doe
+        (the subject) is ~130 characters past the honorific, describing a
+        colleague's work with no doctorate of her own — not calling herself
+        Dr. Widening the window snags her name anyway and reports the title
+        as self-applied; the 60-character cap must keep this UNKNOWN."""
+        text = ("Dr. Schilt oversees several major cross-functional workstreams "
+                "for the org this quarter, and our own celebrated head of "
+                "engineering Jane Doe never claims a doctorate anywhere in her "
+                "own bio.")
+        self.assertEqual(status_of(text, 13, subject_name="Jane Doe"), UNKNOWN)
 
 
 class TestRobustness(unittest.TestCase):

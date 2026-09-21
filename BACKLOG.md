@@ -739,6 +739,29 @@ message strengthening for high-jargon/zero-coverage profiles (cheapest of
 all four, purely a caveat-string change, no new false-accusation surface —
 recommended as the actual next pick-up if continuing this thread).
 
+**[FIXED — nightly/2026-09-04] Case sensitivity was a free evasion.**
+`_DOCTORAL_HONORIFIC_RE` had no `re.I`, so only the exact title-case spelling
+"Professor"/"Prof"/"Dr" was ever recognised. An all-lowercase bio ("dr. Anke
+Verstraeten...") or an all-caps resume header self-applies the identical
+title and read as no title claimed at all — a false negative a fabricator
+gets for free from an ordinary stylistic choice, not from trying to game the
+flag. Confirmed live: the flag's own motivating fixture, re-cased to
+lowercase, went TRIGGERED → UNKNOWN pre-fix. Fixed by adding `re.I`; the
+name-adjacency check immediately below the regex (title must sit next to
+the subject's own name, on the same line, within a short capped window) is
+what actually guards against false accusation here, and is completely
+unaffected by letter case, so this can only close the false-negative gap.
+Verified end-to-end via the real CLI, not the regex in isolation.
+
+**Mandatory mutation-testing pass, same night:** `names.py` stayed fully
+caught. Three real, previously-unpinned survivors in the other three
+required files are described in the commit and pinned with regression
+tests; none needed a production fix (each guard was already correct, just
+untested): `scoring.py`'s `category_scores` PASSED-only-category exclusion,
+this flag's own 60-character same-line tail cap, and `verify.py`'s ROR
+nearest-name tie-break determinism. See NIGHTLY.md's 2026-09-04 entry for
+full detail and the running mutation-testing log.
+
 ### `linkedin.py` red-team pass, first dedicated review of the module (2026-08-17, nightly)
 
 Not from the original 63 findings — the standing brief has called this module

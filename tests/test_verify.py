@@ -388,6 +388,33 @@ class TestRegistries(unittest.TestCase):
         v.verify_institution(claim)
         self.assertEqual(claim.status, NOT_FOUND)
 
+    def test_nearest_name_tie_break_is_deterministic_not_last_writer_wins(self):
+        """Mutation `if overlap > best_overlap:` -> `if overlap >= best_overlap:`
+        survived. Neither hit here clears `wanted <= have`, so both fall
+        through to the "nearest listed name" tie-break — and both score the
+        exact same overlap fraction (each shares exactly one significant
+        token with the claim, against an equal-size union). `>` keeps
+        whichever item ROR listed first on a tie; `>=` would silently let a
+        later, equally-relevant item overwrite it. Which real organization
+        gets quoted back to the reader as the "nearest" one is exactly the
+        kind of detail this tool must be able to explain deterministically,
+        not by an accident of iteration order."""
+        body = json.dumps({"items": [
+            {"id": "https://ror.org/first",
+             "names": [{"value": "Alderbrook Zeppelin", "types": ["ror_display"]}],
+             "locations": [{"geonames_details": {"country_name": "Norway"}}]},
+            {"id": "https://ror.org/second",
+             "names": [{"value": "Marine Quokka", "types": ["ror_display"]}],
+             "locations": [{"geonames_details": {"country_name": "Australia"}}]},
+        ]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution",
+                       value="Alderbrook Institute of Marine Studies")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, NOT_FOUND)
+        self.assertIn("Alderbrook Zeppelin", claim.detail)
+        self.assertNotIn("Marine Quokka", claim.detail)
+
     def test_short_acronym_match_is_reported_as_ambiguous(self):
         body = json.dumps({"items": [{
             "id": "https://ror.org/xyz",

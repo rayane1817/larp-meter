@@ -572,8 +572,11 @@ def f_timeline(ctx):
 # Longer alternatives first: with "Prof" tried before "Professor", Python's re
 # would still backtrack to the longer one when the short match's lookahead
 # fails, but ordering it this way makes the intent readable without relying
-# on that.
-_DOCTORAL_HONORIFIC_RE = re.compile(r"(?<!\w)(?:Professor|Prof|Dr)\.?(?=\s)")
+# on that. Case-insensitive: an all-lowercase bio or an all-caps resume
+# header self-applies the title exactly as much as title case does, and the
+# name-adjacency check right below already gates the false-positive risk —
+# case was never doing any of that work.
+_DOCTORAL_HONORIFIC_RE = re.compile(r"(?<!\w)(?:Professor|Prof|Dr)\.?(?=\s)", re.I)
 
 # Full, unambiguous doctoral-degree PHRASES that DEGREE_RE's own level
 # vocabulary does not cover. Deliberately excludes bare abbreviations (MD,

@@ -270,6 +270,27 @@ class TestCategoryScoresExcludeUndecided(unittest.TestCase):
         self.assertEqual(cats["credentials"]["flags_decided"], 1)
 
 
+class TestCategoryScoresIncludePassed(unittest.TestCase):
+    def test_a_passed_only_category_still_gets_a_score_and_counts_toward_flags_decided(self):
+        """category_scores' filter is `r.status not in (TRIGGERED, PASSED)` --
+        a mutation narrowing it to just `(TRIGGERED,)` survived the existing
+        suite, because the one fixture exercising this filter (above) pairs a
+        TRIGGERED flag with an otherwise-UNKNOWN category, and PASSED/UNKNOWN
+        are excluded identically either way when nothing in the category
+        TRIGGERED. A category where every decided flag PASSED and none
+        TRIGGERED is the case that discriminates: the mutated filter drops it
+        from `buckets` entirely, so the category is missing from `categories`
+        altogether -- not reported as "unscored", just absent, as if it had
+        never been evaluated -- rather than the honest 0%-triggered /
+        one-flag-decided result. A consumer reading the per-category
+        breakdown would see silence where a clean bill of health belongs.
+        """
+        results = build({4: PASSED})   # "rhetoric" category's only flag
+        cats = category_scores(results)
+        self.assertEqual(cats["rhetoric"]["score"], 0)
+        self.assertEqual(cats["rhetoric"]["flags_decided"], 1)
+
+
 class TestInsufficientDataSummaryAccuracy(unittest.TestCase):
     def test_decided_count_in_the_summary_matches_the_actual_decided_flags(self):
         """`decided_flags` (used only in the INSUFFICIENT DATA prose) survived

@@ -118,6 +118,62 @@ class TestOrgExtraction(unittest.TestCase):
         self.assertEqual(ex.norm_org("Helix Systems GmbH"), ex.norm_org("Helix Systems"))
 
 
+class TestContextExtendsToTheFullSentence(unittest.TestCase):
+    """`claim.context` exists to answer one question -- verify.py's
+    `_disclaims_authorship`, "does this identifier's own sentence say it
+    belongs to someone else?" A fixed character-count window around the
+    match clipped a disclaiming phrase sitting near the start of a longer
+    sentence when the identifier itself landed further along: an honest
+    patent attorney's own sentence lost its "on behalf of" disclaimer purely
+    because it started more than 30 characters before the patent number,
+    and a real client filing came back MISMATCH instead of UNCHECKABLE."""
+
+    def test_a_distant_disclaiming_phrase_in_the_same_sentence_is_captured(self):
+        text = ("I have spent my career as outside patent counsel prosecuting numerous "
+                "filings on behalf of corporate clients, including for instance "
+                "US9876543 which I filed for a sensor startup.")
+        claims = ex.extract_claims(text)
+        patent = ex.claims_by(claims, "artifact", "patent")[0]
+        self.assertIn("on behalf of", patent.context)
+
+    def test_context_does_not_cross_a_preceding_sentence_boundary(self):
+        """The other direction: pulling in an unrelated *preceding* sentence
+        would let its disclaiming language mask a real, unqualified claim
+        made in the sentence that actually contains the identifier."""
+        text = ("I have never filed a patent on behalf of anyone else. "
+                "US9876543 is entirely my own invention and I am its sole inventor.")
+        claims = ex.extract_claims(text)
+        patent = ex.claims_by(claims, "artifact", "patent")[0]
+        self.assertNotIn("on behalf of", patent.context)
+
+    def test_an_ordinary_word_wrap_does_not_sever_the_sentence(self):
+        """A bare '\\n' is what ordinary word-wrap produces in a plain-text
+        paste, a PDF-extracted CV, or a hard-wrapped email -- it is not a
+        paragraph break, and treating every one as a hard sentence boundary
+        reintroduces this exact bug one line-length away from where it
+        started: the disclaiming phrase and the identifier can land in the
+        same sentence yet on different physical lines purely because of
+        where the subject's editor happened to wrap the text."""
+        text = ("I have spent my career as outside patent counsel prosecuting numerous\n"
+                "filings on behalf of corporate clients, including for instance\n"
+                "US9876543 which I filed for a sensor startup.")
+        claims = ex.extract_claims(text)
+        patent = ex.claims_by(claims, "artifact", "patent")[0]
+        self.assertIn("on behalf of", patent.context)
+
+    def test_context_does_not_cross_a_following_sentence_boundary(self):
+        """Same failure, the forward direction: the identifier's own
+        sentence claims it outright, and only a *later*, unrelated sentence
+        happens to mention filing on behalf of clients. That later disclaimer
+        must not leak backward and excuse an unqualified claim it was never
+        talking about."""
+        text = ("US9876543 is entirely my own invention. I have also prosecuted other "
+                "patents on behalf of clients over the years.")
+        claims = ex.extract_claims(text)
+        patent = ex.claims_by(claims, "artifact", "patent")[0]
+        self.assertNotIn("on behalf of", patent.context)
+
+
 class TestTimelineAndTraction(unittest.TestCase):
     def test_experience_years(self):
         claims = ex.extract_claims("40 years of experience in propulsion.")

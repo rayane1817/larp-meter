@@ -42,7 +42,17 @@ from .extract import VERIFIED, MISMATCH, NOT_FOUND, UNCHECKABLE, EMITTED_SUBTYPE
 _NON_ATTRIBUTION_CONTEXT_RE = re.compile(
     r"\b("
     r"prior art"
-    r"|cit(?:e|es|ed|ing|ation)"
+    # Active voice only: the subject citing someone else's work disclaims it
+    # ("citing prior art", "cited in our review"). The passive "is cited BY"
+    # says the opposite -- other people cite the SUBJECT's own paper, which is
+    # corroboration, not a disclaimer -- so it is excluded here. This mattered
+    # little when `context` was a fixed 60-character window (the word "cited"
+    # rarely landed that close to an identifier by accident), but widening the
+    # window to the whole sentence made "...is cited by thousands of
+    # researchers worldwide" 80+ characters after a DOI a realistic collision,
+    # and without this exclusion it let a real fabrication (someone else's
+    # paper attached to a fake author) escape to UNCHECKABLE.
+    r"|cit(?:e|es|ed|ing|ation)(?!\s+by\b)"
     r"|based on|builds? on|built on|building on"
     r"|not (?:the |an |my |our )?(?:inventor|author|credited|own)"
     r"|client|employer|colleague|co-?worker|teammate"

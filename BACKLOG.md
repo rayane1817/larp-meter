@@ -76,6 +76,106 @@ plain-text CV with a self-applied "Dr." title and no matching credential
 (no longer normalised, `mode: text`, flag 13 correctly TRIGGERED once
 `--name` is supplied — UNKNOWN with no `--name`, exactly as flag 13's own
 documented contract requires).
+### `claim.context`'s fixed 60-character window clipped a disclaiming phrase far from its identifier (nightly/2026-09-03)
+
+Found during a red-team pass on `_disclaims_authorship` (`verify.py`, added
+2026-08-25 — see that entry further down) rather than in BACKLOG.md itself;
+recorded here for the same reason every other "Shipped" entry is. The guard
+only ever sees what `extract.py`'s `_context()` captures into `claim.context`,
+and that was a fixed `match.start() - 30` .. `match.end() + 30` window,
+inherited unmodified from a pre-existing display helper never designed for
+this job. A disclaiming phrase sitting near the start of a longer sentence,
+with the identifier landing further along, scrolled out of that window
+before `_disclaims_authorship` ever saw it. Confirmed live before touching
+anything:
+
+```python
+text = ("I have spent my career as outside patent counsel prosecuting numerous "
+        "filings on behalf of corporate clients, including for instance "
+        "US9876543 which I filed for a sensor startup.")
+extract_claims(text)[...].context
+# -> 'ients, including for instance US9876543 which I filed for a sensor st'
+# "on behalf of" -- the only disclaiming phrase in the sentence -- is gone.
+```
+
+An honest patent attorney's or research consultant's own sentence, written
+in one continuous clause with no period before the identifier, produced a
+false `MISMATCH` — floored at ORANGE by flag 11 — purely because their
+sentence was long enough for the disclaimer to sit more than 30 characters
+before the identifier it qualifies. This is the same finding shape as the
+"any identifier is treated as a personal authorship claim" CRITICAL further
+down (already `[FIXED]`), one layer deeper: that fix taught `_attribute` to
+recognize a disclaiming sentence at all, but never asked whether the
+sentence fragment it was given was ever wide enough to contain one.
+
+**The fix**, `larp_meter/extract.py`'s `_context()`: scan outward from the
+match to the nearest sentence-ending punctuation on each side (capped at 300
+characters to bound the scan on a pathological unpunctuated document, the
+same reason `matching.py`'s `is_negated` caps its own lookback) instead of a
+fixed character count. `claim.context` is consumed nowhere else in the
+codebase (confirmed by grep before relying on that: `_disclaims_authorship`
+is its only reader), so this could be widened freely with zero risk to any
+other caller. Two follow-on bugs surfaced by the same testing discipline
+this fix itself demanded, both fixed in the same PR rather than shipped
+separately:
+
+1. **A bare newline must not be a sentence boundary.** The first cut of this
+   fix included `\n` in the boundary character set, by analogy with
+   `matching.py`'s clause boundaries. But `claim.context` has no equivalent
+   need to stop negation from bleeding into the next bullet point — it only
+   ever *widens* a window to catch a disclaimer, and an ordinary
+   word-wrapped line break (a plain-text paste, a PDF-extracted CV, a
+   hard-wrapped email) reintroduced the exact bug one line-length away: a
+   disclaiming phrase on one physical line and the identifier on the next
+   went right back to being severed. Caught by the standing "run the CLI
+   end-to-end on a real file" requirement — a heredoc-written sample text
+   file line-wraps at ~80 characters by construction, and the live run came
+   back MISMATCH where the offline unit test (a single Python string
+   literal, never wrapped) had already gone green. Fixed by dropping `\n`
+   from the boundary set entirely; the 300-character cap alone is enough to
+   bound cost, and over-widening into an adjacent paragraph in the rare case
+   this misses can only ever add a disclaiming phrase, never remove one —
+   the same "costs coverage, never accuses" direction this file is already
+   allowed to fail in.
+2. **`_NON_ATTRIBUTION_CONTEXT_RE`'s citation alternative matched the passive
+   voice.** `cit(?:e|es|ed|ing|ation)` was written for "citing prior art" /
+   "cited in our review" (the subject citing someone else's work) but also
+   matched "is cited BY" — other people citing the *subject's own* paper,
+   which is corroboration, not a disclaimer. This existed before tonight but
+   rarely fired: the word "cited" needed to land within the old 30-character
+   radius of an identifier by accident. Widening the window to the whole
+   sentence made that collision realistic — live-confirmed with a fabricated
+   "Dr. John Smith... his landmark paper, `<doi>`, is considered
+   foundational... and is cited by thousands of researchers worldwide" (the
+   DOI is a real, unrelated author's paper): the word "cited" 83 characters
+   after the identifier let a genuine fabrication escape from `MISMATCH` to
+   `UNCHECKABLE`. Also caught by the standing end-to-end requirement, not by
+   re-reading the diff. Fixed with a negative lookahead,
+   `cit(?:e|es|ed|ing|ation)(?!\s+by\b)`; "citing prior art" and "cited in"
+   still match, "is cited by" no longer does.
+
+**Verification:** 8 new tests across `tests/test_extract.py` (context
+captures a distant same-sentence disclaimer; does not cross a preceding or a
+following sentence boundary; survives an ordinary word-wrap), `tests/test_verify.py`
+(the "cited by" false-negative and its "citing ... as prior art" negative
+control; a full end-to-end test through `run_audit` with the realistic
+distant-disclaimer sentence), and `tests/test_round4.py` (a 20,000-match
+unpunctuated-document perf guard, matching the file's existing hype-heavy-
+document test). Each was written first, watched fail against the
+unmodified code, then fixed. Mutation-tested the new boundary logic directly
+(inverting the "closest boundary wins" comparison on both the backward and
+forward scan) — both caught, both confirmed with a clean `__pycache__` first
+(see "what I learned" in NIGHTLY.md's 2026-09-03 entry: a mutate-then-restore
+cycle inside the same wall-clock second can leave a stale `.pyc` that
+silently serves the *previous* mutation's bytecode instead of the restored
+source, producing a false "no test caught this" reading if you don't clear
+it). Ran the real CLI end-to-end, live against Crossref, on both directions:
+an honest, hard-wrapped disclaiming sentence citing a real, unrelated DOI now
+correctly reads `UNCHECKABLE` (was `MISMATCH`); a fabricator attaching the
+same real DOI to a fake author's name with no disclaiming language anywhere
+still correctly reads `MISMATCH`, flag 11 `TRIGGERED`. Full suite: 473 → 481
+tests, green throughout the whole sequence (after the primary fix, after
+each of the two follow-on fixes, and at the end).
 
 ### Mutation-testing spot-check: `verify.py` + `names.py` (2026-08-26, nightly run)
 

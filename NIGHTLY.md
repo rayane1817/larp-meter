@@ -2767,3 +2767,252 @@ a full sweep it's had, scoped to the code this branch actually added.
    never had a dedicated sweep. Worth a full pass next time `matching.py`
    is the night's focus, not just a spot-check riding along with an
    unrelated fix.
+## 2026-09-03 (nightly run)
+
+### ⚠ Open-PR check — four unmerged `nightly/*` PRs, all based on the same master tip
+
+`master`'s NIGHTLY.md still stops at 2026-08-27 above — the human merge pass
+that entry's own successors kept asking for did happen at some point after
+that (the PR-queue table above is stale: `git log` shows every one of
+2026-08-17 through 2026-08-27's PRs merged, `9f71c98` being the last), but
+nothing has merged since. Four nights sit open and unmerged right now, all
+draft, all green, all based on the identical `master` commit `9f71c98`:
+
+| PR | Branch | What it claims | CI |
+|----|--------|-----------------|----|
+| #11 | nightly/2026-08-30 | OpenAlex merge-risk detection (flags a "best" pick that's likely a merged entity) — `providers.py`/`flags.py` | green |
+| #12 | nightly/2026-08-31 | An ordinary CV mistaken for a LinkedIn paste silently lost content — `linkedin.py` | green |
+| #13 | nightly/2026-09-01 | Confidential/pre-revenue work no longer scored as deception — `flags.py` (flags 6/7) | green |
+| #14 | nightly/2026-09-02 | A word-wrap can hide a negation from `is_negated` — `matching.py` | green |
+
+All four are clean, small, and touch disjoint files from each other and from
+tonight's branch (`extract.py`, `verify.py`, and their tests — untouched by
+any of #11–#14). Per the standing instructions this is for the human's
+visibility, not something to act on: not merging, not rebasing onto, not
+duplicating any of their fixes. Branched fresh from `master`'s tip (`9f71c98`)
+for tonight's work.
+
+### Running backlog tally (15 CRITICAL findings, BACKLOG.md `## CRITICAL (15)`)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open** — re-counted directly
+against `master`'s current `BACKLOG.md` (`grep -c '\[FIXED\]'` /
+`'\[PARTIALLY FIXED\]'` under the CRITICAL section), not carried over from
+memory. Up from the last recorded tally of 9/1/5 (2026-08-26) — one more
+CRITICAL closed by whatever landed on `master` between 2026-08-27 and now
+(most likely PR #9's `--verify` disclaimer fix, already `[FIXED]` in
+`BACKLOG.md` with that exact write-up). Tonight's own fix is not one of the
+15 named CRITICALs (it's a `verify.py`/`extract.py` finding discovered live
+tonight, not from the original 63-finding review), so it doesn't move this
+number — filed under "Shipped since the original review" instead, same
+convention as every other night's from-scratch discovery. The 4 still open
+are the core one-way/claim-anchored funnel finding and its three
+near-duplicate write-ups (lines ~3, ~74, ~120, ~164) — none investigated
+tonight.
+
+### What I did
+
+**Primary item:** found and fixed a real false-accusation gap in
+`_disclaims_authorship` (`verify.py`, shipped 2026-08-25) that no run had
+looked at since it landed — picked over the four open PRs' territory
+specifically because it shares zero files with any of them (`extract.py`,
+`verify.py`; #11/#13 touch `flags.py`, #12 touches `linkedin.py`, #14
+touches `matching.py`).
+
+`_disclaims_authorship` only ever sees `claim.context`, and that field was a
+fixed 60-character window (`extract.py`'s `_context()`, unmodified since
+before this project decomposed bios into typed claims) — never reconsidered
+for whether it was wide enough to contain the disclaiming phrase it exists
+to feed. Confirmed live: an outside patent attorney's or research
+consultant's own sentence, written as one continuous clause ("I have spent
+my career as outside patent counsel prosecuting numerous filings on behalf
+of corporate clients, including for instance US9876543 which I filed for a
+sensor startup"), lost "on behalf of" — the only disclaiming phrase in the
+sentence — because it started more than 30 characters before the identifier
+it qualifies. Before tonight this came back `MISMATCH`, floored at ORANGE by
+flag 11, on a sentence that explicitly disclaims the exact thing being
+accused.
+
+Fixed `_context()` to scan outward to the nearest sentence boundary instead
+of a fixed width (capped at 300 characters each direction, so a document
+with no punctuation at all can't make the scan unbounded — same reasoning
+`matching.py`'s `is_negated` already uses for its own lookback cap).
+`claim.context` has exactly one reader in the whole codebase
+(`_disclaims_authorship` — confirmed by grep before relying on it), so this
+could be widened freely with no risk to any other consumer.
+
+**The required end-to-end check surfaced two more real bugs that a
+diff-reading pass would not have caught**, both fixed in this same PR rather
+than shipped with a known gap:
+
+1. A bare `\n` in the sentence-boundary set reintroduced the exact bug one
+   line-length away: a plain-text file written with an ordinary ~80-column
+   word wrap put the disclaiming phrase on one physical line and the
+   identifier on the next, and the live CLI run against a real file (not a
+   Python string literal, which never wraps) came back `MISMATCH` again.
+   Fixed by dropping `\n` from the boundary set — unlike `matching.py`'s
+   negation scope, nothing here needs to stop at a genuine paragraph break,
+   since over-widening in the rare case this misses can only ever add a
+   disclaiming phrase, never manufacture an accusation.
+2. Widening the window made an existing, previously-dormant false-negative
+   in `_NON_ATTRIBUTION_CONTEXT_RE` reachable at realistic distance: its
+   citation alternative, `cit(?:e|es|ed|ing|ation)`, matches the passive "is
+   cited BY" (other people citing the subject's own paper — corroboration)
+   as readily as the active "citing prior art" (the subject disclaiming
+   someone else's work) it was written for. Live-confirmed with a
+   fabricated "Dr. John Smith... his landmark paper, `<doi>`, is considered
+   foundational... and is cited by thousands of researchers worldwide" (the
+   DOI is a real, unrelated author's paper) — the word "cited" 83 characters
+   after the identifier let a genuine fabrication escape from `MISMATCH` to
+   `UNCHECKABLE`. Fixed with a negative lookahead,
+   `cit(?:e|es|ed|ing|ation)(?!\s+by\b)`.
+
+Both follow-on bugs were found only because the standing "run the CLI
+end-to-end on two hand-written samples" requirement was followed literally —
+a real file on disk, live network — rather than trusted to the offline unit
+tests alone, which were green at each intermediate (wrong) state.
+
+### Verification
+
+- 8 new tests, each written first and watched fail against the code at that
+  point, then fixed: 4 in `tests/test_extract.py` (distant disclaimer
+  captured; does not cross a preceding sentence boundary; does not cross a
+  following sentence boundary — this one is what caught the "farthest
+  boundary" mutation below; survives an ordinary word-wrap), 3 in
+  `tests/test_verify.py` (the "cited by" false-negative, its "citing ... as
+  prior art" negative control, and a full `run_audit` end-to-end test with
+  the realistic distant-disclaimer sentence), 1 in `tests/test_round4.py` (a
+  20,000-identifier unpunctuated-document perf guard).
+- Mutation-tested every new line of production logic, each confirmed with a
+  freshly cleared `__pycache__` (see "what I learned" below for why that
+  matters): inverting the backward-scan boundary comparison (caught by the
+  "preceding boundary" test), inverting the forward-scan comparison (caught
+  by the "following boundary" test — this one **survived on the first
+  attempt**, because my first version of that test only checked a text with
+  nothing beyond the sentence-ending period, so the mutated "always use the
+  outer cap" behavior produced an identical result by coincidence; added
+  trailing content after the boundary to discriminate, then it caught),
+  removing the `\n`-exclusion fix, and removing the `cit(?:...)(?!\s+by\b)`
+  lookahead — all four caught after their respective tests were in place.
+- Ran the real CLI end-to-end, live against Crossref (network reachable this
+  session; Google Patents returned 503 from this sandbox all night, so used
+  a DOI-based fixture instead of the historical patent one), on two
+  hand-written samples, comparing the exact same claim against a genuinely
+  reverted pre-fix `_context()` and the real fix, not just before/after in
+  memory:
+  - **Should-not-be-accused:** a hard-wrapped plain-text file, an outside
+    research-consultant bio disclaiming authorship of a real, unrelated DOI
+    ("...on behalf of corporate clients, including for instance a well known
+    paper, 10.1038/nphys1170, which I summarized for a startup..."). Pre-fix:
+    `MISMATCH`. Post-fix: `UNCHECKABLE`, "the surrounding text frames it as
+    someone else's work."
+  - **Should-still-be-flagged (regression check):** "Dr. John Smith... his
+    landmark paper, 10.1038/nphys1170, is considered foundational... and is
+    cited by thousands of researchers worldwide" — the same real DOI,
+    misattributed, with no disclaiming language of the kind this fix targets.
+    Both before and after: `MISMATCH`, flag 11 `TRIGGERED`. Confirms the fix
+    only closes the false-accusation gap and does not blunt genuine fraud
+    detection.
+- Mandatory per-cycle mutation-testing spot-check, one mutation in each of
+  the four required files, all done with a cleared `__pycache__` (see
+  below), all four **caught** by the existing suite — no survivors, no new
+  pins needed:
+
+  | File | Mutation | Result |
+  |---|---|---|
+  | `scoring.py` | `next((lv, s) for cut, lv, s in LEVELS if larp < cut)`: `<` → `<=` | **Caught** — `test_larp_of_exactly_65_is_red_not_orange` and 2 others fail |
+  | `names.py` | `name_matches`'s script-mismatch guard: `if mine_is_latin != blob_is_latin:` → `==` | **Caught** — 41 failures/errors |
+  | `flags.py` | flag 11's no-name-with-confirmed guard: `if not ctx.subject_name:` → `if ctx.subject_name:` | **Caught** — `test_a_real_authored_paper_still_confirms` and 2 others fail |
+  | `verify.py` | `verify_github`'s comparable-name gate: `len(published.split()) >= 2` → `>= 1` | **Caught** — `test_a_bare_handle_never_founds_a_mismatch` fails |
+
+- Full suite: 473 → 481 tests, green at every intermediate step (after the
+  primary fix, after each of the two follow-on fixes, and at the end).
+
+### BACKLOG.md: confirmed / refuted
+
+- **New finding, confirmed live and fixed** (not from the original 63): the
+  `claim.context` window feeding `_disclaims_authorship` was too narrow to
+  reliably contain the disclaiming phrase it exists to detect, in exactly
+  the shape a real, honest sentence produces. Full write-up under "Shipped
+  since the original review" — `claim.context`'s fixed 60-character window
+  clipped a disclaiming phrase far from its identifier.
+- Did not investigate any of the four still-open CRITICALs (the core
+  reverse-path gap and its duplicates) tonight — this was a narrowly scoped
+  fix to an existing guard, not an attempt at the architecture change those
+  findings describe.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: full sweep 2026-08-16. Spot-checked again tonight (fresh
+  line, the `LEVELS` cut boundary in the `next()` generator) — still caught.
+- `flags.py`: full sweeps 2026-08-16/17. Spot-checked again tonight (fresh
+  line, flag 11's no-name-with-confirmed guard) — still caught.
+- `names.py`: full sweep 2026-08-19 (on `master` since — confirmed the
+  `TestBareInitialIsNotASignificantToken`/`TestZeroCandidatesIsUnanswerable`
+  classes from that sweep are present in `tests/test_names.py` today).
+  Spot-checked again tonight (fresh line, the script-mismatch guard) —
+  still caught.
+- `verify.py`: full sweep 2026-08-18. Spot-checked again tonight (fresh
+  line, `verify_github`'s comparable-name gate) — still caught. Also fully
+  mutation-tested tonight's own three new pieces of logic in `extract.py`/
+  `verify.py` (see "Verification" above) — all caught.
+- `extract.py` and `matching.py` are not among the four standing files this
+  requirement names, but tonight's fix lives mostly in `extract.py`, and
+  every line of it got mutation-tested directly as part of writing the fix
+  (see above), not merely spot-checked.
+
+### What I learned
+
+- **A mutate-then-restore cycle inside the same wall-clock second can leave
+  a stale `.pyc` that silently serves the previous mutation's bytecode.**
+  Spent a while debugging what looked like an impossible result — calling
+  `_context()` through the imported module gave a completely different
+  answer than executing the exact same source (via `inspect.getsource` +
+  `exec`) in a fresh namespace — before finding `__pycache__/extract.cpython-311.pyc`
+  dated to an earlier mutation in the same second. CPython's default
+  `.pyc` invalidation is mtime-based at one-second resolution; a rapid
+  mutate/run/restore loop like this project's own mutation-testing
+  discipline explicitly calls for can trip it. Fix: `find . -name
+  __pycache__ -exec rm -rf {} +` (or `PYTHONDONTWRITEBYTECODE=1`) before
+  *every* mutation-testing run, not just once at the start of the session —
+  every command in tonight's mutation log after discovering this did both.
+  Worth adding to whatever future run's mutation-testing muscle memory:
+  a mutation that "wasn't caught" is worth a second look with a cleared
+  cache before writing it up as a real survivor.
+- **The standing "run the CLI end-to-end on a real file" requirement earns
+  its keep by being taken completely literally.** Both follow-on bugs
+  tonight (the word-wrap boundary, the passive-voice citation regex) were
+  invisible to the offline unit tests — those use Python string literals,
+  which never word-wrap, and a distance too short to trip the passive-voice
+  collision. Only a real `.txt` file, hand-wrapped the way a person's editor
+  actually wraps text, and a live registry hit landing far enough away,
+  surfaced them. This is the same lesson as the 2026-08-17 entry's
+  `to_prose()` name gap and the 08-31 LinkedIn-paste content-loss bug: the
+  bug is not always in the code you just changed, and a synthetic fixture
+  engineered to be minimal can accidentally engineer the bug away too.
+- Widening a data field that looked entirely unused outside one guard
+  (`claim.context`) was safe here because a grep actually confirmed zero
+  other readers before relying on that — worth continuing to check
+  explicitly rather than assuming from a field's narrow original purpose.
+
+### What the next run should pick up first
+
+1. **The open-PR queue (#11–#14) is a human-merge-queue matter, not a code
+   problem** — flagged for visibility above, not acted on, per standing
+   instructions. All four are clean, small, and mutually non-conflicting by
+   file; #13 and tonight's branch both touch `flags.py`/`verify.py`
+   respectively but not the same lines.
+2. **The core reverse-path gap is still the core reverse-path gap** — four
+   CRITICAL write-ups, zero investigated tonight. Every prior entry's advice
+   still stands: do the OpenAlex affiliation/`years`-array corroboration
+   work (PR #11 already started this) before attempting any verdict
+   stronger than UNKNOWN-with-evidence.
+3. Now that `_NON_ATTRIBUTION_CONTEXT_RE` has one negative-voice exclusion
+   (`cit(?:...)(?!\s+by\b)`), worth a closer read of its other alternatives
+   for the same passive/active ambiguity before assuming they're clean —
+   not checked tonight beyond the one collision the end-to-end test actually
+   surfaced. `client`/`employer`/`colleague`/`co-worker`/`teammate` in
+   particular are bare nouns with no voice distinction at all and could
+   plausibly have their own false-negative shape once a sentence widens
+   enough to reach one that describes someone else's role, not the
+   subject's own disclaiming statement — untested speculation, not a
+   confirmed finding.

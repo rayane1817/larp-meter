@@ -267,6 +267,116 @@ class TestAttribution(unittest.TestCase):
         self.assertNotEqual(flag11["status"], TRIGGERED)
 
 
+class TestRetraction(unittest.TestCase):
+    """BACKLOG.md: 'Nothing checks whether a cited paper was retracted... and
+    Crossref already returns the fields.' verify_doi fetches the full
+    Crossref record and used to read only `title`/`author`, so a subject
+    citing a formally retracted paper as their published work was reported
+    VERIFIED -- registry-confirmed -- exactly like a paper still standing.
+    """
+
+    def test_retracted_paper_is_flagged_via_update_to(self):
+        """The common case, live-checked against a real retracted Lancet
+        DOI on 2026-09-13: the record itself carries an `update-to` entry
+        of type 'retraction'."""
+        body = json.dumps({"message": {
+            "title": ["RETRACTED: A Study of Underwater SLAM"],
+            "author": [{"given": "Ada", "family": "Lovelace"}],
+            "update-to": [{"DOI": "10.1000/notice", "type": "retraction",
+                            "label": "Retraction"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertTrue(claim.retracted)
+        self.assertEqual(claim.status, VERIFIED)  # existence/attribution is unaffected
+        self.assertIn("retract", claim.detail.lower())
+
+    def test_retracted_paper_is_flagged_via_title_when_update_to_lacks_the_relation(self):
+        """Live-checked against Nature's own lutetium-hydride retraction
+        (10.1038/s41586-023-05742-0) on 2026-09-13: its OWN `update-to` list
+        carries only 'expression_of_concern' and 'correction' entries, never
+        'retraction' -- that relation is attached to the separate retraction
+        notice's DOI instead. The only consistent signal on the retracted
+        record itself is its own publisher-applied title prefix. Relying on
+        `update-to` alone would miss exactly this real, live case."""
+        body = json.dumps({"message": {
+            "title": ["RETRACTED ARTICLE: Evidence of Underwater SLAM"],
+            "author": [{"given": "Ada", "family": "Lovelace"}],
+            "update-to": [{"DOI": "10.1000/xyz", "type": "correction"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertTrue(claim.retracted)
+
+    def test_ordinary_standing_paper_is_not_flagged(self):
+        """Negative control: an untouched record with no retraction relation
+        and an ordinary title must not be marked retracted."""
+        v = StubVerifier({"api.crossref.org": (CROSSREF_OK, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertFalse(claim.retracted)
+
+    def test_a_paper_merely_about_retraction_is_not_flagged(self):
+        """A title that discusses retraction as a research topic, rather
+        than carrying the publisher's own retraction prefix, must not be
+        mistaken for a retraction notice -- the title check is a prefix
+        match, not a substring search."""
+        body = json.dumps({"message": {
+            "title": ["A Survey of Retraction Patterns in Materials Science"],
+            "author": [{"given": "Ada", "family": "Lovelace"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Ada Lovelace")
+        claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+        v.verify_doi(claim)
+        self.assertFalse(claim.retracted)
+
+    def test_disclaimed_citation_of_a_retracted_paper_is_not_asserted_against_the_subject(self):
+        """Citing someone else's retracted paper as prior art is not the
+        subject's own claim to defend -- `retracted` may still be recorded
+        (it's a fact about the artifact), but attribution stays UNCHECKABLE,
+        exactly as it would for a standing paper cited the same way."""
+        body = json.dumps({"message": {
+            "title": ["RETRACTED: Some Paper"],
+            "author": [{"given": "Someone", "family": "Else"}]}})
+        v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Sofia Almeida")
+        claim = Claim(kind="artifact", subtype="doi", value="10.5555/xyz",
+                      context="our approach builds on prior work (10.5555/xyz) in the field")
+        v.verify_doi(claim)
+        self.assertEqual(claim.status, UNCHECKABLE)
+        self.assertNotEqual(claim.status, MISMATCH)
+
+    def test_end_to_end_retracted_paper_is_surfaced_without_flooring_the_verdict(self):
+        """Full pipeline, not `verify_doi`/flag 11 in isolation -- run_audit
+        end to end, the same shape as the patent-citation regression above.
+        Confirms extract_claims -> the real `verify_all` dispatch ->
+        flags.evaluate all actually carry `claim.retracted` through to the
+        report rather than the field only being honoured by a hand-built
+        AuditContext in test_flags.py. A retraction is surfaced, never used
+        to floor the verdict: the registry confirms the subject wrote it."""
+        import larp_meter.audit as audit_mod
+        from larp_meter.audit import run_audit
+        from larp_meter import TRIGGERED
+
+        real_verifier = audit_mod.Verifier
+        body = json.dumps({"message": {
+            "title": ["RETRACTED: A Study of Underwater SLAM"],
+            "author": [{"given": "Ada", "family": "Lovelace"}],
+            "update-to": [{"DOI": "10.1000/notice", "type": "retraction"}]}})
+        try:
+            audit_mod.Verifier = lambda cache_dir, subject_name=None: StubVerifier(
+                {"api.crossref.org": (body, True)}, subject_name=subject_name)
+            text = "Our published work: 10.1000/xyz established this result."
+            report = run_audit("t", text, verify=True, subject_name="Ada Lovelace")
+        finally:
+            audit_mod.Verifier = real_verifier
+
+        claim = next(c for c in report["claims"] if c["subtype"] == "doi")
+        self.assertTrue(claim["retracted"])
+        flag11 = next(f for f in report["flags"] if f["id"] == 11)
+        self.assertNotEqual(flag11["status"], TRIGGERED)
+        self.assertIn("retract", flag11["description"].lower())
+        self.assertNotIn("Held at", report["summary"])
+
+
 class TestRegistries(unittest.TestCase):
     def test_github_repo_records_existence_without_claiming_attribution(self):
         """Owning a repo is not writing it, and citing an employer's repo is

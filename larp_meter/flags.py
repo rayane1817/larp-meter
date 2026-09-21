@@ -535,8 +535,31 @@ def f_contradicted(ctx):
                 UNKNOWN,
                 f"{len(confirmed)} identifier(s) exist, but no --name was given so attribution was "
                 f"never checked — existence alone is not confirmation. Re-run with --name.")
-        return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their registries.",
-                          [f"{c.subtype} {c.value}: {c.detail}" for c in confirmed[:4]])
+        # A retraction is a fact about the paper, not a contradiction of the
+        # claim: the registry has just confirmed the subject wrote it. It
+        # routinely lands on honest authors (a co-author's image error, a
+        # publisher's duplicate-publication mistake), and this flag carries
+        # the ORANGE floor, so treating it as a refutation floored honest
+        # researchers -- reproduced on one who had disclosed the retraction
+        # themselves, under a summary reading "a public registry contradicts
+        # a specific claim". It is surfaced for a human to weigh instead.
+        retracted = [c for c in confirmed if c.retracted]
+        standing = [c for c in confirmed if not c.retracted]
+        if retracted and not standing:
+            return FlagResult(
+                UNKNOWN,
+                f"{len(retracted)} identifier(s) confirmed as the subject's, but every one has since "
+                f"been retracted by its publisher, so none stands as corroboration. A retraction "
+                f"does not by itself mean the subject misrepresented anything — check whether the "
+                f"profile discloses it.",
+                [f"{c.subtype} {c.value}: {c.detail}" for c in retracted[:4]])
+        note = (f" Note: {len(retracted)} of them ha{'s' if len(retracted) == 1 else 've'} since "
+                f"been retracted by the publisher and no longer stand{'s' if len(retracted) == 1 else ''} "
+                f"as evidence — worth checking whether the profile discloses it."
+                if retracted else "")
+        return FlagResult(PASSED, f"All {len(confirmed)} checked identifier(s) confirmed by their "
+                                  f"registries.{note}",
+                          [f"{c.subtype} {c.value}: {c.detail}" for c in (retracted + standing)[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the
     # registries were unreachable, or they answered about existence only
     # (a repository's owner, a trial's sponsor) which cannot confirm authorship.

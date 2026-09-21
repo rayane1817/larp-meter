@@ -365,6 +365,74 @@ class TestContradictionFlag(unittest.TestCase):
         self.assertEqual(result.status, TRIGGERED)
         self.assertIn("do not list the subject", result.description)
 
+    def test_a_retracted_paper_is_surfaced_not_turned_into_an_accusation(self):
+        """A retraction does not contradict the subject's CLAIM -- the
+        registry confirms they authored the paper. It says the paper no
+        longer stands, which routinely lands on honest authors: a
+        co-author's image error, a publisher's duplicate-publication
+        mistake. As first merged, this TRIGGERED flag 11 and floored the
+        verdict at ORANGE under a summary reading "a public registry
+        contradicts a specific claim" -- false, and reproduced on an honest
+        researcher who had disclosed the retraction themselves. With the
+        only confirmed paper retracted there is no standing corroboration
+        and no refutation either, so the answer is UNKNOWN, with the
+        retraction named for a human to weigh."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+                claim.retracted = True
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertIn("retract", result.description.lower())
+
+    def test_standing_papers_plus_one_retraction_pass_with_the_retraction_named(self):
+        """The reproduced false accusation: three genuine, confirmed papers
+        and one retracted one. Authorship of all four is confirmed, so the
+        flag passes -- but the retraction must stay visible in the
+        description and evidence, not vanish into a clean PASSED."""
+        text = ("Our published work: 10.1000/aaa1, 10.1000/aaa2, 10.1000/aaa3 "
+                "and 10.1000/rrr9.")
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+                claim.retracted = claim.value == "10.1000/rrr9"
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, PASSED)
+        self.assertIn("retract", result.description.lower())
+        self.assertTrue(any("rrr9" in e for e in result.evidence),
+                        "the retracted paper must lead the evidence, not be cut off")
+
+    def test_confirmed_and_standing_paper_still_passes(self):
+        """Regression guard for the fix above: a confirmed paper that is
+        NOT retracted must keep passing -- this must not become a blanket
+        downgrade of every confirmed DOI claim."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, PASSED)
+
+    def test_retraction_without_a_name_still_does_not_confirm(self):
+        """Without --name, attribution was never checked at all (per the
+        existing no-name guard above), so a retracted-but-unattributed
+        claim must stay in that same UNKNOWN branch -- it must not newly
+        read as a confirmed-and-contradicted TRIGGERED result when nobody
+        ever established the paper was even the subject's."""
+        text = "Our published work: 10.1038/s41586-020-2649-2."
+        c = ctx_for(text, verified=True)  # no subject_name
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists (Ashish Vaswani)."
+                claim.retracted = True
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertNotIn("confirmed", result.description.casefold())
+
 
 class TestTimelineFlag(unittest.TestCase):
     def test_impossible_experience_span(self):

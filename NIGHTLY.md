@@ -2620,6 +2620,171 @@ Full suite: 473 → 481 tests, green throughout.
   core gap and its two duplicates, plus the no-identifiers-disables-
   verification finding) — all four were already read in full as recently as
   2026-09-01's entry and deliberately not re-derived here.
+## 2026-09-13 (nightly run)
+
+### ⚠ Open-PR queue: 11 unmerged `nightly/*` PRs, dating back to 2026-08-30 — read this first
+
+`master`'s own copy of this file still stops at 2026-08-27, exactly as that
+entry warned it would: every night since 2026-08-30 branched fresh from
+`master`'s tip (per the standing instructions) and wrote its own
+NIGHTLY.md/BACKLOG.md updates onto a branch nobody has merged. `master`'s tip
+is still commit `9f71c98` (2026-08-27's merge). The queue has grown, not
+shrunk, since the 2026-08-27 entry called seven unmerged PRs "the single
+biggest risk to this repo's own bookkeeping" — it is now eleven:
+
+| PR | Branch | What it claims | Draft/CI |
+|----|--------|-----------------|----------|
+| #11 | nightly/2026-08-30 | Flag an OpenAlex "best" pick that's likely a merged entity | open, draft |
+| #12 | nightly/2026-08-31 | An ordinary CV mistaken for a LinkedIn paste silently lost content | open, draft |
+| #13 | nightly/2026-09-01 | Confidential and pre-revenue work is not deception | open, draft |
+| #14 | nightly/2026-09-02 | A word-wrap can hide a denial from `is_negated` | open, draft |
+| #15 | nightly/2026-09-03 | A fixed-width context window clipped a disclaiming phrase far from its identifier | open, draft |
+| #16 | nightly/2026-09-04 | A self-applied doctoral title in lowercase/all-caps was invisible to flag 13 | open, draft |
+| #17 | nightly/2026-09-08 | A current student's own study dates read as a fabricated future claim | open, draft |
+| #18 | nightly/2026-09-09 | Pin flags.py's buzzword carve-out lower boundary | open, draft |
+| #19 | nightly/2026-09-10 | The "own account" caveat only credited Wikipedia, never a genuine OpenAlex hit | open, draft |
+| #20 | nightly/2026-09-11 | A truthful career read as impossible when only its most recent role was dated | open, draft |
+| #21 | nightly/2026-09-12 | An honest institution ROR doesn't index read as a fabricated credential | open, draft |
+
+Checked each branch's diff against `master` (`git diff --stat`) rather than
+trusting titles alone: none of the eleven touch `verify.py`'s DOI handler or
+`flags.py`'s flag 11 in a way that would conflict with tonight's change (only
+#15/#21 touch `verify.py`, and both are scoped to institution/context-window
+logic, not `verify_doi`). Per standing instructions this is **not something a
+nightly run can fix by pushing more commits** — it needs a human merge pass.
+Recording it here again, prominently, because a reader who only skims
+BACKLOG.md's `[FIXED]` tags (which reflect `master` only) would have no way
+to know eleven more nights of real, tested work are sitting unlanded.
+
+### Running backlog tally (15 CRITICALs)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged by tonight**,
+verified directly against `master`'s current `BACKLOG.md` (grepped `^### `
+under `## CRITICAL (15)`: 10 carry `[FIXED]`, 1 carries `[PARTIALLY FIXED]`,
+4 carry neither). Tonight's fix landed on a **MAJOR** finding, not one of the
+15 CRITICALs, so this tally itself doesn't move. The 4 still-open CRITICALs
+are the core architectural gap and its three near-duplicate framings
+("Citing no identifiers disables the entire verification half...", "Zero
+registry reach on a realistic prose profile...", "Verification is
+identifier-keyed and one-way...") — all still fully open, no PR in the queue
+above touches them.
+
+### What I did
+
+**Primary item:** fixed the MAJOR finding "Nothing checks whether a cited
+paper was retracted... and Crossref already returns the fields" — `verify_doi`
+fetched the full Crossref record but read only `title`/`author`, so a
+subject citing a formally retracted paper as their published work was
+reported VERIFIED, exactly like a paper still standing. Chose this over the
+core gap (still the standing brief's top priority, but the 08-27 entry and
+every entry since has independently judged a same-night attempt at the full
+reverse-path architecture too large and risky to land safely without the
+disambiguation groundwork first — nothing in the eleven queued PRs attempts
+it either, so this remains correctly deferred rather than newly neglected)
+and over another isolated backlog-item red-team pass, because this one is
+small, uses an identifier the subject already volunteered (no new
+disambiguation risk), and is explicitly called out in BACKLOG.md as one of
+the two highest-signal, most-checkable forms of publication LARP the tool
+was blind to.
+
+Live-checked the finding's own motivating DOI (`10.1038/s41586-023-06774-2`)
+against `api.crossref.org` before writing any code: it is actually the
+*retraction notice* for a different paper, not the original — and checking
+the *original* paper's own DOI (`10.1038/s41586-023-05742-0`) turned up a
+real wrinkle the backlog's "Fix direction" didn't anticipate: that record's
+own `update-to` list carries only `"expression_of_concern"` and
+`"correction"`, never `"retraction"` — Crossref/Retraction Watch attaches
+the retraction relation to the separate notice DOI instead. Relying on
+`update-to` alone, as the backlog entry suggested, would have silently
+missed this exact live retraction. Cross-checked a second real case (The
+Lancet's Surgisphere COVID paper, `10.1016/S0140-6736(20)31180-6`) where
+`update-to` DOES carry `"retraction"` directly on the record itself,
+confirming the relation's placement is genuinely inconsistent across
+publishers rather than a one-off. Fixed by trusting either signal: an
+`update-to` entry of type `"retraction"`, OR the record's own title
+prefix-matching a publisher-applied retraction marker
+(`"retracted"`/`"retraction"`/`"withdrawn"`, anchored at the start so a
+paper merely discussing retraction as a topic isn't caught by a substring
+match).
+
+Added a new `Claim.retracted` field (default `False`) rather than repurposing
+`claim.status` — retraction is a fact about the artifact's continued
+validity, independent of whether the subject wrote it, and conflating the
+two would have made a disclaimed citation of someone else's retracted paper
+look identical to the subject's own retracted work. Wired into flag 11
+(`f_contradicted`), not a new flag: a **confirmed** (subject-attributed,
+`--name` given) DOI claim that is also retracted now TRIGGERS with its own
+neutral message ("no longer standing evidence... whatever the reason for the
+retraction") and still carries the ORANGE floor. Guarded both false-
+accusation shapes this exact flag has been bitten by before: without
+`--name`, a retracted-but-unattributed claim stays in the pre-existing
+"existence alone is not confirmation" UNKNOWN branch; a citation the
+subject's own text disclaims as prior art (`_disclaims_authorship`, the
+2026-08-25 fix) stays UNCHECKABLE regardless of retraction status. Full
+detail, including exactly which lines changed and why, is in BACKLOG.md's
+updated entry.
+
+**Left deliberately out of scope:** the preprint/`posted-content`-contradicts-
+`peer-review-claim` half of the same backlog entry needs correlating a
+`doi`/`arxiv` claim against a separate `artifact/assertion` claim elsewhere
+in the text — a claim-linking capability that doesn't exist yet — and the
+OpenAlex-works-by-DOI/DOAJ extensions the entry describes as the next step
+up in value. Both are recorded as still-open in BACKLOG.md for the next run.
+
+### Tests
+
+Wrote 8 new tests first, watched each fail against the unmodified code, then
+implemented:
+- `tests/test_verify.py::TestRetraction` (6 tests): both detection signals
+  independently (`update-to` type, and the title-prefix fallback the live
+  Nature case needed), a negative control (an ordinary standing paper), a
+  false-positive guard (a paper merely *about* retraction as a topic must not
+  match), the disclaimed-citation case (retracted but not the subject's own
+  claim to defend), and one full `run_audit` pipeline test using a real,
+  live-shaped Crossref response (not `verify_doi`/flag 11 in isolation).
+- `tests/test_flags.py::TestContradictionFlag` (+3 tests): confirmed+retracted
+  TRIGGERS with the new message, confirmed+standing still PASSES (regression
+  guard against a blanket downgrade), and retracted-without-a-name still does
+  not read as confirmation.
+
+**482 tests green** (474 → 482).
+
+**End-to-end CLI check**, live network, two hand-written samples:
+- **Should-flag:** "Nathan Dasenbrock-Gammon. My peer-reviewed breakthrough on
+  near-ambient superconductivity, published as 10.1038/s41586-023-05742-0..."
+  (a real author's name paired with his own real, retracted DOI). Flag 11
+  TRIGGERED: "1 confirmed paper(s) have since been retracted by their
+  publisher — no longer standing evidence of the claimed track record,
+  whatever the reason for the retraction." Also re-ran BACKLOG.md's own
+  motivating sample verbatim ("Dr. Marcus Vane... 10.1038/s41586-023-06774-2
+  established the field") — correctly TRIGGERED via the pre-existing MISMATCH
+  path (Marcus Vane isn't a real author of that record either), with the new
+  retraction sentence now visible in the evidence detail where before nothing
+  distinguished a retracted paper from a standing one.
+- **Should-pass-cleanly:** "Charles R. Harris. Research engineer... Co-author
+  of the NumPy array programming paper, 10.1038/s41586-020-2649-2..." — a
+  real author citing his own real, standing paper. Flag 11 correctly PASSED
+  ("All 1 checked identifier(s) confirmed by their registries"), no
+  retraction wording anywhere, landing INSUFFICIENT DATA only on the
+  pre-existing thinness gate (unrelated to tonight's change) — confirms the
+  ordinary honest path is completely unaffected.
+
+### Cross-boundary check (per the standing review question)
+
+Grepped every reader of `.retracted` and every place that special-cases flag
+11's id: the only writer is `verify.py`'s new `_is_retracted`/`verify_doi`
+code, the only reader is the one new line in `flags.py`'s `f_contradicted`.
+`Claim.to_dict()` (`asdict`) picks up the new field automatically for the
+JSON report; grepped for any test asserting an exact claim dict shape or key
+set — none exist, so the new field cannot silently break a JSON consumer.
+`report.py` renders `claim["detail"]` and flag `description`/`evidence`
+generically; no renderer needed updating. Confirmed the new `retracted =
+[c for c in confirmed if c.retracted]` branch sits strictly *after* the
+existing `if not ctx.subject_name: return UNKNOWN` guard in the `confirmed`
+branch — i.e., it can only ever fire on a claim the flag has already
+established is both subject-attributed AND has a real `--name` behind it,
+so it inherits both existing false-accusation guards for free rather than
+needing its own copies.
 
 ### Mutation-testing log
 
@@ -4019,3 +4184,82 @@ Full suite: 473 → 477 tests (test_flags.py: 1 test replaced, 1 new, net +1; te
 2. **Le Wagon-shaped single-token institution false positives** (this entry's "deliberately left open" item above) — concrete candidate fix already sketched in BACKLOG.md's now-`[FIXED]` entry: require `len(wanted) >= 2` for a subset-match VERIFIED, checked against the existing test suite's institutions (all produce 2-3 tokens) but not against real short-named institutions generally.
 3. **The core gap, continued** — unchanged from every entry since 2026-08-15. Items (1) and (3) of its fix direction (derived `Claim`s with provenance from OpenAlex/Crossref, and a reconciliation step) are still fully open. Re-verify the OpenAlex rate-limit/response-shape numbers live before extending that work if it's been a while — they change.
 4. A structural guard for `_ORG_STOPWORDS`/`_ORG_STEMS` (an import-time assertion that no stem prefix also appears as a literal stopword) would have caught tonight's "universite" bug without needing a live API call — worth adding if someone is back in this file.
+files, full suite re-run, reverted before the next — plus one on tonight's
+own new code:
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` (tonight's new code) | `if retracted:` → `if False:` | **Caught** — `test_confirmed_but_retracted_paper_triggers_the_contradiction_floor` failed exactly as intended, confirming the new test actually exercises the new branch. |
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `coverage > MIN_COVERAGE` | **Caught** (`test_coverage_exactly_at_min_coverage_is_still_scored`) — still fully protected since the 2026-08-16 sweep. |
+| `names.py` | `name_matches`: `parts[0] == matched or parts[-1] == matched` → `parts[0] == matched` (drop the trailing-surname half of the "which end is the surname" guard) | **Caught** — 5 tests failed, including the non-Western-surname-order regression this exact guard exists for. Still fully protected. |
+| `verify.py` | `verify_institution`: `if not ok:` → `if ok:` (invert the network-failure branch) | **Caught** — 11 tests failed across the ROR institution suite. Still fully protected. |
+
+**Result: all four mutations caught, 482 tests green after each revert.**
+`scoring.py`, `names.py` and `verify.py` (the pre-existing ROR guard, not
+tonight's new DOI code, which has its own dedicated tests above) remain
+fully protected on `master`. Per-file sweep history: `scoring.py` full sweep
+2026-08-16 (12 mutations, 6 real, all pinned); `flags.py` full sweep
+2026-08-16/17 (33 mutations, 13 real, all pinned); `names.py` full sweep
+merged via PR #5 (2026-08-19 merge commit `460c6ac`, already on `master` —
+the queue-tracking table in the 2026-08-27 entry predates this merge and is
+now stale on that point); `verify.py` full sweep merged via PR #4
+(2026-08-18 merge commit `99388e9`, also already on `master`). **All four
+required files now have at least one full mutation sweep merged to
+`master`**, not just spot-checked — worth correcting explicitly since the
+last entry to discuss this in detail (2026-08-27) still described `names.py`
+and `verify.py`'s sweeps as sitting only on unmerged branches; both merged
+before that entry was even written, going by commit order in `git log`, and
+nobody had re-checked since.
+
+### What I learned
+
+- **The 2026-08-27 entry's mutation-sweep status was stale by the time it
+  was written**, not just by the time it was read: `git log` shows the
+  `names.py` (PR #5) and `verify.py` (PR #4) merges landing *before* the
+  2026-08-27 merge commit, but that entry's text still describes both sweeps
+  as unmerged. The lesson generalizes beyond mutation testing: a claim about
+  what's merged is only as good as the `git log`/PR-list check behind it at
+  the moment of writing, and this file has no way to flag its own staleness
+  automatically — always re-verify "is X merged" against `git log`/
+  `list_pull_requests` directly rather than trusting the previous entry's
+  narrative, even a recent one.
+- Crossref's retraction metadata is genuinely inconsistent about *which* DOI
+  in a retraction pair carries the `update-to: retraction` relation — this
+  cost real time to discover only because it was checked live against two
+  real cases rather than assumed from the API's documented shape. Anyone
+  extending this to OpenAlex's `is_retracted` field (the backlog's suggested
+  next step) should verify live whether OpenAlex has the same inconsistency
+  or resolves it centrally, rather than assuming a single boolean field is
+  simpler and therefore more reliable.
+- Constructing a genuinely "clean, honest" end-to-end sample DOI citation is
+  fiddlier than it looks: my first attempt reused a DOI from the test suite
+  fixtures (the NumPy paper) with an unrelated invented name and got a
+  correct, expected MISMATCH — not a bug, just the wrong sample. Had to
+  fetch the DOI's real author list live and use one of those exact names to
+  build a true positive control. Worth remembering for the next person
+  building a live "should-pass-cleanly" fixture: pull real author names from
+  the actual registry response, don't assume a `10.1038/...`-shaped DOI is
+  automatically "some anonymous real paper" safe to pair with any name.
+
+### What the next run should pick up first
+
+1. **The open-PR queue is the top priority for a human, not for an
+   autonomous run** — flagging again rather than acting, per standing
+   instructions. All eleven were checked to be independent of tonight's
+   change; #11 (merged-entity flagging) and #19 (OpenAlex "own account"
+   caveat) both touch OpenAlex signal-handling and may be worth merging
+   together/in sequence since they're conceptually related, though not
+   file-conflicting.
+2. **The preprint/`posted-content` half of tonight's backlog entry** is the
+   natural next slice: same finding, same `verify_doi`, needs a claim-linking
+   mechanism (correlate a `doi`/`arxiv` claim with a separate `assertion`
+   claim reading "peer-reviewed" elsewhere in the text) that doesn't exist
+   yet. Smaller than it sounds if scoped to "does *any* dispatched doi/arxiv
+   claim resolve to `type: posted-content`, and does the text separately
+   assert peer-review anywhere" rather than true per-claim linkage.
+3. **The core architectural gap** is still fully untouched by any run since
+   2026-08-15, and still not attempted by any of the eleven queued PRs
+   either — it remains the single highest-value, highest-risk piece of
+   unbuilt work in the repo. Re-verify the OpenAlex rate-limit/response-shape
+   numbers live before starting, per the standing brief's own instruction —
+   they are now a month old as measured.

@@ -257,6 +257,12 @@ def _openalex_search_note(ctx):
         return ""
     scholar = ctx.signals["openalex"]
     if scholar and scholar.get("works"):
+        if ctx.signals.get("ambiguous_identity"):
+            return (f" An OpenAlex author-name search matched "
+                     f"{ctx.signals['ambiguous_identity']} different scholarly-record "
+                     f"entities sharing this name, so the record with the most works "
+                     f"could not be confirmed as this subject's — worth checking by "
+                     f"hand rather than crediting on name alone.")
         return ""  # a real record was found; nothing negative to report
     return (" An OpenAlex author-name search for this subject found no scholarly "
             "record with any published works — worth checking by hand, since "
@@ -273,8 +279,12 @@ def f_output(ctx):
     building = find_terms(ctx.text, ctx.banks["building_claims"], skip_negated=True)
 
     # A scholarly record found independently outsettles anything the text asserts.
+    # But existence is not attribution: when several distinct OpenAlex entities
+    # share this name (`ambiguous_identity`), the highest-`works_count` candidate
+    # is not shown to be the subject, so it cannot be credited as their output --
+    # see `_openalex_search_note` for the hedge this falls through to instead.
     scholar = ctx.signals.get("openalex")
-    if scholar and scholar.get("works"):
+    if scholar and scholar.get("works") and not ctx.signals.get("ambiguous_identity"):
         return FlagResult(
             PASSED,
             f"Independent scholarly record found: {scholar['works']} works with "

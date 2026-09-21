@@ -581,6 +581,40 @@ class TestMutationSurvivorsFlags(unittest.TestCase):
                     signals={"openalex": None})
         self.assertEqual(evaluate(c)[6].status, UNKNOWN)
 
+    def test_an_ambiguous_openalex_match_does_not_credit_someone_elses_record(self):
+        """Live-measured against real OpenAlex data (see task brief): a common
+        name can resolve to a single 'author' entity that is actually hundreds
+        of different people merged together, or to several distinct entities
+        that share a display name -- either way, `providers.OpenAlex.search`
+        already detects the multi-entity case and sets `ambiguous_identity`,
+        but picks the highest-`works_count` match as `signals["openalex"]`
+        regardless. Before this test, `f_output` read only `scholar.get("works")`
+        and handed out PASSED with that candidate's full work/citation count --
+        so a subject who merely shares a name with a prolific researcher (the
+        brief's own "Wei Wang": 2470 works, hundreds of unrelated affiliations)
+        would be credited with an output record that was never shown to be
+        theirs. Existence is not attribution: an ambiguous match must fall back
+        to the same unresolved-lead treatment as no match at all, never PASSED."""
+        c = ctx_for("Over 15 years, I have published extensively in peer-reviewed venues.",
+                    signals={"openalex": {"works": 2470, "citations": 50000,
+                                          "display_name": "Wei Wang"},
+                             "ambiguous_identity": 2})
+        result = evaluate(c)[6]
+        self.assertEqual(result.status, UNKNOWN)
+        self.assertIn("OpenAlex", result.description)
+        self.assertNotIn("2470", result.description)
+
+    def test_an_ambiguous_openalex_match_still_defers_to_a_real_cited_artifact(self):
+        """Negative control: ambiguity in the OpenAlex signal must only
+        withhold the OpenAlex-sourced credit -- it must never suppress a
+        genuinely cited, independently checkable artifact (a DOI, a patent
+        number, a repository) that the subject named directly in the text."""
+        c = ctx_for("We are building tooling; code at github.com/acme/slam and patent US10123456.",
+                    signals={"openalex": {"works": 2470, "citations": 50000,
+                                          "display_name": "Wei Wang"},
+                             "ambiguous_identity": 2})
+        self.assertEqual(evaluate(c)[6].status, PASSED)
+
     # ── flag 2: both a title AND a domain are required ──────────────
     def test_a_title_without_a_claimed_domain_is_undecidable(self):
         """Mutation `not titles or not claimed` -> `and` survived. With

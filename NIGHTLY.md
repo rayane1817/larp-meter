@@ -1964,3 +1964,237 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-09-21 (nightly run)
+
+### Open-PR queue check (before any new work — see task brief step 2)
+
+**Still unmerged, now seventeen deep, 25 days old.** `master`'s tip is still
+the 2026-08-27 merge (`9f71c98`). Tonight's branch (`nightly/2026-09-21`,
+opening as PR #28) makes it eighteen. Full table:
+
+| PR | branch | one-line topic |
+|----|--------|-----------------|
+| #11 | nightly/2026-08-30 | flag a likely-merged OpenAlex "best" pick |
+| #12 | nightly/2026-08-31 | an ordinary CV mistaken for a LinkedIn paste |
+| #13 | nightly/2026-09-01 | confidential/pre-revenue work is not deception |
+| #14 | nightly/2026-09-02 | word-wrap hiding a denial from `is_negated` |
+| #15 | nightly/2026-09-03 | fixed-width context window clipping a disclaimer |
+| #16 | nightly/2026-09-04 | self-applied doctoral title, lowercase/all-caps |
+| #17 | nightly/2026-09-08 | a current student's own study dates read as fabrication |
+| #18 | nightly/2026-09-09 | flags.py buzzword carve-out lower boundary |
+| #19 | nightly/2026-09-10 | "own account" caveat only credited Wikipedia |
+| #20 | nightly/2026-09-11 | a truthful career read as impossible |
+| #21 | nightly/2026-09-12 | an honest institution ROR doesn't index |
+| #22 | nightly/2026-09-13 | a retracted paper cited as your own published work |
+| #23 | nightly/2026-09-14 | a preprint cited as your own peer-reviewed work |
+| #24 | nightly/2026-09-15 | mutation-testing names.py/scoring.py |
+| #25 | nightly/2026-09-16 | fabricated patent's Google 404 page + ROR tie-break |
+| #26 | nightly/2026-09-17 | flags.py "No Independent Validation" word-count |
+| #27 | nightly/2026-09-20 | two mutation survivors in `verify_institution`'s ROR ranking |
+
+**No push notification sent tonight, for the same reason PR #27 gave on
+2026-09-20**: the human maintainer was already notified about this queue
+twice (2026-09-11, 2026-09-17). Since then exactly one PR has landed per
+night at the same steady, non-accelerating cadence, all reporting `clean`
+mergeable state, none reviewed — not materially different information from
+what #27 already reported four days ago. Repeating it again tonight would
+be noise, not signal. This entry exists so the next zero-context reader
+(human or autonomous) sees the state without having to reconstruct it from
+seventeen PR descriptions. This branch does not attempt to resolve the
+queue — that is the maintainer's call, not this run's.
+
+### Backlog tally
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open of the 15 CRITICALs —
+unchanged by tonight** (recomputed directly against `master`'s current
+BACKLOG.md: `awk` over `## CRITICAL (15)` through `## MAJOR`, counted
+`[FIXED]`/`[PARTIALLY FIXED]` tags). The 4 open CRITICALs are all restatements
+of the same core one-way-funnel gap from different angles in the original
+review, not 4 distinct problems. Tonight's fix is a red-team finding on the
+existing OpenAlex web-mode path, not one of the 15 named CRITICALs, so the
+count itself doesn't move — but it is squarely on the core gap's own
+territory (the OpenAlex ambiguity problem the task brief's live-measured
+constraints section names by name).
+
+### What I did
+
+**Primary item — red-team for evasion, on the area the task brief names
+directly:** the OpenAlex ambiguous-identity handling. Read `providers.py`'s
+`OpenAlex.search` closely against the brief's own live-measured constraints
+("an ORCID on the entity does NOT certify a clean cluster... Wei Wang: 2470
+works across 863 institutions... a negative result must never be reported
+as a standalone finding"). `providers.OpenAlex.search` already computes
+`ambiguous_identity` (how many distinct entities name-matched the subject)
+correctly, and already picks `best` as the highest-`works_count` match
+regardless of that ambiguity — by design, so a human can be told the count
+via the `⚠ N different people share this name` banner in `cli.py`/`report.py`.
+
+But `flags.py`'s `f_output` (flag 6) never read `ambiguous_identity` at all.
+Confirmed live (see reproduction below) that a subject sharing a name with
+zero, one, or a thousand more-published namesakes was credited PASSED with
+that namesake's full work and citation count as "Independent scholarly
+record found" — full weight-1.5 credit for someone else's output. This is
+not a contrived edge case: it needs nothing more than an ordinary common
+name, which the brief explicitly flags as the normal case for "romanised
+Chinese and Korean names" and any other name popular enough to collide in
+OpenAlex's ~250M-entity author index. It is also the *opposite* direction
+from every OpenAlex fix so far (all previous nights' OpenAlex work — flag
+6's negative-search visibility, #11's "best pick that's likely a merge" —
+addressed under-crediting an honest person or over-trusting a merged
+entity's own affiliation list; this is a fabricator laundering a stranger's
+real record into their own report).
+
+**Reproduced live before touching any code:**
+```
+ctx = ctx_for("...published extensively in peer-reviewed venues.",
+              signals={"openalex": {"works": 2470, "citations": 50000,
+                                    "display_name": "Wei Wang"},
+                       "ambiguous_identity": 2})
+evaluate(ctx)[6]  →  PASSED, "Independent scholarly record found:
+                      2470 works with 50000 citations (OpenAlex)."
+```
+Wrote the failing test first (`test_an_ambiguous_openalex_match_does_not_
+credit_someone_elses_record`), watched it fail against unmodified
+`master`, then fixed `f_output`'s PASSED branch to also require
+`not ctx.signals.get("ambiguous_identity")`, and extended
+`_openalex_search_note()` with a third branch (alongside "never queried"
+and "queried, empty") so the "only unsourced assertions" UNKNOWN message
+now names the ambiguity explicitly instead of going silent. Status stays
+UNKNOWN, never TRIGGERED — an ambiguous match doesn't prove the subject
+lied, it just means this one signal can't settle the question, which keeps
+the fix on the right side of "prefer missing a fraud to accusing an
+innocent." Added a negative-control test confirming a genuinely cited
+artifact (DOI/patent/repo named directly in the text) still PASSES
+regardless of OpenAlex ambiguity, since that credit path never touched the
+provider signal.
+
+Full detail, including the exact live-network reproduction and the trace
+of every other reader of the two signals, is in BACKLOG.md's new "Flag 6:
+an ambiguous OpenAlex match no longer credits the subject with a stranger's
+scholarly record" entry.
+
+**Mandatory per-cycle mutation-testing pass**, all four required files,
+time-boxed spot-checks (not full sweeps — the primary item above took most
+of tonight's budget):
+- `scoring.py`: `coverage >= MIN_COVERAGE` → `>` — **caught** immediately
+  by the existing boundary test. Still protected on `master`.
+- `names.py`: two spot mutations — `len(present) >= 2` → `> 2` (caught,
+  18 failures) and the `at_an_end` `or` → `and` in the single-surname-token
+  branch (caught, 10 failures). Both still solidly protected on `master`.
+- `flags.py`: the new `ambiguous_identity` guard's own regression test
+  (above) already is this file's real mutation-testing evidence — confirmed
+  RED without the guard, GREEN with it. Additionally spot-checked the older
+  flag 11 `if refuted or mismatched:` → `if refuted and mismatched:` guard
+  from the 2026-08-16/17 sweep: still **caught** (4 failures), still
+  protected on `master`.
+- `verify.py`: two spot mutations. `_is_ambiguous_acronym`'s `<= 5` → `< 5`
+  boundary: **caught** by an existing pinned test (the 2026-08-16-era
+  boundary suite already covers this). The `verify_institution` overlap
+  tie-break, `if overlap > best_overlap:` → `>=`: **confirmed still
+  survives, unpinned on `master`** — this is now the *fifth* independent
+  rediscovery of the identical bug (PRs #16, #21, #25, #27, and now
+  tonight), all on unmerged branches. Deliberately did not write a sixth
+  copy of the same pinning test; recording the reconfirmation here and in
+  BACKLOG.md instead, per the same reasoning #27 gave. The actual fix is
+  merging any one of those four branches, not re-finding this a sixth time
+  next week.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed, live reproduction** (not from any PR description): flag 6's
+  OpenAlex-ambiguity gap above is real, unpinned on `master` before tonight,
+  and reachable through the actual `run_audit`/`cli.py` pipeline, not just
+  the flag function in isolation (verified by calling `larp_meter.audit.
+  run_audit` directly with a synthetic signal — the same function `cli.py`
+  calls — and confirming flag 6 lands on UNKNOWN with the hedge message,
+  and that the same pipeline with a real cited artifact still PASSES).
+- **Confirmed, live reproduction**: the `verify_institution` overlap
+  tie-break survivor (`>` vs `>=`) is still real and still unpinned on
+  `master`. Fifth independent confirmation; not re-pinned, see above.
+- **Confirmed, live reproduction**: the `scoring.py` coverage boundary and
+  the `flags.py` flag-11 refuted-or-mismatched guard are both still caught
+  by existing tests on `master` — no regression there.
+- Did **not** re-verify any other BACKLOG.md entry tonight, including the
+  4 still-open CRITICALs beyond a re-read of their headings — don't assume
+  they're unchanged without a fresh look.
+
+### Mutation-testing log (files swept so far, by night)
+
+- `scoring.py`: 2026-08-16 (12 mutations, 6 real, all pinned) — direct to
+  `master`. Spot-checked again 2026-08-27 and tonight (1 mutation each),
+  still caught both times.
+- `flags.py`: 2026-08-16/17 (33 mutations, 13 real, all pinned) — direct to
+  `master`. Spot-checked again 2026-08-27 and tonight (1 mutation each,
+  still caught), plus tonight's own new `ambiguous_identity` guard is fresh,
+  real, pinned production code with its own from-scratch mutation evidence
+  (written failing-first).
+- `names.py`: full 13-mutation sweep on unmerged `nightly/2026-08-19` (PR
+  #5) — **still not on `master`**. Spot-checked twice more since (2026-08-27,
+  tonight), 3 different guards, all still caught on `master`.
+- `verify.py`: full 6-mutation sweep on unmerged `nightly/2026-08-18` (PR
+  #4) — **still not on `master`**. A separate focused sweep of
+  `verify_institution`'s ROR ranking/messaging helpers on unmerged
+  `nightly/2026-09-20` (PR #27) found 3 more real survivors, only one of
+  which (the overlap tie-break) has been reconfirmed live since; tonight
+  reconfirmed that one plus one already-caught boundary. **This file's real
+  survivors remain unpinned on `master`** — five confirmations of the
+  tie-break bug alone, all sitting on branches that haven't merged.
+
+All four files continue to have had at least one real mutation-testing
+pass — unchanged conclusion from prior nights: `master` itself is fully
+pinned only for `scoring.py` and `flags.py`; `names.py` and `verify.py`'s
+fuller sweeps still live only on unmerged branches.
+
+### What I learned
+
+- The web-mode "existence is not attribution" failure mode has two
+  independent shapes, and fixing one does not fix the other: (1) a single
+  OpenAlex entity that is itself a merged cluster of unrelated people (no
+  signal fires — the harder, still-unsolved case the core-gap CRITICAL
+  names), and (2) multiple distinct entities sharing a display name (a
+  signal *does* fire — `ambiguous_identity` — but nothing downstream of
+  providers.py was reading it before tonight). Fixing (2) was cheap because
+  the hard disambiguation work was already done; the value was entirely in
+  noticing that a computed signal was going unused by its only consumer.
+  Worth checking other computed-but-maybe-unconsumed signals in `signals`
+  dicts across the codebase as a cheap red-team technique going forward —
+  `grep -n 'signals\[' providers.py` against `grep -n 'signals.get\|signals\[' flags.py`
+  for gaps would be a fast first pass next time.
+- The previous night that validated flag 6's OpenAlex positive path
+  end-to-end (2026-08-27, testing against a real Yoshua Bengio lookup)
+  specifically confirmed "the positive path is untouched" without testing
+  what happens when the positive path's own match is ambiguous — a good
+  reminder that "the happy path still works" and "the happy path is still
+  correct under its own edge cases" are different claims, and a live
+  end-to-end check against one real, unambiguous public figure doesn't
+  substitute for a synthetic test of the ambiguous case specifically.
+
+### What the next run should pick up first
+
+1. **The queue remains a human-merge problem, not a code problem** — now
+   eighteen branches, 25 days. Keep branches small and independent (as
+   tonight's is: only `flags.py` + tests + docs, no overlap with any of the
+   seventeen open branches' likely diffs). Don't re-notify unless the
+   pattern actually changes (acceleration, a review appearing, a conflict) —
+   see this entry's own reasoning for why tonight didn't.
+2. **`verify_institution`'s overlap tie-break** (`>` vs `>=`) has now been
+   found five times on five different unmerged branches (#16, #21, #25,
+   #27, tonight). If a future run has merge access or the queue ever
+   clears, this is the single most over-confirmed, highest-certainty fix
+   sitting idle in the backlog — pull it from any of those four branches
+   rather than re-deriving it a sixth time.
+3. **The core gap's harder OpenAlex case**: a *single* merged entity
+   representing several real people has no signal at all right now (unlike
+   the multi-entity case fixed tonight) — `ambiguous_identity` only counts
+   distinct matching entities, not affiliation heterogeneity within one.
+   The brief's own suggested corroboration signal (per-affiliation `years`
+   arrays) could detect this — e.g. affiliations spanning implausibly many
+   institutions or incompatible fields in overlapping year ranges — but
+   this needs real OpenAlex response samples to design against, not
+   invention from the docstring alone; re-verify current API shape live
+   first, per the brief's own instruction.
+4. `linkedin.py` red-team: PR #3 and PR #7 both independently found the
+   same two bugs; a third fresh pass once the queue clears might turn up
+   what neither caught, but has now been deferred long enough that a fresh
+   pass is lower priority than actually merging what's already found.

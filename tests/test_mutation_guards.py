@@ -210,6 +210,52 @@ class TestInstitutionMatchGuards(unittest.TestCase):
         self.assertEqual(_significant_tokens("A & M"), set())
         self.assertIn("texas", _significant_tokens("Texas A & M University"))
 
+    def test_a_real_institution_ranked_below_the_top_25_ror_hits_still_verifies(self):
+        """M41. `verify_institution` scans `items[:25]`, not just `items[0]`,
+        because ROR's query endpoint is fuzzy and does not reliably rank the
+        actual named institution first — a generic-sounding but real
+        university can easily place 20th behind noise hits that share a
+        popular word. Narrowing that slice (e.g. to `items[:1]`) survived the
+        whole suite: every existing fixture put the true match first. That
+        regression would not libel anyone directly, but it is the other half
+        of the same harm this file exists to prevent — it would make an
+        honest person's real, ROR-listed institution silently come back
+        NOT_FOUND just because the query ranked it low, exactly the kind of
+        'punishes the honest person' failure the project audits for."""
+        noise = [{"id": f"https://ror.org/noise{i}",
+                  "names": [{"value": f"Institute of Noise Number {i}",
+                             "types": ["ror_display"]}],
+                  "locations": [{"geonames_details": {"country_name": "Freedonia"}}]}
+                 for i in range(20)]
+        real = {"id": "https://ror.org/00cv9y106",
+                "names": [{"value": "Ghent University", "types": ["ror_display"]}],
+                "locations": [{"geonames_details": {"country_name": "Belgium"}}]}
+        body = json.dumps({"items": noise + [real]})
+        v = StubVerifier({"api.ror.org": (body, True)})
+        claim = Claim(kind="degree", subtype="degree_institution", value="Ghent University")
+        v.verify_institution(claim)
+        self.assertEqual(claim.status, VERIFIED)
+
+    def test_ambiguous_acronym_check_requires_uppercase_not_just_short_and_spaceless(self):
+        """M42. `_is_ambiguous_acronym` requires `stripped.isupper()` in
+        addition to the length and no-space checks — dropping that half
+        survived the whole suite, because every existing acronym fixture
+        ('MIT', 'UCLAN') already happened to be all caps. Without it, an
+        ordinary short proper name written in normal title case ('Rhodes',
+        'Delft') would be mislabelled 'ambiguous — confirm which institution
+        is meant' even though nothing about it is actually acronym-shaped,
+        muddying a real, unambiguous VERIFIED with an unwarranted caveat."""
+        from larp_meter.verify import _is_ambiguous_acronym
+        self.assertFalse(_is_ambiguous_acronym("Delft"))
+
+    # A third survivor found tonight — verify_institution's ROR overlap
+    # tie-break (`>` vs `>=`) — is NOT pinned here. It is the exact same
+    # guard PR #25 (nightly/2026-09-16, still unmerged) already found and
+    # pinned; see BACKLOG.md's 2026-09-20 entry for the live reconfirmation.
+    # Not writing a third copy of that test, per this repo's own standing
+    # practice of recording re-confirmation in BACKLOG.md instead of piling
+    # up duplicate tests for a fix that just hasn't merged yet.
+
 
 class TestArxivErrorSignalsAreIndependent(unittest.TestCase):
     """arXiv serves a bad-id error as a 200 OK Atom feed. The check for it

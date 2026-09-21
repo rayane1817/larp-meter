@@ -171,6 +171,42 @@ class Wikipedia(Provider):
                           "wikipedia_about_subject": exact}
 
 
+# An OpenAlex author ID can silently merge several real people who happen to
+# share a name. `best` picking the highest works_count (the only
+# disambiguation this class did before this constant existed) has no way to
+# notice that — a merged entity typically has a HIGHER works_count than any
+# single real person, so plurality alone actively prefers the merged one.
+# Distinct institution count is the cheapest available tell: live-measured
+# 2026-08-30 against the real API, one merged "Wei Wang" entity
+# (A5100391883) lists 873 affiliations spanning education, healthcare,
+# government and company institutions across at least two countries — no
+# single real career looks like that, while even a well-travelled genuine
+# researcher (PhD, postdoc, two or three faculty jobs, an industry stint)
+# rarely clears single digits. This threshold exists only to soften an
+# existing PASSED corroboration with a caveat; nothing may use it to trigger
+# a new finding — a high count is evidence the record is unreliable, not
+# evidence the subject did anything wrong.
+MERGE_RISK_INSTITUTION_COUNT = 15
+
+
+def _affiliation_institution_count(author):
+    """Distinct institutions across the author's full recorded career.
+
+    Prefers the full `affiliations` array (each entry an {institution,
+    years} pair) over the handful summarised in `last_known_institutions`,
+    since a merged entity's institution count only shows up in the full
+    history. Falls back to `last_known_institutions` if `affiliations` is
+    absent from this particular response shape, rather than reading that as
+    zero institutions.
+    """
+    affiliations = author.get("affiliations")
+    insts = ([a.get("institution") or {} for a in affiliations] if affiliations
+             else author.get("last_known_institutions") or [])
+    ids = {i.get("id") or i.get("display_name") for i in insts if i}
+    ids.discard(None)
+    return len(ids)
+
+
 class OpenAlex(Provider):
     """Scholarly record: works, citations, affiliations. Free, no key, authoritative."""
     name = "openalex"
@@ -197,6 +233,7 @@ class OpenAlex(Provider):
             cited = a.get("cited_by_count", 0)
             insts = [i.get("display_name") for i in (a.get("last_known_institutions") or [])
                      if i.get("display_name")]
+            institution_count = _affiliation_institution_count(a)
             findings.append(Finding(
                 a.get("id", ""), f"{display} — scholarly record",
                 f"{works} works, {cited} citations"
@@ -204,7 +241,9 @@ class OpenAlex(Provider):
                 self.name, self.kind, True, True))
             if best is None or works > best.get("works", 0):
                 best = {"works": works, "citations": cited, "institutions": insts,
-                        "orcid": a.get("orcid"), "display_name": display}
+                        "orcid": a.get("orcid"), "display_name": display,
+                        "institution_count": institution_count,
+                        "merge_risk": institution_count >= MERGE_RISK_INSTITUTION_COUNT}
         signals = {"openalex": best}
         # Several distinct researchers sharing the name means any web-mode
         # conclusion may be conflating people. The human needs to know.

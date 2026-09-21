@@ -1964,3 +1964,227 @@ merge pass.
 3. `linkedin.py` red-team: PR #3 and PR #7 both independently did a first
    pass and found the same two bugs — once the queue clears, check whether
    a third, fresh pass turns up anything neither of them caught.
+
+## 2026-08-30 (nightly run)
+
+### Open-PR check (do this first, every night)
+
+`git fetch origin` + a live PR search against `rayane1817/larp-meter`:
+**no open `nightly/*` PRs.** `master`'s tip is `9f71c98` ("Merge
+nightly/2026-08-27: surface a genuine negative OpenAlex search on flag 6")
+— exactly the seven-PR merge queue the 2026-08-26/27 entries flagged
+(#3–#9) is now fully merged, in commit order, onto `master`. Good news for
+the human-in-the-loop bottleneck those two entries called the single
+biggest drag on the project; nothing further needed from a nightly run on
+that front.
+
+**Gap in this log:** there are no 2026-08-28 or 2026-08-29 entries here,
+and no commits on `master` between the 2026-08-27 merge and tonight —
+whatever happened those two nights (if anything), it isn't reflected in
+git history or this file. Not something to chase down or explain away;
+just flagging the gap so nobody reading this assumes continuity that
+isn't there. Branched fresh from `origin/master`'s tip (`9f71c98`) for
+tonight's work, per the standing instructions, regardless.
+
+### Running backlog tally (15 CRITICAL findings)
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open** — re-counted directly
+against `BACKLOG.md`'s `## CRITICAL (15)` section on `origin/master`'s
+current tip (not carried over by assumption): grepped every `### ` header
+under that section, 10 carry `[FIXED]`, 1 carries `[PARTIALLY FIXED]`. This
+is genuinely better than the 8/1/6 last recorded in this file (2026-08-19)
+— the merge queue clearing brought real, previously-unmerged fixes onto
+`master`, including "Any identifier appearing anywhere in the text is
+treated as a personal authorship claim," which no run had investigated as
+of 2026-08-19 and is now `[FIXED]`. The 4 still open are the core
+architectural gap (top CRITICAL) and its three near-duplicate write-ups
+further down the file — all one and the same finding. Tonight's own work
+(below) doesn't close any of the 4; it's filed under BACKLOG.md's "Shipped
+since the original review" section instead, matching the convention every
+recent entry has used for mutation-testing sweeps and incremental core-gap
+slices that aren't themselves one of the 15 original findings.
+
+### What I did
+
+**Primary item:** the first actual piece of the core gap's own named
+disambiguation-groundwork prerequisite ("do the affiliation/`years`-array
+corroboration work first"), which every entry since 2026-08-15 has pointed
+at as blocking and none had started. `providers.OpenAlex.search` picks
+`best` among several name-matched candidates purely by `works_count`
+plurality — the task brief's own research calls this actively dangerous,
+since a merged entity (several real researchers sharing a name, collapsed
+into one OpenAlex author ID by the name-matching pipeline OpenAlex itself
+runs) typically has a *higher* works_count than any single real person, so
+plurality prefers the merged record over a genuine one.
+
+Re-verified the brief's headline example live against the real API before
+writing any code, per the standing instruction not to trust the brief's own
+numbers indefinitely: `GET /authors/A5100391883` ("Wei Wang") today lists
+**873** affiliations (up from 863 when the brief was last measured) across
+education, healthcare, government and company institutions in at least
+China and the US — confirms the merged-entity problem is exactly as real
+as described, with fresh numbers. Also found something not in the brief:
+`GET /authors?search=...` — the endpoint `providers.py` actually calls —
+is hitting OpenAlex's own USD rate limiter with **`$0` remaining for the
+rest of today** in this environment (`dailyRemainingUsd: 0`, `retryAfter`
+~21.8h), and even a bare `/authors?per_page=1` with no search term now
+costs money. The free singleton `/authors/{id}` and `/autocomplete/authors`
+endpoints are unaffected (`cost_usd: 0.0` on autocomplete, confirmed live)
+and were the only OpenAlex calls this session could actually make today.
+This didn't block tonight's change — implemented and tested entirely
+against stubbed fetch responses, this project's own established
+convention, with no live-search dependency — but it's a concrete, current
+data point for whoever extends this next: prefer the free
+singleton/autocomplete endpoints over the costed `/authors?search=` list
+endpoint wherever the design allows it, and don't assume `/authors?search=`
+is reliably reachable for a live end-to-end check on any given night.
+
+Added `providers._affiliation_institution_count()`: counts distinct
+institutions from the full `affiliations` array (`{institution, years}`
+pairs, richer than the handful summarised in `last_known_institutions`),
+falling back to `last_known_institutions` if `affiliations` is absent
+(defensive — not independently confirmed present on the *list* endpoint's
+response today, only on the singleton, because of the rate limit above).
+`best` now carries `institution_count` and a `merge_risk` boolean
+(`institution_count >= 15` — comfortably above a well-travelled genuine
+career, comfortably below the 873 a merged entity actually shows).
+
+**Deliberately does not change which candidate `best` picks, and cannot
+produce a new TRIGGERED anywhere.** Flag 6 (`f_output`) still returns
+PASSED on any real record exactly as before — existence of a record is
+still real, if weak, corroboration, merged entity or not. The only change:
+a `merge_risk` record's PASSED evidence text now names the institution
+count and warns it may blend several careers, so a human reading the
+report knows not to lean on "OpenAlex found a huge record" as strong
+personal corroboration. This is the narrowest usable slice of the
+disambiguation groundwork — real infrastructure now exists in
+`ctx.signals["openalex"]` for a future reconciliation step — without itself
+attempting reconciliation, a new verdict, or changing which candidate gets
+picked as `best` under merge_risk (that's a separate, larger design
+question, left for whoever picks this up next).
+
+**Verification, TDD throughout:** wrote all tests first, watched every one
+fail against the unmodified code (`KeyError`s for the missing signal keys,
+plain assertion failures for the missing evidence text), then implemented.
+5 new tests in `tests/test_providers.py` — including an exact `>=` boundary
+pin at 14 vs. 15 institutions, since this repo's flags.py mutation sweeps
+have repeatedly shown a threshold with nothing sitting exactly on the cut
+survives a `>=`/`>` inversion silently. 2 in `tests/test_flags.py` — the
+caution appears on a merge-risk signal, stays absent on an ordinary one,
+including a fixture using the pre-tonight signal shape (no
+`institution_count`/`merge_risk` keys at all) to pin that every existing
+caller keeps working unchanged. 1 true end-to-end test in
+`tests/test_cli_registry_wiring.py`, using the real raw JSON shape (an
+`affiliations` array, not a hand-summarised dict) through the actual
+`cmd_text` pipeline — per this repo's standing lesson (the ROR/HANDLERS
+dead-code bug and, one layer up, the `_attribute`/`None` bug from
+2026-08-16), a flags.py-only test proves nothing about whether the real
+`OpenAlex.search` → `ctx.signals` → flag pipeline actually produces this
+shape. 473 → 480 tests, green throughout, run after every step not just at
+the end.
+
+Mutation-tested the new code directly, each mutation applied, suite run,
+then reverted before the next: inverted `>=` to `>` in the merge_risk
+threshold (caught only by the new boundary test — every other test sat
+comfortably off the cut); deleted the `merge_risk` gate in `flags.py`'s
+caution text (caught by both the flags.py unit test and the end-to-end
+test); dropped the `affiliations`-array branch in
+`_affiliation_institution_count`, forcing the `last_known_institutions`
+fallback unconditionally (caught by two tests, including the boundary
+test, since `last_known_institutions` never carries enough entries to
+cross 15). All three caught, all reverted, suite confirmed green again
+after each revert.
+
+**Required end-to-end CLI check** (mandatory after touching
+`providers.py`/`flags.py`): ran the real `larp_meter.cli.main()` — not just
+test-harness function calls — with a stubbed fetcher, on two hand-written
+samples. A clean, honest researcher with a genuinely small
+single-institution OpenAlex record: flag 6 PASSED, plain evidence text, no
+caution — byte-identical to pre-tonight behavior. A "Wei Wang"-shaped
+merged record (30 synthetic institutions): flag 6 PASSED, now with the
+institution-count caution appended to the evidence text, exactly as
+designed. Both samples landed INSUFFICIENT DATA overall (thin bios, as
+expected for a short hand-written fixture) — confirms the change doesn't
+manufacture coverage or move a verdict in either direction, only qualifies
+an existing PASSED's evidence text.
+
+**Mandatory per-cycle mutation-testing spot-check**, one mutation in each
+of the four standing files, full suite run after each, reverted before the
+next — all four **caught**, confirming `master` is still fully protected on
+all four fronts after the merge queue landed:
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `coverage >` | **Caught** |
+| `flags.py` | `if refuted or mismatched:` → `if refuted and mismatched:` | **Caught** |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `if wanted <= have:` | **Caught** — previously only pinned on the (then-unmerged) PR #4/#9 branches; confirmed the merge brought the pinning test onto `master` too. |
+| `names.py` | `name_matches`: deleted `if not usable: return None` | **Caught** — same note as `verify.py`: previously only pinned on unmerged branches, now confirmed live on `master`. |
+
+### BACKLOG.md: confirmed / refuted
+
+- **Confirmed live, with fresh numbers** (not from the brief's own older
+  measurement): the "Wei Wang" merged-entity example (`A5100391883`) is
+  still real today, now at 873 affiliations (was 863). Recorded in
+  BACKLOG.md's new entry under "Shipped since the original review."
+- **New finding, not previously documented anywhere in this repo**:
+  OpenAlex's `/authors?search=` list endpoint is USD-rate-limited to $0
+  remaining for the rest of today in this environment, while the free
+  singleton `/authors/{id}` and `/autocomplete/authors` endpoints are
+  unaffected. Recorded for whoever extends this work next — see "What the
+  next run should pick up first" below.
+- Re-counted the CRITICAL tally against `master`'s current BACKLOG.md
+  (10/1/4, up from the 8/1/6 last recorded here) — a re-count reflecting
+  the merge queue clearing, not new verification work on any individual
+  finding. Did not re-open or re-verify any of the 10 `[FIXED]` or 4
+  still-open findings beyond the top one (the core gap, addressed above).
+
+### What I learned
+
+- The seven-PR merge queue that dominated the last four entries in this
+  file is resolved. Whatever most recently merged it did so in commit
+  order (`972165c` through `9f71c98`, matching PR #3 through #9's dates
+  exactly) without leaving any visible conflict debris in the log — worth
+  noting as a healthy outcome given PR #3 was flagged `dirty` (a real merge
+  conflict) as of 2026-08-27.
+- OpenAlex's rate-limit posture for anonymous/no-key traffic keeps getting
+  stricter over the roughly two weeks this project has been checking it
+  live (per-search USD billing was already true in the brief; today even a
+  bare unfiltered list call costs money, and this environment's daily
+  budget was already exhausted before this session's own first call). Any
+  future work extending the reverse-path/OpenAlex integration should
+  design for "list search may be completely unavailable on any given
+  night" as the normal case, not the exception — the free singleton and
+  autocomplete endpoints are the more dependable foundation.
+- Re-confirmed the project's own established pattern still holds:
+  affiliation-array shape (`{institution, years}` per entry) is exactly as
+  the brief described it, live, on the singleton endpoint. Did not get to
+  independently confirm the *list* endpoint returns the identical shape
+  (blocked by today's $0 budget) — the code defensively assumes it does
+  and falls back if not, but this is worth a live check on a night when
+  the search budget resets, rather than treating tonight's assumption as
+  settled fact indefinitely.
+
+### What the next run should pick up first
+
+1. **The core gap, continued**: `best` is still chosen by works_count
+   alone even when `merge_risk` is true. A genuine next slice: either stop
+   trusting `best` for anything beyond "a record exists" under
+   `merge_risk`, or use the per-affiliation `years` array (present in the
+   data, not yet consumed by anything) to cross-check temporal overlap
+   against the subject's own claimed career dates/institutions — the
+   actual reconciliation step every entry since 2026-08-15 has deferred.
+   Do this only after confirming (see above) that `/authors?search=`
+   really does return the full `affiliations` array, not just
+   `last_known_institutions` — worth a live check once today's $0 budget
+   resets.
+2. **`linkedin.py` red-team**: still the least-reviewed module by every
+   prior entry's own account; PR #3/#7's fixes are now on `master`, so a
+   fresh pass targeting what neither of them covered (see the 2026-08-17
+   entry's own list: non-English degree parsing, `_parse_educations`'
+   first-line-is-the-institution assumption, `is_linkedin_paste`'s
+   signal-scoring on an ordinary CV) is now genuinely new ground, not a
+   third re-fix of the same two bugs.
+3. Figure out why 2026-08-28/2026-08-29 left no trace in this file or in
+   `master`'s history — not urgent, but worth a human's attention if it
+   indicates the nightly schedule itself missed two firings rather than
+   firing and finding nothing worth doing.

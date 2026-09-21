@@ -101,6 +101,73 @@ class TestOpenAlex(unittest.TestCase):
         _findings, signals = providers.OpenAlex(stub({"openalex.org": OPENALEX_BODY})).search("Nobody Here")
         self.assertIsNone(signals["openalex"])
 
+    def test_falls_back_to_last_known_institutions_when_affiliations_absent(self):
+        """The `/authors?search=` list endpoint is assumed -- not confirmed
+        live, since a live check hit OpenAlex's own $0 daily search budget
+        (see NIGHTLY.md, 2026-08-30) -- to return the same full author object
+        as the singleton `/authors/{id}` endpoint, `affiliations` array
+        included. If some response variant ever omits it, falling back to
+        the always-present `last_known_institutions` must not crash or
+        silently read as zero institutions."""
+        _findings, signals = providers.OpenAlex(stub({"openalex.org": OPENALEX_BODY})).search("Ada Lovelace")
+        self.assertEqual(signals["openalex"]["institution_count"], 1)
+        self.assertFalse(signals["openalex"]["merge_risk"])
+
+    def test_a_merged_entity_is_flagged_by_institution_count(self):
+        """An OpenAlex author ID can silently merge several real people who
+        share a name: live-measured 2026-08-30 against the real API, one
+        'Wei Wang' entity (A5100391883) lists 873 affiliations spanning
+        education, healthcare, government and company institutions across at
+        least two countries -- no single career looks like that.
+        `works_count` alone (the only disambiguation `best` used before this)
+        cannot tell that apart from one genuinely prolific researcher, so
+        `best` needs its own tell: an implausible number of distinct
+        institutions."""
+        many = [{"institution": {"id": f"https://openalex.org/I{i}",
+                                  "display_name": f"Institution {i}"}, "years": [2020]}
+                for i in range(20)]
+        body = json.dumps({"results": [
+            {"id": "https://openalex.org/A1", "display_name": "Ada Lovelace",
+             "works_count": 900, "cited_by_count": 5000, "affiliations": many}]})
+        _findings, signals = providers.OpenAlex(stub({"openalex.org": body})).search("Ada Lovelace")
+        self.assertTrue(signals["openalex"]["merge_risk"])
+        self.assertEqual(signals["openalex"]["institution_count"], 20)
+
+    def test_merge_risk_boundary_is_pinned_exactly(self):
+        """14 institutions (just under MERGE_RISK_INSTITUTION_COUNT) must not
+        trip the caution; 15 (exactly at it) must. Every other test here sits
+        comfortably on one side or the other, which the flags.py mutation
+        sweeps in this repo have repeatedly shown is not enough on its own to
+        pin a `>=` against becoming `>` (or the reverse) -- only a test
+        sitting exactly on the cut catches that."""
+        def body_with(n):
+            insts = [{"institution": {"id": f"https://openalex.org/I{i}",
+                                       "display_name": f"Institution {i}"}, "years": [2020]}
+                     for i in range(n)]
+            return json.dumps({"results": [
+                {"id": "https://openalex.org/A1", "display_name": "Ada Lovelace",
+                 "works_count": 900, "cited_by_count": 5000, "affiliations": insts}]})
+        _findings, just_under = providers.OpenAlex(stub({"openalex.org": body_with(14)})).search("Ada Lovelace")
+        self.assertFalse(just_under["openalex"]["merge_risk"])
+        _findings, at_cut = providers.OpenAlex(stub({"openalex.org": body_with(15)})).search("Ada Lovelace")
+        self.assertTrue(at_cut["openalex"]["merge_risk"])
+
+    def test_an_ordinary_career_is_not_flagged(self):
+        """A handful of institutions across a normal career (PhD, postdoc,
+        two faculty jobs) must not trip the merge-risk heuristic -- that
+        would punish an accomplished, well-travelled researcher for having
+        an actual career, exactly the kind of honest-person-gets-punished
+        failure the fairness audits in this project exist to catch."""
+        few = [{"institution": {"id": f"https://openalex.org/I{i}",
+                                 "display_name": f"Institution {i}"}, "years": [2020]}
+               for i in range(4)]
+        body = json.dumps({"results": [
+            {"id": "https://openalex.org/A1", "display_name": "Ada Lovelace",
+             "works_count": 30, "cited_by_count": 500, "affiliations": few}]})
+        _findings, signals = providers.OpenAlex(stub({"openalex.org": body})).search("Ada Lovelace")
+        self.assertFalse(signals["openalex"]["merge_risk"])
+        self.assertEqual(signals["openalex"]["institution_count"], 4)
+
 
 class TestCrossref(unittest.TestCase):
     def test_filters_to_the_subjects_papers(self):

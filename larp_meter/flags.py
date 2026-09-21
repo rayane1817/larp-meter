@@ -275,10 +275,21 @@ def f_output(ctx):
     # A scholarly record found independently outsettles anything the text asserts.
     scholar = ctx.signals.get("openalex")
     if scholar and scholar.get("works"):
+        # An OpenAlex author ID can merge several real people sharing a name
+        # (see providers.MERGE_RISK_INSTITUTION_COUNT). Existence of a real
+        # record is still real corroboration -- this stays PASSED -- but
+        # crediting the subject with a record that likely blends several
+        # careers deserves a caveat, not silent confidence.
+        caution = (f" Caution: this OpenAlex record lists {scholar.get('institution_count', 'many')} "
+                   f"distinct institutions -- a common signature of several researchers "
+                   f"sharing a name merged under one entity ID, not a single career. Treat "
+                   f"this as evidence someone by this name has published, not confirmation "
+                   f"of this subject's specific institutional history."
+                   if scholar.get("merge_risk") else "")
         return FlagResult(
             PASSED,
             f"Independent scholarly record found: {scholar['works']} works with "
-            f"{scholar.get('citations', 0)} citations (OpenAlex).",
+            f"{scholar.get('citations', 0)} citations (OpenAlex)." + caution,
             [f"{scholar.get('display_name', '')} — "
              f"{', '.join(scholar.get('institutions') or []) or 'no affiliation listed'}"])
 

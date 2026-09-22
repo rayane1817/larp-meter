@@ -48,9 +48,58 @@ what a register holds, without needing any identifier from the subject.
 **Next slices, each small enough for one night:** the official Zefix API
 with optional `ZEFIX_API_USER`/`ZEFIX_API_PASSWORD` (untested here — needs a
 free account), UK Companies House with optional `COMPANIES_HOUSE_KEY`
-(same), using the gazette's "Ausgeschiedene Personen" to spot a present-tense
-claim about a role the subject has left, and step 3 of the plan:
-"published extensively" against a confidently matched OpenAlex author.
+(same), and step 3 of the plan: "published extensively" against a
+confidently matched OpenAlex author.
+
+### A departed officer read exactly like a current one -- CONFIRMED for a role the register shows they no longer hold (nightly/2026-09-22)
+
+Follow-up to the slice above, closing one of its own "next slices"
+("Ausgeschiedene Personen" spotting a present-tense claim about a role the
+subject has left). `_registered_people` pooled every person-section header
+in a gazette message -- "Eingetragene Personen" (currently registered) and
+"Ausgeschiedene Personen"/"Personnes radiées"/"Persone radiate" (departed)
+alike -- into one flat name list, so `_names_subject` (now split into
+`_currently_on_record`/`_departed_since`) returned the same `True` for a
+person who had left as for one still there. A bio claiming a still-current
+role for someone the register actually shows departed (no end date given,
+the ordinary shape of a stale or fabricated present-tense claim) came back
+CONFIRMED -- crediting the vaguest, least-checkable version of an outdated
+or false claim exactly the way the reverse path exists to stop.
+
+Verified live against Novartis AG's real record (ehraid 372098, fetched
+2026-09-22): its gazette uses the header
+"Ausgeschiedene Personen und erloschene Unterschriften:", which the
+existing header regex already tolerated (`[^:]*` after "Ausgeschiedene
+Personen") but which nothing distinguished from "Eingetragene Personen." A
+new `_DEPARTED_HEADER_RE`, matched per-header rather than per-message
+(a single SHAB message routinely carries both an outgoing and an incoming
+person under two headers, e.g. one officer leaving as another is
+appointed), tags each name (current vs. departed) and its section's date.
+`CONFIRMED` now requires the subject to be under a *current* header;
+someone found only under a departed one still establishes confident
+identity (a person the register once named is still strong evidence the
+entry is about the right person -- narrowing CONFIRMED away from them must
+not also block a genuine contradiction elsewhere in their own claim) but
+now yields `EXISTS` with a note giving the departure date, never an
+accusation on its own.
+
+Three tests, written first and watched fail against the unmodified code:
+a live-shaped fixture (Hans Jörg Reinhardt, Novartis AG's real former board
+president, real departure date) claiming a still-current role came back
+CONFIRMED pre-fix, `EXISTS` with "departed" in the detail post-fix; a
+currently-registered officer stays `CONFIRMED`; a departed-only match still
+establishes identity for an unrelated contradiction (mirrors the existing
+`on_record`-without-a-location test). Live CLI end-to-end runs against the
+real Novartis AG record (no mocking) confirmed both directions: a claim
+naming the real departed president reads `EXISTS` with the departure date;
+the same claim naming the real current president reads `CONFIRMED`. A
+20-minute mutation pass on the three touched functions found and pinned two
+real survivors (dropping `if not departed`/`or was_departed`); a third
+found — a "currently-on-record takes precedence" guard in `_departed_since`
+— turned out to be genuinely dead code once traced (every caller already
+checks `_currently_on_record` first), so it was deleted rather than pinned,
+per the project's standing bias against unreachable defensive code. 591 →
+594 tests, green throughout.
 
 ### `is_linkedin_paste` misfired on an ordinary CV, and the parser then silently dropped most of its content (2026-08-31, nightly run)
 

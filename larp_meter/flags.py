@@ -234,6 +234,20 @@ def f_vague_partnerships(ctx):
     return FlagResult(PASSED, f"Concrete deal terms present ({', '.join(concrete[:4]) or 'no vague-only pattern'}).")
 
 
+def _rec_confirmed_summary(confirmed):
+    """What the confirmed reconciliations establish, by the record that did it."""
+    companies = [r for r in confirmed if r.kind == "company"]
+    parts = []
+    if companies:
+        parts.append(f"the commercial register names the subject at {len(companies)} claimed "
+                     f"compan{'y' if len(companies) == 1 else 'ies'}")
+    if len(companies) < len(confirmed):
+        parts.append("OpenAlex holds a scholarly record consistent with the claimed publication volume, "
+                     "tied to the subject by a stated institution or ORCID")
+    text = "; ".join(parts)
+    return text[:1].upper() + text[1:]
+
+
 def _openalex_search_note(ctx):
     """Describe a subject-anchored OpenAlex search that came back empty.
 
@@ -516,8 +530,7 @@ def f_contradicted(ctx):
     recs = list(ctx.reconciliations or [])
     rec_contra = [r for r in recs if r.outcome == rc.CONTRADICTED]
     rec_confirmed = [r for r in recs if r.outcome == rc.CONFIRMED]
-    rec_notes = [f"company {r.company}: {r.detail}" for r in recs
-                 if r.outcome not in (rc.CONTRADICTED, rc.CONFIRMED)]
+    rec_notes = [r.line() for r in recs if r.outcome not in (rc.CONTRADICTED, rc.CONFIRMED)]
     if not checkable and not recs:
         return FlagResult(UNKNOWN, "No claim carries an identifier that a registry could confirm or refute.")
     if not checkable:
@@ -527,17 +540,14 @@ def f_contradicted(ctx):
                 f"{len(rec_contra)} claimed company role(s) contradicted by the commercial register. A "
                 f"claim contradicted by its own registry is the strongest single signal this tool can "
                 f"produce.",
-                [f"company {r.company}: {r.detail}" for r in rec_contra[:5]])
+                [r.line() for r in rec_contra[:5]])
         if rec_confirmed:
-            return FlagResult(
-                PASSED,
-                f"The commercial register names the subject at {len(rec_confirmed)} claimed "
-                f"compan{'y' if len(rec_confirmed) == 1 else 'ies'}.",
-                [f"company {r.company}: {r.detail}" for r in rec_confirmed[:4]])
+            return FlagResult(PASSED, _rec_confirmed_summary(rec_confirmed) + ".",
+                              [r.line() for r in rec_confirmed[:4]])
         return FlagResult(
             UNKNOWN,
-            f"{len(recs)} claimed company role(s) looked up in a commercial register; none could be "
-            f"confirmed or contradicted for this subject.", rec_notes[:5])
+            f"{len(recs)} claim(s) looked up in a public record (commercial register, OpenAlex); none "
+            f"could be confirmed or contradicted for this subject.", rec_notes[:5])
     if not ctx.verified:
         return FlagResult(UNKNOWN,
                           f"{len(checkable)} checkable identifier(s) present but no verification pass ran "
@@ -560,7 +570,7 @@ def f_contradicted(ctx):
             "; ".join(bits) + ". A claim contradicted by its own registry is the strongest "
             "single signal this tool can produce.",
             ([f"{c.subtype} {c.value}: {c.detail}" for c in (refuted + mismatched)]
-             + [f"company {r.company}: {r.detail}" for r in rec_contra])[:5])
+             + [r.line() for r in rec_contra])[:5])
     if confirmed:
         if not ctx.subject_name:
             # Without a name, `_attribute` deliberately marks every EXISTING
@@ -618,10 +628,8 @@ def f_contradicted(ctx):
                           [f"{c.subtype} {c.value}: {c.detail}" for c in (flagged + rest)[:4]])
     if rec_confirmed:
         return FlagResult(
-            PASSED,
-            f"The commercial register names the subject at {len(rec_confirmed)} claimed "
-            f"compan{'y' if len(rec_confirmed) == 1 else 'ies'}; no identifier could be attributed.",
-            [f"company {r.company}: {r.detail}" for r in rec_confirmed[:4]])
+            PASSED, _rec_confirmed_summary(rec_confirmed) + "; no identifier could be attributed.",
+            [r.line() for r in rec_confirmed[:4]])
     # Reaching here means nothing was refuted and nothing was attributed: the
     # registries were unreachable, or they answered about existence only
     # (a repository's owner, a trial's sponsor) which cannot confirm authorship.

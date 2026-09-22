@@ -21,20 +21,30 @@ one can count against the subject, and only `gate()` can produce it:
 
 Finding nothing is never evidence. A name can be spelled differently, and a
 real company can be registered somewhere this check cannot see.
+
+The second source is OpenAlex, for publication-volume claims ("published over
+200 papers", "published extensively"). It can confirm a claim but never
+contradict one: OpenAlex routinely splits one researcher across several author
+records, so a record holding fewer works than claimed is what an honest,
+badly-indexed researcher looks like too. `OpenAlexAuthors.complete` is False
+for that reason, and gate() turns every shortfall into a note.
 """
 
 import hashlib
 import json
+import os
 import re
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
 from . import names
+from .providers import MERGE_RISK_INSTITUTION_COUNT, _affiliation_institution_count
 from .verify import USER_AGENT, TIMEOUT
 
 CONFIRMED = "CONFIRMED"
@@ -85,6 +95,12 @@ class Reconciliation:
 
     def to_dict(self):
         return asdict(self)
+
+    def line(self):
+        """One evidence line naming what was checked."""
+        if self.kind == "company":
+            return f"company {self.company}: {self.detail}"
+        return f"{self.kind} ({self.source}): {self.detail}"
 
 
 def gate(outcome, identity, implies_footprint, source_complete):
@@ -205,9 +221,9 @@ def _norm(name):
 
 
 # ── Network, with the same rules as verify.py ───────────────────────────
-def _http(url, payload=None):
+def _http(url, payload=None, headers=None):
     """(ok, status, body). ok=False means unreachable -- never evidence."""
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    headers = dict(headers or {}, **{"User-Agent": USER_AGENT, "Accept": "application/json"})
     data = None
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
@@ -224,9 +240,10 @@ def _http(url, payload=None):
         return False, 0, ""
 
 
-def _fetch(cache_dir, url, payload=None):
+def _fetch(cache_dir, url, payload=None, headers=None):
     """Cached _http. Failures are never cached: an outage stored as an empty
-    answer would read as "no such company" for the whole cache lifetime."""
+    answer would read as "no such company" for the whole cache lifetime.
+    Headers stay out of the cache key, so an API key never lands on disk."""
     key = url + "\n" + json.dumps(payload, sort_keys=True)
     path = Path(cache_dir) / (hashlib.sha1(key.encode("utf-8")).hexdigest()[:20] + ".json")
     if path.exists() and time.time() - path.stat().st_mtime < CACHE_TTL:
@@ -235,7 +252,7 @@ def _fetch(cache_dir, url, payload=None):
             return True, blob["status"], blob["body"]
         except Exception:
             pass
-    ok, status, body = _http(url, payload)
+    ok, status, body = _http(url, payload) if headers is None else _http(url, payload, headers)
     if ok:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -428,7 +445,198 @@ def _reconcile_company(claim, subject, source):
     return rec
 
 
+# ── Publication-volume claims against OpenAlex ──────────────────────────
+# Below this, "a record consistent with 'published extensively'" means little.
+VAGUE_MINIMUM_WORKS = 20
+# "Over 200 papers" against 170 indexed works is consistent: indexes lag, and
+# conference abstracts or book chapters are counted unevenly.
+CONFIRM_RATIO = 0.8
+# More records than this under one name at one stated institution is a crowd
+# of namesakes, not one person split up; summing them would inflate the count.
+MAX_TIED_RECORDS = 3
+
+_PUB_NOUN = (r"(?:papers|articles|publications|Publikationen|Ver[öo]ffentlichungen|Fachartikel|"
+             r"Artikel|articles\s+scientifiques)")
+_PUB_ADJ = (r"(?:(?:peer[- ]reviewed|refereed|scientific|scholarly|academic|research|journal|"
+            r"conference|wissenschaftliche[n]?|internationale[n]?|international)\s+)*")
+_PUB_COUNT_RE = re.compile(r"(?<![\d.,])(\d{1,4})\s*\+?\s+" + _PUB_ADJ + _PUB_NOUN + r"\b", re.I)
+_PUB_VAGUE_RE = re.compile(
+    r"\bpublished\s+(?:extensively|widely|prolifically)\b|\bwidely\s+published\b|"
+    r"\b(?:extensive|numerous)\s+(?:peer[- ]reviewed\s+)?publications\b|"
+    r"\bprolific\s+(?:author|researcher|scholar|scientist|writer)\b|"
+    r"\bzahlreiche\s+(?:Publikationen|Ver[öo]ffentlichungen)\b|\bnombreuses\s+publications\b", re.I)
+# Handling other people's papers is not writing them. ("My supervisor ...
+# has published" is a claim about the supervisor, caught by named_before.)
+_NOT_AUTHORING_RE = re.compile(
+    r"\b(?:review(?:ed|er|ing)?|referee(?:d|ing)?|edit(?:ed|or|ing)|supervis(?:ed|ing)|read|"
+    r"cited|handled|evaluated|graded|translated|begutachtet|betreut)\b", re.I)
+# "12 papers in Nature" is a count in one venue, not a total. "... at ETH" is
+# an affiliation, so only "in" marks a venue.
+_VENUE_AFTER_RE = re.compile(r"\s+in\s+(?:the\s+)?[A-Z]")
+_CLAUSE_END_RE = re.compile(r"[.;:,!?\n]")
+_QUANTIFIER_BEFORE_RE = re.compile(
+    r"(?:over|more\s+than|at\s+least|nearly|almost|about|around|some|approximately|[üu]ber|mehr\s+als|"
+    r"plus\s+de|published|authored|wrote)\s*$", re.I)
+# Capitalised words that make a title or an institution look like a personal
+# name ("Senior Lecturer at University College London").
+_NOT_PERSON_WORDS = {
+    "university", "college", "institute", "school", "department", "faculty", "hospital", "clinic",
+    "lab", "labs", "laboratory", "center", "centre", "group", "foundation", "academy", "society",
+    "professor", "prof", "senior", "junior", "lecturer", "researcher", "research", "scientist",
+    "director", "head", "chair", "fellow", "associate", "assistant", "principal", "chief", "lead",
+    "science", "sciences", "engineering", "medicine", "technology", "computer", "the", "of", "and"}
+_ORCID_RE = re.compile(r"\b(\d{4}-\d{4}-\d{4}-\d{3}[\dX])\b")
+
+
+@dataclass
+class PublicationClaim:
+    count: Optional[int]     # None for a vague claim ("published extensively")
+    vague: bool
+    text: str
+    named_before: list = field(default_factory=list)
+
+
+def _people_before(text, start):
+    return [n for n in _names_before(text, start)
+            if not any(w.casefold() in _NOT_PERSON_WORDS for w in n.split())]
+
+
+def extract_publication_claim(text):
+    """The strongest publication-volume claim in `text`, or None."""
+    text = text or ""
+    best = None
+    for m in _PUB_COUNT_RE.finditer(text):
+        n = int(m.group(1))
+        # "Our 2019 papers" is a year; "over 2000 papers" is a count.
+        looks_like_year = (1900 <= n <= 2099 and "+" not in m.group(0)
+                           and not _QUANTIFIER_BEFORE_RE.search(text[max(0, m.start() - 16):m.start()]))
+        if n < 5 or looks_like_year:
+            continue
+        clause = text[max(0, m.start() - 60):m.start()]
+        cut = None
+        for cut in _CLAUSE_END_RE.finditer(clause):
+            pass
+        clause = clause[cut.end():] if cut else clause
+        if _NOT_AUTHORING_RE.search(clause) or _VENUE_AFTER_RE.match(text, m.end()):
+            continue
+        if best is None or n > best.count:
+            best = PublicationClaim(n, False, re.sub(r"\s+", " ", text[m.start():m.end() + 40]).strip(),
+                                    _people_before(text, m.start()))
+    if best:
+        return best
+    m = _PUB_VAGUE_RE.search(text)
+    if m:
+        return PublicationClaim(None, True, re.sub(r"\s+", " ", text[m.start():m.end() + 40]).strip(),
+                                _people_before(text, m.start()))
+    return None
+
+
+class OpenAlexAuthors:
+    """OpenAlex author records under a name. Keyless: $0.10 a day at $0.001 a
+    search (live-measured 2026-09-22). A free account key in OPENALEX_API_KEY
+    raises that tenfold; it is sent as a header, never in the URL, so it stays
+    out of the cache key and any logged URL."""
+
+    name = "OpenAlex"
+    # One person's output is spread over however many records OpenAlex split
+    # them into, so no single lookup is complete for anyone.
+    complete = False
+    SEARCH = ("https://api.openalex.org/authors?search={}&per_page=25"
+              "&select=id,display_name,orcid,works_count,affiliations,last_known_institutions")
+
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+
+    def search(self, full_name):
+        key = os.environ.get("OPENALEX_API_KEY", "").strip()
+        headers = {"Authorization": "Bearer " + key} if key else {}
+        ok, status, body = _fetch(self.cache_dir, self.SEARCH.format(urllib.parse.quote(full_name)),
+                                  headers=headers)
+        if not ok or status != 200:
+            return None
+        try:
+            return list(json.loads(body).get("results") or [])
+        except Exception:
+            return None
+
+
+def _institutions(author):
+    return [(a.get("institution") or {}).get("display_name") or "" for a in author.get("affiliations") or []] \
+        or [i.get("display_name") or "" for i in author.get("last_known_institutions") or []]
+
+
+def _tie(author, flat_text, orcids):
+    """What ties this record to the profile: a stated institution or ORCID."""
+    orcid = (author.get("orcid") or "").rsplit("/", 1)[-1]
+    if orcid and orcid in orcids:
+        return "ORCID " + orcid
+    for inst_name in _institutions(author):
+        flat = _norm(inst_name)
+        if len(flat) >= 4 and f" {flat} " in flat_text:
+            return inst_name
+    return None
+
+
+def _reconcile_publications(claim, subject, text, source):
+    wanted = claim.count if claim.count else VAGUE_MINIMUM_WORKS
+    rec = Reconciliation(kind="publications", claim=claim.text, source=source.name)
+    rows = source.search(subject)
+    if rows is None:
+        rec.outcome, rec.detail = UNCHECKABLE, f"{source.name} could not be reached."
+        return rec
+    named = [a for a in rows if names.name_matches(subject, [a.get("display_name") or ""]) is True]
+    if not named:
+        rec.outcome = NO_RECORD
+        rec.detail = (f"{source.name} has no author record under '{subject}'. A different publishing "
+                      f"name, a transliteration or a field it indexes poorly would also miss.")
+        return rec
+    flat_text = f" {_norm(text)} "
+    orcids = set(_ORCID_RE.findall(text))
+    tied = [(a, t) for a in named for t in [_tie(a, flat_text, orcids)] if t]
+    rec.evidence = [f"{a.get('id', '').rsplit('/', 1)[-1]} — {a.get('display_name')}, "
+                    f"{a.get('works_count', 0)} works, tied by {t}" for a, t in tied[:4]]
+    merged = [a for a, _t in tied if _affiliation_institution_count(a) >= MERGE_RISK_INSTITUTION_COUNT]
+    if not tied:
+        rec.outcome = AMBIGUOUS
+        rec.detail = (f"{len(named)} {source.name} author record(s) under '{subject}', none tied to an "
+                      f"institution or ORCID the profile states — cannot tell whether any is the subject.")
+        rec.evidence = [f"{a.get('id', '').rsplit('/', 1)[-1]} — {a.get('display_name')}, "
+                        f"{a.get('works_count', 0)} works" for a in named[:4]]
+        return rec
+    if merged or len(tied) > MAX_TIED_RECORDS:
+        rec.outcome = AMBIGUOUS
+        rec.detail = (f"{len(tied)} {source.name} record(s) under '{subject}' share a stated institution"
+                      + (", and at least one lists so many institutions that it likely merges several "
+                         "people" if merged else "") + " — the works cannot be attributed to one person.")
+        return rec
+    rec.identity = CONFIDENT
+    total = sum(int(a.get("works_count") or 0) for a, _t in tied)
+    asked = f"over {claim.count}" if claim.count else "an extensive record"
+    if total >= wanted * CONFIRM_RATIO:
+        outcome = CONFIRMED
+        rec.detail = (f"{source.name} holds {total} works across {len(tied)} record(s) tied to the subject "
+                      f"by a stated institution or ORCID, consistent with the claim of {asked}.")
+    else:
+        outcome = CONTRADICTED
+        rec.detail = (f"{source.name} holds {total} works across {len(tied)} record(s) tied to the subject, "
+                      f"against a claim of {asked}.")
+    gated = gate(outcome, rec.identity, implies_footprint=True, source_complete=source.complete)
+    if gated != outcome:
+        rec.detail += (f" Not counted: {source.name} often splits one researcher across several records, "
+                       f"and indexes books and some fields thinly, so a shortfall is worth a manual look "
+                       f"but is not evidence.")
+    rec.outcome = gated
+    return rec
+
+
 def reconcile_text(text, subject_name="", cache_dir="."):
     """Check every register-implying claim in `text`. Returns Reconciliations."""
+    subject = subject_name or ""
     source = ZefixWeb(cache_dir)
-    return [_reconcile_company(c, subject_name or "", source) for c in extract_company_claims(text)]
+    out = [_reconcile_company(c, subject, source) for c in extract_company_claims(text)]
+    pub = extract_publication_claim(text)
+    # Every OpenAlex search costs budget: spend it only on a claim that is the
+    # subject's own, about a subject we can name.
+    if pub and subject and not any(names.name_matches(subject, [n]) is not True for n in pub.named_before):
+        out.append(_reconcile_publications(pub, subject, text, OpenAlexAuthors(cache_dir)))
+    return out

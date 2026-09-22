@@ -429,6 +429,14 @@ def cmd_explain(args):
     incorporated, with no predecessor on record, counts against the subject;
     anything the register cannot settle is shown as a note. Not run in web mode.
 
+    With --name, --verify also checks a publication-volume claim ("over 200
+    papers", "published extensively") against OpenAlex author records tied to
+    the subject by an institution the text names or an ORCID it cites. A
+    record that holds enough works corroborates the claim; one that holds too
+    few is a note, never a finding -- OpenAlex often splits one researcher
+    across several records. Keyless by default (about 100 searches a day); set
+    OPENALEX_API_KEY to a free key from openalex.org for ten times that.
+
   LIMITS
     Keyword and pattern heuristics, not semantics. Sarcasm, negation and
     non-English text will fool it. Use the output as a list of things to check

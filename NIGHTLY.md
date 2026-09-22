@@ -5472,3 +5472,10 @@ UK Companies House behind optional environment-variable keys (degrading to
 UNCHECKABLE without one, as `GITHUB_TOKEN` already does in verify.py);
 reading departed officers from the gazette; then "published extensively"
 against a confidently matched OpenAlex author.
+
+Later the same day: publication-volume claims against OpenAlex shipped as the
+second source in reconcile.py. `OpenAlexAuthors.complete` is False on
+purpose -- do not flip it; OpenAlex's author splitting means a shortfall is
+never evidence, so this source can confirm but never contradict. Every
+OpenAlex search costs keyless budget ($0.10/day shared with the rest of the
+tool); do not add lookups that run without a claim to check.

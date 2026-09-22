@@ -13,6 +13,37 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### The reverse path, second slice: publication-volume claims against OpenAlex (2026-09-22, interactive session)
+
+`reconcile.extract_publication_claim` reads the strongest count ("over 200
+papers", "150+ publications", "über 80 Publikationen") or a vague claim
+("published extensively"). `_reconcile_publications` searches OpenAlex
+authors by the subject's name and keeps only records tied to the subject by
+an institution the profile names (whole-name match) or an ORCID it cites.
+
+- **Can confirm, cannot contradict.** `OpenAlexAuthors.complete = False`, so
+  gate() turns every shortfall into AMBIGUOUS. OpenAlex splitting one person
+  across records (live: Ueli Maurer is 297 + 2 works in two ETH-tied records,
+  one with the name reversed) makes an undercount indistinguishable from an
+  honest researcher.
+- **Cannot confirm on weak identity.** No tie, a tied record with 15+
+  institutions (merge risk), or more than 3 tied records (a crowd of
+  namesakes) all stay AMBIGUOUS.
+- **Budget.** Keyless OpenAlex is $0.10/day at $0.001 per search (live
+  headers). The lookup only runs when there is a claim, a subject name, and
+  no other person named before the claim. Optional `OPENALEX_API_KEY` (free,
+  $1/day) goes in an Authorization header, never the URL or cache key.
+- **Verified.** 35 tests on live-captured shapes, 21/21 mutants caught (5
+  survivors pinned), live CLI: the real Ueli Maurer profile CONFIRMED (299
+  works), a fabricated researcher NO_RECORD, a namesake with an unstated
+  institution AMBIGUOUS. A live run also found "over 2000 papers" skipped as
+  a year; fixed with a test.
+
+**Not done:** "40 years of research" (needs the earliest work across split
+records: another paid query per record); summing split records whose
+institution the profile does not name; Semantic Scholar as a second source
+(needs a free key for usable rate limits).
+
 ### The reverse path, first slice: company roles against the Swiss commercial register (2026-09-22, interactive session)
 
 Partially closes the top CRITICAL ("Verification is a one-way, claim-anchored
@@ -49,8 +80,8 @@ what a register holds, without needing any identifier from the subject.
 with optional `ZEFIX_API_USER`/`ZEFIX_API_PASSWORD` (untested here — needs a
 free account), UK Companies House with optional `COMPANIES_HOUSE_KEY`
 (same), using the gazette's "Ausgeschiedene Personen" to spot a present-tense
-claim about a role the subject has left, and step 3 of the plan:
-"published extensively" against a confidently matched OpenAlex author.
+claim about a role the subject has left. (Step 3, publication claims
+against OpenAlex, shipped the same day — see the entry above.)
 
 ### `is_linkedin_paste` misfired on an ordinary CV, and the parser then silently dropped most of its content (2026-08-31, nightly run)
 

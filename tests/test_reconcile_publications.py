@@ -289,6 +289,31 @@ class TestFlag11(unittest.TestCase):
         self.assertNotIn("company", " ".join(res.evidence))
 
 
+
+class TestFlag6(unittest.TestCase):
+    """A publication claim is an output claim; flag 6 must not call it absent."""
+
+    def _ctx(self, rec, signals=None):
+        text = "Professor at ETH Zurich. Has published over 200 papers."
+        return AuditContext(text=text, claims=ex.extract_claims(text), banks=BANKS,
+                            subject_name="Ueli Maurer", verified=True, reconciliations=[rec],
+                            signals=signals or {})
+
+    def test_a_tied_record_is_verifiable_output_even_among_namesakes(self):
+        """The name search alone cannot pick among namesakes; the institution tie can."""
+        r = rc.Reconciliation(kind="publications", outcome=rc.CONFIRMED, source="OpenAlex",
+                              identity=rc.CONFIDENT, detail="OpenAlex holds 299 works")
+        res = evaluate(self._ctx(r, {"ambiguous_identity": 4}))[6]
+        self.assertEqual(res.status, PASSED)
+        self.assertIn("299", " ".join(res.evidence))
+
+    def test_an_unconfirmed_publication_claim_is_not_called_absent(self):
+        r = rc.Reconciliation(kind="publications", outcome=rc.AMBIGUOUS, source="OpenAlex",
+                              detail="none tied to a stated institution")
+        res = evaluate(self._ctx(r))[6]
+        self.assertEqual(res.status, UNKNOWN)
+        self.assertNotIn("No output is claimed", res.description)
+
 class TestEndToEnd(unittest.TestCase):
     def test_a_researcher_with_no_identifiers_is_corroborated(self):
         from larp_meter.audit import run_audit

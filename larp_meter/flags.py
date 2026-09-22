@@ -319,6 +319,16 @@ def f_output(ctx):
             [f"{scholar.get('display_name', '')} — "
              f"{', '.join(scholar.get('institutions') or []) or 'no affiliation listed'}"])
 
+    # A publication claim reconciled against OpenAlex (reconcile.py). Its
+    # records are tied to the subject by an institution the profile names or
+    # an ORCID it cites, which is the attribution the name search above lacks
+    # among namesakes -- so it can credit output where that search cannot.
+    pubs = [r for r in ctx.reconciliations or [] if r.kind == "publications"]
+    if any(r.outcome == rc.CONFIRMED for r in pubs):
+        return FlagResult(PASSED, "Scholarly output tied to the subject by a stated institution or ORCID "
+                                  "(OpenAlex).",
+                          [r.line() for r in pubs if r.outcome == rc.CONFIRMED][:2])
+
     if hard:
         # Presence only. Whether those artifacts survive verification is flag
         # 11's job; judging it here too made a single registry result move 4.0
@@ -350,6 +360,9 @@ def f_output(ctx):
             UNKNOWN,
             "Only unsourced assertions of output (e.g. 'peer-reviewed') — no identifiers to check."
             + _openalex_search_note(ctx))
+    if pubs:
+        return FlagResult(UNKNOWN, "Publications are claimed, but no scholarly record could be tied to "
+                                   "the subject — see flag 11's note.", [r.line() for r in pubs][:2])
     return FlagResult(UNKNOWN, "No output is claimed, so there is nothing to verify.")
 
 

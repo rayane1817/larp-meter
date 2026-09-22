@@ -5472,3 +5472,207 @@ UK Companies House behind optional environment-variable keys (degrading to
 UNCHECKABLE without one, as `GITHUB_TOKEN` already does in verify.py);
 reading departed officers from the gazette; then "published extensively"
 against a confidently matched OpenAlex author.
+
+---
+
+## 2026-09-22 (nightly run)
+
+### Open-PR queue check (before any new work — see task brief step 2)
+
+**Zero open `nightly/*` PRs.** `list_pull_requests` against `rayane1817/
+larp-meter` (state=open) returned an empty list, and `git branch -r` shows
+no stray `nightly/*` remote branches either. `git log --merges` confirms
+why: on 2026-09-21 the human ran a mass merge pass that cleared the entire
+16-18-branch backlog every recent entry had been warning about (all merge
+commits landed within ~12 minutes of each other that day, per `git log
+--merges --format="%h %cd %s"`), and a same-day interactive session then
+shipped the reverse path's first slice (`reconcile.py`) directly to
+`master`. The multi-week queue-growth problem every night since 2026-08-27
+had flagged is resolved — first time in a month this section has nothing to
+report. Branched fresh from `origin/master` (70b2ed9) as the brief directs
+when the queue is clear.
+
+### Backlog tally
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open of the 15 CRITICALs —
+unchanged from 2026-09-21's count.** Tonight's fix touches the reverse path
+(`reconcile.py`) shipped in the 2026-09-22 interactive session, which
+"partially closes" the top CRITICAL by that entry's own description but was
+never given a `[PARTIALLY FIXED]` tag against it in BACKLOG.md, so the
+formal count doesn't move. A quick fresh grep over BACKLOG.md's `##
+CRITICAL (15)` section tonight found 17 `###` headings, not 15 — one is a
+stale duplicate (a raw, never-merged near-duplicate of an already-`[FIXED]`
+heading, itself a leftover of the original 5-lens dedup), and the 4
+untagged headings are, as 2026-09-21 already established, four restatements
+of the same one-way-funnel gap rather than four distinct problems. Did not
+re-litigate this further — recomputing it precisely each night has already
+produced at least one prior correction (see the entry three sections above,
+"previously '8/1/6'"), and chasing an exact reconciliation of a raw-finding
+count is not where tonight's budget belongs.
+
+### What I did
+
+**Primary item: a departed company officer read exactly like a current one
+in `reconcile.py`.** This was one of the reverse path's own named "next
+slices" (the paragraph immediately above this entry: "using the gazette's
+'Ausgeschiedene Personen' to spot a present-tense claim about a role the
+subject has left"), so I read `reconcile.py` end to end before picking
+anything else. `_registered_people` pooled every person-section header in a
+gazette message into one flat list — "Eingetragene Personen" (currently
+registered) and "Ausgeschiedene Personen"/"Personnes radiées"/"Persone
+radiate" (departed) alike — so `_names_subject` (the sole caller, used for
+both identity confidence and the CONFIRMED/EXISTS decision) returned the
+same `True` for someone who had left a company as for someone still there.
+A bio claiming a still-current role for a person the register actually
+shows departed — no end date given, which is the ordinary shape of both a
+merely-stale bio and a fabricated present-tense claim — came back
+CONFIRMED. That's the friendly-to-a-fabricator direction of the same
+"existence is not attribution" family of bug this module's own docstring is
+built around, and it was completely untested: no fixture, live or
+synthetic, exercised a departed-persons header anywhere in `test_reconcile.py`.
+
+Verified the real shape live before writing anything, per the task brief's
+standing instruction not to trust docs/training data about external APIs:
+fetched Novartis AG's actual Zefix record (search for "Novartis AG" ->
+ehraid 372098 -> `/firm/372098.json`) and found its gazette header reads
+**"Ausgeschiedene Personen und erloschene Unterschriften:"**, not the bare
+"Ausgeschiedene Personen:" the existing regex comment implied. The existing
+`_PERSONS_HEADER_RE`'s `[^:]*` tail already tolerated this (written, per
+the module's own header, against real captures on 2026-09-22), so no regex
+change was needed there — only per-header classification.
+
+Fix: split `_names_subject` into `_currently_on_record` (named under a
+*current* header only) and `_departed_since` (the most recent date named
+under a *departed* header, or `None`), both reading a `_registered_people`
+that now yields `(name, departed, shab_date)` instead of a bare name list,
+classified per-header via a new `_DEPARTED_HEADER_RE` matched against each
+header's own text (not per-message, since one SHAB message routinely lists
+one officer leaving and another being appointed under two different headers
+in the same paragraph — Novartis's live record does this constantly).
+`CONFIRMED` now requires the subject to be under a *current* header.
+Someone named only under a departed header still establishes `CONFIDENT`
+identity (they are still strong evidence the register entry is about the
+right person — narrowing `CONFIRMED` away from them must not also block a
+genuine contradiction elsewhere in their own claim, the same shape as the
+existing "on-record establishes identity without a Swiss location" test)
+but now produces `EXISTS` with a detail naming the departure date, never an
+accusation on its own — consistent with `gate()`'s existing rule that only
+`CONTRADICTED` can count against anyone and `EXISTS` is a note.
+
+Wrote the first regression test
+(`test_a_departed_officer_is_not_confirmed_as_currently_holding_the_role`)
+before touching production code and watched it fail on unmodified
+`master`: `CONFIRMED` where the fixed code gives `EXISTS`. Two more tests
+pin (a) that an actually-current officer is still `CONFIRMED` (the fix must
+narrow, not just remove, the old behaviour) and (b) that a departed-only
+match still establishes identity for an unrelated contradiction. 591 -> 594
+tests, green throughout.
+
+**Cross-function check (per the task brief's mandatory step 5):** grepped
+every call site of `_names_subject`/`_registered_people` across
+`larp_meter/` and `tests/` — both were private to `reconcile.py` and had
+exactly one caller each (`_reconcile_company`), so there was no second call
+site silently mishandling the changed return shape the way `_attribute` did
+for `name_matches`'s `None` case in an earlier night's finding. Also
+checked `audit.py`'s `verification_effective` flag, which keys off
+`r.outcome in (CONFIRMED, CONTRADICTED)`: a departed officer now flipping
+from `CONFIRMED` to `EXISTS` correctly makes verification *not* effective
+for that claim alone, which matches the existing, already-tested design
+intent (`test_a_company_that_merely_exists_does_not_count_as_verification`)
+that mere existence/naming without current-role confidence should not claim
+CONFIRMED-level verification credit.
+
+### Mutation-test pass
+
+Time-boxed to the three touched functions in `reconcile.py` (not a full
+file sweep — the mandatory rotation through scoring.py/names.py/flags.py/
+verify.py was not reached tonight; see "what's next"):
+
+| File | Mutation | Result |
+|---|---|---|
+| `reconcile.py` | `_currently_on_record`: `if not departed` -> `if departed` | **Caught** by the new test |
+| `reconcile.py` | `was_departed = departed_on is not None` -> `is None` | **Caught** (4 failures) |
+| `reconcile.py` | identity: drop `or was_departed` | **Caught** by the new identity test |
+| `reconcile.py` | `_departed_since`'s `_currently_on_record` precedence guard removed | **Survived** — traced and found genuinely dead: every caller already checks `_currently_on_record` before reading `_departed_since`'s result, so no code path can observe the difference. Deleted the guard rather than writing a test to pin unreachable code, per the project's standing bias against unneeded defensiveness. |
+
+**Result: 594 tests green** (591 on `master` -> 594: three new tests in
+`tests/test_reconcile.py`). `reconcile.py` had its first full mutation
+sweep (20 mutations, 3 pinned) on the 2026-09-22 interactive session that
+introduced it; tonight is a narrow, targeted follow-up sweep of only the
+newly-touched surface, not a repeat of that full sweep.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed and fixed** (live repro against the real Zefix API, not
+  reasoning from the docstring): the "next slices" list at the top of this
+  section's own reverse-path entry — "using the gazette's 'Ausgeschiedene
+  Personen' to spot a present-tense claim about a role the subject has
+  left" — was real and untested. Fixed tonight; see BACKLOG.md's new
+  "Shipped since" entry for the full account.
+- Did not touch the 4 open / 15 CRITICAL findings' own content, nor
+  re-verify any of the 25 MAJOR findings — out of scope for tonight's
+  narrow follow-up.
+
+### End-to-end CLI check (mandatory after touching reconcile.py)
+
+Ran genuinely live (no mocking) against Novartis AG's real record, using
+two real people from its actual gazette history:
+
+- `--verify --name "Hans Jörg Reinhardt" --text "Hans Jörg Reinhardt has
+  been Präsident des Verwaltungsrates of Novartis AG, Basel, since 2013."`
+  (Reinhardt is Novartis's real former board president, departed per the
+  live record on 2025-04-29) -> `reconciliations[0].outcome == "EXISTS"`,
+  detail names the departure date. Pre-fix this came back `CONFIRMED`.
+- `--verify --name "Giovanni Caforio" --text "Giovanni Caforio is
+  Präsident des Verwaltungsrates of Novartis AG, Basel, since 2025."`
+  (Caforio is Novartis's real current board president per the same live
+  record) -> `outcome == "CONFIRMED"`, unchanged by the fix.
+
+### What I learned
+
+- Fetching a real, long-lived, high-officer-turnover company (Novartis AG)
+  live was far more useful than trying to construct a synthetic departed-
+  officer scenario from the docstring's description alone — it revealed
+  the exact real header text ("... und erloschene Unterschriften") on the
+  first request, and gave two genuinely real people (one departed, one
+  current, in the *same* gazette message) to use directly in the live
+  end-to-end CLI check, which is stronger evidence than a mocked fixture
+  alone. Worth defaulting to a real, well-known Swiss company for any
+  future `reconcile.py` live-verification step rather than inventing one.
+- A guard whose own docstring makes a claim ("... which takes precedence")
+  is worth tracing to its actual callers before writing a test for it —
+  the precedence claim was true in the sense that no caller could ever
+  observe otherwise, which made it dead code, not an untested real
+  behaviour. Mutating it and watching nothing fail was the fast way to
+  find that; the alternative (writing a synthetic "departed then rejoined"
+  fixture to pin it) would have added a test for behaviour production can
+  never reach — the same shape of waste the task brief's own "tests
+  validating a code path production could not reach" warning is about,
+  just inverted (an unreachable *test*, not an unreachable production
+  path).
+
+### What the next run should pick up first
+
+1. **Open-PR queue: stayed at zero tonight** (this entry adds a fourth
+   small, independent nightly PR since the 2026-09-21 clear-out — check
+   `list_pull_requests` again before assuming that holds).
+2. The reverse path's remaining named next slices: the official Zefix API
+   with `ZEFIX_API_USER`/`ZEFIX_API_PASSWORD` (needs a free account, still
+   untested), UK Companies House with `COMPANIES_HOUSE_KEY` (same), and
+   step 3 of the plan — "published extensively" against a confidently
+   matched OpenAlex author, which is still blocked on the same
+   disambiguation groundwork (merged entities, common-name collision) named
+   in every entry since 2026-08-27. Re-verify OpenAlex's live rate limits
+   before resuming that one specifically — the task brief's own numbers are
+   over five weeks old as of tonight.
+3. **The mandatory mutation-test rotation through scoring.py/names.py/
+   flags.py/verify.py was not reached tonight** — budget went entirely to
+   `reconcile.py`'s narrower, newly-relevant surface instead, which is a
+   legitimate call given it directly followed up the module's own stated
+   next slice, but the rotation itself is now overdue again and should be
+   the next full pass once the reverse-path follow-ups are exhausted.
+4. The stale duplicate CRITICAL heading noted in tonight's "Backlog tally"
+   (BACKLOG.md, `## CRITICAL (15)` section, a heading identical to an
+   already-`[FIXED]` one but itself untagged) is cheap cosmetic cleanup —
+   worth a two-minute fix (delete or tag it) on a night with little else to
+   do, but not worth derailing tonight's scope for.

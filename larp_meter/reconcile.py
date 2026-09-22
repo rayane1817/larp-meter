@@ -296,6 +296,13 @@ _PERSONS_HEADER_RE = re.compile(
     r"(?:Eingetragene Personen(?: neu oder mutierend)?|Ausgeschiedene Personen[^:]*|"
     r"Personnes? inscrites?[^:]*|Personne\(s\) inscrite\(s\)[^:]*|Personnes? radi[ée]es?[^:]*|"
     r"Persone iscritte[^:]*|Persone radiate[^:]*)\s*:", re.I)
+# The subset of the above headers that list people who have LEFT, not people
+# currently registered -- e.g. Novartis AG's real gazette entries use
+# "Ausgeschiedene Personen und erloschene Unterschriften:". Matched against
+# the header text itself, so the "[^:]*" tail in _PERSONS_HEADER_RE above
+# (covering variants like that one) does not need to be repeated here.
+_DEPARTED_HEADER_RE = re.compile(
+    r"^(?:Ausgeschiedene Personen|Personnes? radi[ée]es?|Persone radiate)", re.I)
 
 
 def _messages(record):
@@ -321,27 +328,48 @@ def _founding(record):
 
 
 def _registered_people(record):
-    """'Given Surname' for everyone named in the entry's person sections."""
+    """(name, departed, shab_date) for everyone named in the entry's person
+    sections. `departed` marks someone listed under a departed-persons header
+    (Ausgeschiedene Personen / Personnes radiées / Persone radiate) rather
+    than a currently-registered one -- conflating the two would let a person
+    who has left a company still read as if they currently held a role
+    there."""
     people = []
-    for _date, msg in _messages(record):
+    for date, msg in _messages(record):
         for header in _PERSONS_HEADER_RE.finditer(msg):
             section = msg[header.end():]
             nxt = _PERSONS_HEADER_RE.search(section)
             section = section[:nxt.start()] if nxt else section
+            departed = bool(_DEPARTED_HEADER_RE.match(header.group()))
             for entry in section.split(";"):
                 fields = [f.strip(" .") for f in entry.split(",")]
                 if len(fields) >= 2 and fields[0] and fields[1]:
-                    people.append(f"{fields[1]} {fields[0]}")
+                    people.append((f"{fields[1]} {fields[0]}", departed, date))
     return people
 
 
-def _names_subject(record, subject):
-    """True only on a positive match. Checked one person at a time, because
+def _currently_on_record(record, subject):
+    """True only when the subject is named under a currently-registered
+    header, not a departed one. Checked one person at a time, because
     joining every name into one blob lets tokens from different people
     combine into a match for someone who is not there."""
     if not subject:
         return False
-    return any(names.name_matches(subject, [p]) is True for p in _registered_people(record))
+    return any(names.name_matches(subject, [p]) is True
+              for p, departed, _date in _registered_people(record) if not departed)
+
+
+def _departed_since(record, subject):
+    """The most recent gazette date the subject was listed as departed, or
+    None if they were never listed there. Every caller checks
+    `_currently_on_record` first and only reads this when that was False, so
+    a subject who is also (still, or again) currently registered never
+    reaches here as a live question."""
+    if not subject:
+        return None
+    dates = [date for p, departed, date in _registered_people(record)
+            if departed and names.name_matches(subject, [p]) is True]
+    return max(dates) if dates else None
 
 
 def _reconcile_company(claim, subject, source):
@@ -377,14 +405,17 @@ def _reconcile_company(claim, subject, source):
         rec.detail = f"The closest register entry is '{record.get('name')}', not '{claim.full_name}'."
         return rec
 
-    on_record = _names_subject(record, subject)
+    on_record = _currently_on_record(record, subject)
+    departed_on = _departed_since(record, subject)
+    was_departed = departed_on is not None
     # "I worked with Hans Muster, President of ..." is Hans Muster's claim. When
     # someone other than the subject is named right before the role, the role
     # is not established as the subject's, so nothing about it can be scored
     # against them -- whoever the register names.
     about_someone_else = bool(claim.named_before) and not any(
         subject and names.name_matches(subject, [n]) is True for n in claim.named_before)
-    rec.identity = CONFIDENT if (claim.swiss or on_record) and not about_someone_else else UNCERTAIN
+    rec.identity = (CONFIDENT if (claim.swiss or on_record or was_departed) and not about_someone_else
+                    else UNCERTAIN)
     founded, founding_msg = _founding(record)
     predecessor = bool(record.get("oldNames") or record.get("hasTakenOver")
                        or (founding_msg and _PREDECESSOR_RE.search(founding_msg)))
@@ -392,7 +423,9 @@ def _reconcile_company(claim, subject, source):
                     f"{record.get('legalSeat')}, {record.get('status')}"
                     + (f", incorporated {founded}" if founded else ", incorporated before 2016 or unknown"),
                     "subject named in the register entries" if on_record
-                    else "subject not named in the register entries available (reaching back to 2016)"]
+                    else (f"subject listed as departed in the register entries (as of {departed_on})"
+                          if was_departed else
+                          "subject not named in the register entries available (reaching back to 2016)")]
 
     if claim.since and founded and claim.since < founded - FOUNDING_SLACK_YEARS:
         if predecessor:
@@ -413,6 +446,11 @@ def _reconcile_company(claim, subject, source):
     elif on_record:
         outcome = CONFIRMED
         rec.detail = f"The subject is named in {record.get('name')}'s commercial register entries."
+    elif was_departed:
+        outcome = EXISTS
+        rec.detail = (f"{record.get('name')} is registered, and the commercial register shows the subject "
+                      f"departed (as of {departed_on}) rather than currently holding the role — the claim "
+                      f"gives no end date, so this is worth a human look, not an accusation on its own.")
     else:
         outcome = EXISTS
         rec.detail = (f"{record.get('name')} is registered, but the subject is not named in the register "

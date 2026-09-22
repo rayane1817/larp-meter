@@ -63,6 +63,16 @@ def mutation_only(name, persons="Muster, Hans, von Bern, in Bern, Mitglied des V
                         f"(SHAB Nr. 1 vom 02.01.2017). Eingetragene Personen neu oder mutierend: {persons}.")}
 
 
+def departure(name, persons, shab_date="2020-05-01"):
+    """A gazette entry listing someone as having left the company, in the
+    real 'Ausgeschiedene Personen und erloschene Unterschriften:' shape
+    (Novartis AG's live record, checked 2026-09-22)."""
+    return {"shabDate": shab_date,
+            "message": (f'<FT TYPE="F">{name}</FT>, in Zürich, CHE-123.456.789, Aktiengesellschaft '
+                        f"(SHAB Nr. 5 vom 01.05.2020). Ausgeschiedene Personen und erloschene "
+                        f"Unterschriften: {persons}.")}
+
+
 def detail(name, pubs, old_names=None, has_taken_over=None, translation=None, status="EXISTIEREND"):
     return {"name": name, "ehraid": 1, "uid": "CHE123456789", "uidFormatted": "CHE-123.456.789",
             "legalSeat": "Zürich", "status": status, "shabPub": pubs,
@@ -210,6 +220,49 @@ class TestCompanyReconciliation(unittest.TestCase):
 
     def test_the_subject_on_record_establishes_identity_without_a_location(self):
         [r] = run("President of Vane Systems AG since 2004.", "Marcus Vane", self._registered_2019())
+        self.assertEqual(r.outcome, rc.CONTRADICTED)
+
+
+class TestDepartedOfficer(unittest.TestCase):
+    """A person listed only under 'Ausgeschiedene Personen' (or its French
+    'radiées'/Italian 'radiate' equivalents) has left the company.
+    _registered_people used to pool that section with the currently-
+    registered one, so a departed officer read exactly like a current one --
+    a present-tense claim about a role the subject no longer holds would
+    come back CONFIRMED instead of surfacing the departure."""
+
+    NAME = "Vane Systems AG"
+
+    def test_a_departed_officer_is_not_confirmed_as_currently_holding_the_role(self):
+        pubs = [mutation_only(self.NAME, persons="Muster, Hans, von Bern, in Bern, Mitglied des Verwaltungsrates"),
+                departure(self.NAME, persons="Vane, Marcus, von Zürich, in Zürich, "
+                                             "Präsident des Verwaltungsrates, mit Kollektivunterschrift zu zweien")]
+        http = zefix([row(self.NAME)], {1: detail(self.NAME, pubs)})
+        [r] = run("President of Vane Systems AG, Zürich, since 2019.", "Marcus Vane", http)
+        self.assertEqual(r.outcome, rc.EXISTS)
+        self.assertIn("departed", r.detail.lower())
+
+    def test_a_currently_registered_officer_is_still_confirmed(self):
+        """The fix narrows CONFIRMED to the currently-registered section; it
+        must not also narrow it away from someone who is actually there."""
+        pubs = [mutation_only(self.NAME, persons="Vane, Marcus, von Zürich, in Zürich, "
+                                                  "Präsident des Verwaltungsrates, mit Kollektivunterschrift zu zweien")]
+        http = zefix([row(self.NAME)], {1: detail(self.NAME, pubs)})
+        [r] = run("President of Vane Systems AG, Zürich, since 2019.", "Marcus Vane", http)
+        self.assertEqual(r.outcome, rc.CONFIRMED)
+
+    def test_a_departed_officer_still_establishes_identity(self):
+        """Being named in the departed section is still evidence the entry is
+        about the right person: narrowing CONFIRMED away from a departed
+        officer must not also block a genuine contradiction on their own
+        claim, which needs no Swiss location in the text once identity is
+        otherwise settled (mirrors
+        test_the_subject_on_record_establishes_identity_without_a_location)."""
+        pubs = [new_registration(self.NAME, persons="Muster, Hans, von Bern, in Bern, Mitglied des Verwaltungsrates"),
+                departure(self.NAME, persons="Vane, Marcus, von Zürich, in Zürich, "
+                                             "Präsident des Verwaltungsrates, mit Kollektivunterschrift zu zweien")]
+        http = zefix([row(self.NAME)], {1: detail(self.NAME, pubs)})
+        [r] = run("President of Vane Systems AG since 2004.", "Marcus Vane", http)
         self.assertEqual(r.outcome, rc.CONTRADICTED)
 
 

@@ -22,6 +22,12 @@ one can count against the subject, and only `gate()` can produce it:
 Finding nothing is never evidence. A name can be spelled differently, and a
 real company can be registered somewhere this check cannot see.
 
+Belgian companies go to the KBO/BCE register's public search instead, which
+lists every entity's start date, current directors and links to other
+entities. Belgium needs one more check before a contradiction: a sole-trader
+business under the subject's own name that predates the company is the
+honest version of the same date gap, and KBO does not link the two.
+
 The second source is OpenAlex, for publication-volume claims ("published over
 200 papers", "published extensively"). It can confirm a claim but never
 contradict one: OpenAlex routinely splits one researcher across several author
@@ -31,6 +37,7 @@ for that reason, and gate() turns every shortfall into a note.
 """
 
 import hashlib
+import html as _html
 import json
 import os
 import re
@@ -74,6 +81,8 @@ class CompanyClaim:
     board_role: bool         # a role that cannot exist before the company does
     text: str
     named_before: list = field(default_factory=list)   # names just before the role
+    belgian: bool = False    # a Belgian location or enterprise number is stated
+    foreign: bool = False    # a Dutch, Italian or Romanian marker: NV/BV/SRL are theirs too
 
     @property
     def full_name(self):
@@ -117,7 +126,10 @@ def gate(outcome, identity, implies_footprint, source_complete):
 
 
 # ── Extracting register-implying claims ─────────────────────────────────
-_ROLES = (r"President|Chair(?:man|woman|person)?|Board\s+Member|Member\s+of\s+the\s+Board|"
+_ROLES = (r"Gedelegeerd\s+bestuurder|Bestuurder|Zaakvoerder|Zaakvoerster|"
+          r"Voorzitter(?:\s+van\s+de\s+raad\s+van\s+bestuur)?|G[ée]rante?|"
+          r"Administrat(?:eur|rice)(?:\s+d[ée]l[ée]gu[ée]e?)?|Oprichter|Fondat(?:eur|rice)|"
+          r"President|Chair(?:man|woman|person)?|Board\s+Member|Member\s+of\s+the\s+Board|"
           r"Managing\s+Director|Director|Gesch[äa]ftsf[üu]hrer(?:in)?|"
           r"Verwaltungsrats(?:pr[äa]sident(?:in)?|mitglied)|"
           r"Pr[äa]sident(?:in)?(?:\s+des\s+Verwaltungsrate?s)?|"
@@ -128,16 +140,37 @@ _ROLES = (r"President|Chair(?:man|woman|person)?|Board\s+Member|Member\s+of\s+th
 # board seat cannot exist before the board does.
 _BOARD_ROLE_RE = re.compile(
     r"^(?:president|chair|board|member of the board|managing director|director|"
-    r"gesch[äa]ftsf[üu]hrer|verwaltungsrat|pr[äa]sident|pr[ée]sident|presidente)", re.I)
-_FORMS = r"AG|GmbH|S\.A\.|SA|S\.[àa]\s?r\.l\.|S[àa]rl|SARL|Sagl|SAGL|Genossenschaft|Stiftung"
+    r"gesch[äa]ftsf[üu]hrer|verwaltungsrat|pr[äa]sident|pr[ée]sident|presidente|"
+    r"gedelegeerd|bestuurder|zaakvoerder|zaakvoerster|voorzitter|g[ée]rant|administrat)", re.I)
+_FORMS = (r"B\.V\.B\.A\.|BVBA|S\.P\.R\.L\.|SPRL|C\.V\.B\.A\.|CVBA|S\.C\.R\.L\.|SCRL|"
+          r"V\.Z\.W\.|VZW|vzw|A\.S\.B\.L\.|ASBL|asbl|N\.V\.|NV|B\.V\.|BV|S\.R\.L\.|SRL|")
+_FORMS += r"AG|GmbH|S\.A\.|SA|S\.[àa]\s?r\.l\.|S[àa]rl|SARL|Sagl|SAGL|Genossenschaft|Stiftung"
 _COMPANY_CLAIM_RE = re.compile(
     r"(?P<role>(?i:" + _ROLES + r"))\s*,?\s*"
-    r"(?:(?i:of|at|@|der|du|de\s+la|de|von|bei|chez|di|della)\s+)?"
+    r"(?:(?i:of|at|@|der|du|de\s+la|de|von|van|bij|bei|chez|di|della)\s+)?"
     r"(?P<name>[A-Z0-9][\w&'.\-]*(?:\s+[A-Z0-9][\w&'.\-]*){0,5}?)\s+"
     r"(?P<form>" + _FORMS + r")(?![\w])")
 _FORM_CANON = {"s.a.": "SA", "sa": "SA", "sarl": "Sàrl", "sàrl": "Sàrl", "s.àr.l.": "Sàrl",
                "s.à r.l.": "Sàrl", "s.ar.l.": "Sàrl", "s.a r.l.": "Sàrl", "sagl": "Sagl",
-               "ag": "AG", "gmbh": "GmbH", "genossenschaft": "Genossenschaft", "stiftung": "Stiftung"}
+               "ag": "AG", "gmbh": "GmbH", "genossenschaft": "Genossenschaft", "stiftung": "Stiftung",
+               "nv": "NV", "n.v.": "NV", "bv": "BV", "b.v.": "BV", "bvba": "BVBA", "b.v.b.a.": "BVBA",
+               "sprl": "SPRL", "s.p.r.l.": "SPRL", "srl": "SRL", "s.r.l.": "SRL", "cvba": "CVBA",
+               "c.v.b.a.": "CVBA", "scrl": "SCRL", "s.c.r.l.": "SCRL", "vzw": "VZW", "v.z.w.": "VZW",
+               "asbl": "ASBL", "a.s.b.l.": "ASBL"}
+# Belgian legal forms. NV and BV are also Dutch, SRL also Italian and Romanian.
+BELGIAN_FORMS = {"NV", "BV", "BVBA", "SPRL", "SRL", "CVBA", "SCRL", "VZW", "ASBL"}
+# City names are matched case-sensitively: "Mons", "Gent" and "Namen" are
+# ordinary words in other languages when lower-cased.
+_BELGIAN_RE = re.compile(
+    r"\b(?:Belgium|Belgique|Belgi[ëe]|Belgien|Brussels|Bruxelles|Brussel|Antwerpen|Antwerp|Anvers|"
+    r"Gent|Ghent|Gand|Li[èe]ge|Luik|Leuven|Louvain(?:-la-Neuve)?|Namur|Charleroi|Mechelen|Malines|"
+    r"Brugge|Bruges|Hasselt|Kortrijk|Courtrai|Oostende|Ostend|Mons|Aalst|Genk|Wavre|Zaventem|Diegem|"
+    r"Sint-Niklaas|Roeselare|Tournai|Nivelles|Ottignies|Gembloux|Eupen|Arlon)\b"
+    r"|\.be\b|\bBE\s?[01]\d{3}\.?\d{3}\.?\d{3}\b")
+_FOREIGN_RE = re.compile(
+    r"\b(?:Netherlands|Nederland|Holland|Amsterdam|Rotterdam|Den Haag|The Hague|Utrecht|Eindhoven|"
+    r"Groningen|Delft|Leiden|Italy|Italia|Milano|Milan|Roma|Rome|Torino|Romania|Rom[âa]nia|"
+    r"Bucure[sș]ti|Bucharest)\b|\.nl\b|\.it\b|\.ro\b")
 
 # A Swiss location stated with the claim. Deliberately excludes "Swiss"
 # embedded in a word: a company called "DocSWISS" says nothing about where it
@@ -149,8 +182,8 @@ _SWISS_RE = re.compile(
     r"|\.ch\b|\bCHE-\d{3}\.\d{3}\.\d{3}\b", re.I)
 _MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Januar|Februar|März|Juni|Juli|Oktober|Dezember)[a-z]*\.?"
 _SINCE_RE = re.compile(
-    r"\b(?:since|seit|depuis|d[èe]s|dal|from)\s+(?:" + _MONTH + r"\s+)?((?:19|20)\d{2})\b"
-    r"|\b((?:19|20)\d{2})\s*[-–—]\s*(?:present|today|now|heute|aujourd'hui|oggi)\b", re.I)
+    r"\b(?:since|seit|depuis|d[èe]s|dal|from|sinds|sedert|vanaf)\s+(?:" + _MONTH + r"\s+)?((?:19|20)\d{2})\b"
+    r"|\b((?:19|20)\d{2})\s*[-–—]\s*(?:present|today|now|heute|aujourd'hui|oggi|heden|nu)\b", re.I)
 # A sentence ends at punctuation followed by a capital, not at the dots of "S.A.".
 _SENTENCE_END_RE = re.compile(r"[.;!?](?=\s+[A-ZÄÖÜÉ])|\n")
 # Two or more capitalised words in a row: a personal name, or a title such as
@@ -199,7 +232,9 @@ def extract_company_claims(text):
             swiss=bool(_SWISS_RE.search(window)),
             board_role=bool(_BOARD_ROLE_RE.match(role)),
             text=re.sub(r"\s+", " ", text[m.start():min(line_end, m.end() + 60)]).strip(),
-            named_before=_names_before(text, m.start()))
+            named_before=_names_before(text, m.start()),
+            belgian=bool(_BELGIAN_RE.search(window)),
+            foreign=bool(_FOREIGN_RE.search(window)))
         key = _norm(claim.full_name)
         if key in seen:
             # One company named twice: keep whichever version says more.
@@ -445,6 +480,249 @@ def _reconcile_company(claim, subject, source):
     return rec
 
 
+# ── Belgium: the KBO/BCE public search ──────────────────────────────────
+class KboPublic:
+    """Belgium's Crossroads Bank for Enterprises, through its public search
+    pages (kbopub.economie.fgov.be). Keyless HTML, read the way ZefixWeb reads
+    Zefix's front-end API: if the markup changes, lookups come back
+    UNCHECKABLE, never as findings. Complete for Belgian legal entities, which
+    must all be registered."""
+
+    name = "Belgian company register (KBO/BCE)"
+    complete = True
+    BASE = "https://kbopub.economie.fgov.be/kbopub/"
+
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+
+    def _search(self, params):
+        url = self.BASE + "zoeknaamexactform.html?" + urllib.parse.urlencode(
+            [("lang", "nl")] + params + [("_oudeBenaming", "on"), ("rechtsvormFonetic", "ALL"),
+                                        ("postcode", ""), ("postgemeente1", ""),
+                                        ("_filterEnkelActieve", "on"), ("actionNPRP", "Zoek")])
+        ok, status, body = _fetch(self.cache_dir, url)
+        # A result page carries a "N gevonden" banner; an empty one only a
+        # "Geen gegevens gevonden" heading. Anything else is a page this code
+        # does not recognise, which is "could not check", never "nothing found".
+        if not ok or status != 200 or not ("pagebanner" in body or _KBO_NONE_RE.search(body)):
+            return None
+        return body
+
+    def search(self, company):
+        """Legal entities under exactly this name, current or former, active or not."""
+        body = self._search([("natuurlijkPersoon", "rechtsPersoon"), ("firmName", company),
+                             ("searchWord", ""), ("establishmentname", ""), ("firstName", ""),
+                             ("oudeBenaming", "true")])
+        return None if body is None else _kbo_rows(body)
+
+    def sole_traders(self, given, surname):
+        """(total found, rows shown) for natural-person enterprises under a name."""
+        body = self._search([("natuurlijkPersoon", "natuurlijkPersoon"), ("searchWord", surname),
+                             ("firstName", given), ("firmName", ""), ("establishmentname", "")])
+        return None if body is None else (_kbo_count(body), _kbo_rows(body))
+
+    def detail(self, number):
+        ok, status, body = _fetch(self.cache_dir, self.BASE + "toonondernemingps.html?"
+                                  + urllib.parse.urlencode({"ondernemingsnummer": number, "lang": "nl"}))
+        if not ok or status != 200 or "Begindatum" not in body:
+            return None
+        return _kbo_detail(body)
+
+
+def _text(fragment):
+    return re.sub(r"\s+", " ", _html.unescape(_TAG_RE.sub(" ", fragment or "")).replace("\xa0", " ")).strip()
+
+
+def _year(text):
+    m = re.search(r"\b((?:18|19|20)\d{2})\b", text or "")
+    return int(m.group(1)) if m else None
+
+
+def _kbo_number(digits):
+    """0403170701 -> 0403.170.701, as the register writes it."""
+    d = f"{int(digits):010d}"
+    return f"{d[:4]}.{d[4:7]}.{d[7:]}"
+
+
+_KBO_NONE_RE = re.compile(r"<h1>\s*Geen gegevens gevonden")
+
+
+def _kbo_count(page):
+    m = re.search(r'class="pagebanner">\s*(E[ée]n|\d+)\s+entiteit', page)
+    return 0 if not m else (1 if not m.group(1).isdigit() else int(m.group(1)))
+
+
+def _kbo_rows(page):
+    rows = []
+    for tr in re.findall(r'<tr class="(?:odd|even)">(.*?)</tr>', page, re.S):
+        number = re.search(r"ondernemingsnummer=(\d+)", tr)
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)
+        name = re.search(r'<td class="benaming"[^>]*>(.*?)</td>', tr, re.S)
+        start = re.search(r'<span class="upd">([^<]*)</span>', tr)
+        kind = next((c for c in cells if re.match(r"\s*(?:Rechtspersoon|Natuurlijk Persoon)", c)), "")
+        if number and name:
+            rows.append({"number": number.group(1), "name": _text(name.group(1)),
+                         "start": _year(start.group(1) if start else ""),
+                         "status": _text(cells[1]) if len(cells) > 1 else "",
+                         "form": _text(kind.split("<br/>", 1)[1]) if "<br/>" in kind else ""})
+    return rows
+
+
+def _kbo_detail(page):
+    def cell(label):
+        m = re.search(label + r"\s*</td>\s*<td[^>]*>(.*?)</td>", page, re.S)
+        return m.group(1) if m else ""
+    names = []
+    for label in ("Naam:", "Afkorting:"):
+        raw = re.sub(r'<span class="upd">.*?</span>', "", cell(label), flags=re.S)
+        names += [_text(n) for n in raw.split("<br/>") if _text(n)]
+    functions = re.search(r'id="toonfctie"[^>]*>(.*?)</table>', page, re.S)
+    people = []
+    for role, holder in re.findall(r'<tr><td class="(?:RL|QL)">\s*([^<]+?)\s*</td><td class="(?:RL|QL)">(.*?)</td>',
+                                   functions.group(1) if functions else "", re.S):
+        if "ondernemingsnummer=" in holder:
+            continue            # a company as director; its representative has its own row
+        surname, _, given = _text(holder).partition(",")
+        if surname.strip() and given.strip():
+            people.append((role.strip(), f"{given.strip()} {surname.strip()}"))
+    links_at = page.find("Linken tussen entiteiten")
+    links_html = page[links_at:page.find("<h2", links_at + 1) if page.find("<h2", links_at + 1) > 0 else None] \
+        if links_at >= 0 else ""
+    # "<number> (NAME) is opgeslorpt door deze entiteit" and "Deze entiteit is
+    # opgeslorpt door <number> (NAME)" both name the other entity after its link.
+    links = [_text(m) for m in re.findall(r"</a>\s*\((.*?)\)\s*(?:&nbsp;|<br/>|\s)", links_html, re.S)]
+    if links_at >= 0 and not links and "ondernemingsnummer=" in links_html:
+        links = ["an entity linked in the register"]
+    return {"names": names, "start": _year(_text(cell("Begindatum:"))),
+            "form": _text(cell("Rechtsvorm:")).split(" Sinds ")[0].strip(),
+            "status": _text(cell("Status:")), "people": people, "links": links}
+
+
+# What a claimed form must find on record. A BVBA converted to a BV under the
+# 2019 company code keeps its number and start date, so the two match.
+_KBO_FORM_LABELS = {
+    "NV": ("naamloze vennootschap",), "SA": ("naamloze vennootschap",),
+    "BV": ("besloten vennootschap",), "SRL": ("besloten vennootschap",),
+    "BVBA": ("besloten vennootschap",), "SPRL": ("besloten vennootschap",),
+    "CVBA": ("cooperatieve vennootschap",), "SCRL": ("cooperatieve vennootschap",),
+    "VZW": ("vereniging zonder winstoogmerk",), "ASBL": ("vereniging zonder winstoogmerk",)}
+# A de facto association can run for years before it registers as a vzw, so
+# a non-profit's registration date says nothing about when its board began.
+_KBO_CONTRADICTABLE = {"NV", "SA", "BV", "SRL", "BVBA", "SPRL", "CVBA", "SCRL"}
+
+
+def _reconcile_company_be(claim, subject, source):
+    rec = Reconciliation(claim=claim.text, company=claim.full_name, role=claim.role,
+                         since=claim.since, source=source.name)
+    rows = source.search(claim.company)
+    if rows is None:
+        rec.outcome, rec.detail = UNCHECKABLE, f"The {source.name} could not be reached."
+        return rec
+    if not rows:
+        rec.outcome = NO_RECORD
+        rec.detail = (f"No legal entity is registered in Belgium under exactly '{claim.company}'. "
+                      + ("A spelling variant would also miss — worth a manual search."
+                         if claim.belgian else
+                         "It may be registered outside Belgium, which this check cannot see."))
+        return rec
+    if len(rows) > 1:
+        rec.outcome = AMBIGUOUS
+        rec.detail = (f"{len(rows)} Belgian entities are or were registered as '{claim.company}' — cannot "
+                      f"tell which one is meant, and an older one may be the same business.")
+        rec.evidence = [f"{r['name']} — {_kbo_number(r['number'])}, started {r['start']}, {r['form']}, {r['status']}"
+                        for r in rows[:4]]
+        return rec
+    record = source.detail(rows[0]["number"])
+    if record is None:
+        rec.outcome, rec.detail = UNCHECKABLE, f"The {source.name} entry could not be retrieved."
+        return rec
+    wanted = {_norm(claim.company), _norm(claim.full_name)}
+    if not wanted & {_norm(n) for n in record["names"]}:
+        rec.outcome = AMBIGUOUS
+        rec.detail = (f"The closest register entry is '{'/'.join(record['names'][:2]) or '?'}', "
+                      f"not '{claim.company}'.")
+        return rec
+
+    on_record = bool(subject) and any(names.name_matches(subject, [p]) is True for _r, p in record["people"])
+    about_someone_else = bool(claim.named_before) and not any(
+        subject and names.name_matches(subject, [n]) is True for n in claim.named_before)
+    rec.identity = CONFIDENT if (claim.belgian or on_record) and not about_someone_else else UNCERTAIN
+    founded = record["start"]
+    form_ok = _norm(record["form"]).startswith(tuple(_KBO_FORM_LABELS.get(claim.legal_form, ("\0",))))
+    rec.evidence = [f"{'/'.join(record['names'][:1])} — {_kbo_number(rows[0]['number'])}, {record['form'] or 'form unknown'}, "
+                    f"{record['status'] or 'status unknown'}, started {founded or 'unknown'}",
+                    "subject listed among its current directors" if on_record
+                    else "subject not among its current directors"]
+    if record["links"]:
+        rec.evidence.append("linked entities: " + ", ".join(record["links"][:3]))
+
+    if claim.since and founded and claim.since < founded - FOUNDING_SLACK_YEARS:
+        what = f"Claims {claim.role} of {claim.full_name} since {claim.since}; it started in {founded}"
+        if record["links"]:
+            outcome = AMBIGUOUS
+            rec.detail = (f"{what}, but the register links it to other entities ("
+                          f"{', '.join(record['links'][:2])}) that may carry the earlier history.")
+        elif not claim.board_role:
+            outcome = AMBIGUOUS
+            rec.detail = (f"{what}. A {claim.role.lower()} commonly works on a business for years before "
+                          f"incorporating it, so this is not a contradiction.")
+        elif claim.legal_form not in _KBO_CONTRADICTABLE:
+            outcome = AMBIGUOUS
+            rec.detail = (f"{what}. An association often runs for years before registering as a "
+                          f"non-profit, so this is not a contradiction.")
+        elif not form_ok:
+            outcome = AMBIGUOUS
+            rec.detail = (f"{what}, but it is registered as '{record['form']}', not as the claimed "
+                          f"{claim.legal_form} — possibly a different entity.")
+        else:
+            earlier = _earlier_sole_trader(subject, founded, source)
+            if earlier:
+                outcome = AMBIGUOUS
+                rec.detail = f"{what}. {earlier}"
+            else:
+                outcome = CONTRADICTED
+                rec.detail = (f"Claims {claim.role} of {claim.full_name} since {claim.since}, but the Belgian "
+                              f"company register shows it only started in {founded}, with no linked "
+                              f"predecessor entity and no sole-trader business under the subject's name "
+                              f"before it.")
+    elif on_record:
+        outcome = CONFIRMED
+        rec.detail = f"The subject is listed among {claim.full_name}'s current directors in the Belgian register."
+    else:
+        outcome = EXISTS
+        rec.detail = (f"{claim.full_name} is registered, but the subject is not among its current "
+                      f"directors — existence alone does not confirm the role (past directors are not shown).")
+
+    gated = gate(outcome, rec.identity, implies_footprint=True, source_complete=source.complete)
+    if gated != outcome:
+        rec.detail += (" Not counted: the role is attributed to someone else in the text ("
+                       + ", ".join(claim.named_before[:2]) + ")." if about_someone_else else
+                       " Not counted: the entry could not be tied to this subject with confidence — no "
+                       "Belgian location is stated with the claim, and the subject is not a current director.")
+    rec.outcome = gated
+    return rec
+
+
+def _earlier_sole_trader(subject, founded, source):
+    """Why a sole-trader history cannot be ruled out, or "" if it can."""
+    parts = (subject or "").split()
+    if len(parts) < 2:
+        return "The subject's full name is not known, so a sole-trader business before it cannot be ruled out."
+    found = source.sole_traders(parts[0], " ".join(parts[1:]))
+    if found is None:
+        return "The sole-trader search did not answer, so an earlier business under the subject's name cannot be ruled out."
+    total, rows = found
+    if total > len(rows):
+        return (f"{total} sole-trader businesses are registered under the subject's name, more than could be "
+                f"read, so an earlier one cannot be ruled out.")
+    older = [r for r in rows if r["start"] and r["start"] < founded
+             and names.name_matches(subject, [" ".join(reversed(r["name"].split(",", 1)))]) is not False]
+    if older:
+        return (f"A sole-trader business under the subject's name started in {older[0]['start']}, before the "
+                f"company — it may be the same business before incorporation.")
+    return ""
+
+
 # ── Publication-volume claims against OpenAlex ──────────────────────────
 # Below this, "a record consistent with 'published extensively'" means little.
 VAGUE_MINIMUM_WORKS = 20
@@ -486,6 +764,31 @@ _NOT_PERSON_WORDS = {
     "director", "head", "chair", "fellow", "associate", "assistant", "principal", "chief", "lead",
     "science", "sciences", "engineering", "medicine", "technology", "computer", "the", "of", "and"}
 _ORCID_RE = re.compile(r"\b(\d{4}-\d{4}-\d{4}-\d{3}[\dX])\b")
+# What profiles call an institution OpenAlex names differently: its own
+# alternative names and acronyms (live, 2026-09-22) for the largest Belgian
+# and Swiss universities. Left out on purpose: names shared with another
+# institution ("Universität Freiburg" is also Freiburg im Breisgau) and
+# two-letter acronyms.
+_INSTITUTION_ALIASES = {_norm(k): v for k, v in {
+    "KU Leuven": ("Katholieke Universiteit Leuven", "Catholic University of Leuven", "University of Leuven", "KUL"),
+    "Ghent University": ("UGent", "Universiteit Gent", "Université de Gand"),
+    "University of Antwerp": ("UAntwerp", "UAntwerpen", "Universiteit Antwerpen"),
+    "Vrije Universiteit Brussel": ("VUB",),
+    "Université Libre de Bruxelles": ("ULB",),
+    "UCLouvain": ("Université catholique de Louvain", "Catholic University of Louvain"),
+    "University of Liège": ("ULiège", "Université de Liège", "Universiteit van Luik"),
+    "Hasselt University": ("UHasselt", "Universiteit Hasselt"),
+    "University of Mons": ("UMONS", "Université de Mons"),
+    "University of Namur": ("UNamur", "Université de Namur"),
+    "ETH Zurich": ("ETH Zürich", "ETHZ", "Eidgenössische Technische Hochschule Zürich"),
+    "University of Zurich": ("UZH", "Universität Zürich", "Université de Zurich"),
+    "École Polytechnique Fédérale de Lausanne": ("EPFL", "EPF Lausanne", "ETH Lausanne"),
+    "University of Bern": ("Universität Bern", "Université de Berne"),
+    "University of Geneva": ("UNIGE", "Université de Genève"),
+    "University of Basel": ("Universität Basel", "Université de Bâle"),
+    "University of Lausanne": ("UNIL", "Université de Lausanne"),
+    "University of St.Gallen": ("HSG", "Universität St.Gallen", "Universität St. Gallen"),
+}.items()}
 
 
 @dataclass
@@ -574,6 +877,8 @@ def _tie(author, flat_text, orcids):
         flat = _norm(inst_name)
         if len(flat) >= 4 and f" {flat} " in flat_text:
             return inst_name
+        if any(f" {_norm(alias)} " in flat_text for alias in _INSTITUTION_ALIASES.get(flat, ())):
+            return inst_name
     return None
 
 
@@ -632,8 +937,17 @@ def _reconcile_publications(claim, subject, text, source):
 def reconcile_text(text, subject_name="", cache_dir="."):
     """Check every register-implying claim in `text`. Returns Reconciliations."""
     subject = subject_name or ""
-    source = ZefixWeb(cache_dir)
-    out = [_reconcile_company(c, subject, source) for c in extract_company_claims(text)]
+    swiss, belgian = ZefixWeb(cache_dir), KboPublic(cache_dir)
+    out = []
+    for c in extract_company_claims(text):
+        if c.legal_form in BELGIAN_FORMS:
+            if c.foreign and not c.belgian:
+                continue        # a Dutch N.V., an Italian S.r.l.: no register this tool reads
+            out.append(_reconcile_company_be(c, subject, belgian))
+        elif c.legal_form == "SA" and c.belgian and not c.swiss:
+            out.append(_reconcile_company_be(c, subject, belgian))
+        else:
+            out.append(_reconcile_company(c, subject, swiss))
     pub = extract_publication_claim(text)
     # Every OpenAlex search costs budget: spend it only on a claim that is the
     # subject's own, about a subject we can name.

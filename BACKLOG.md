@@ -13,6 +13,36 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### The reverse path, third slice: Belgian companies against KBO/BCE (2026-09-22, interactive session)
+
+`reconcile.KboPublic` reads the KBO public search (kbopub.economie.fgov.be,
+keyless HTML): exact legal-person name search including former names and
+ceased entities, and the entity page (start date, legal form, status, current
+function holders including permanent representatives, links between
+entities). Routing: NV/BV/BVBA/SPRL/SRL/CVBA/SCRL/VZW/ASBL go to KBO unless a
+Dutch/Italian/Romanian marker is present without a Belgian one; SA goes to KBO
+only with a Belgian marker and no Swiss one. Dutch and French roles and
+"sinds/sedert/vanaf" dates are extracted.
+
+- **Extra condition for a contradiction:** a natural-person (sole-trader)
+  search under the subject's name finding nothing older than the company,
+  every row read (more results than one page → not ruled out), and the search
+  answering at all. Plus: no linked entity, matching legal form (a BVBA
+  matches a BV after the 2019 conversion), not a VZW/ASBL.
+- **Institution aliases** for OpenAlex ties: the largest Belgian and Swiss
+  universities' local names and acronyms (UGent, ULB, VUB, KU Leuven,
+  Universität Zürich, EPFL, ...), taken from OpenAlex's own alternatives.
+- **Verified.** 33 tests on live-captured markup with invented names, 21/21
+  mutants caught, live runs: a board role at Showpad NV (started 2011) and
+  Robovision BV (2008) claimed since 2005 under an invented name came out
+  CONTRADICTED; a real current director of Electrabel NV CONFIRMED;
+  Deliverect and Collibra (linked entities) and a founder claim AMBIGUOUS; a
+  Dutch N.V. skipped. The live run also found the empty-result page uses
+  different markup and was being read as unreachable; fixed with a test.
+
+**Not done:** past directors (the Belgisch Staatsblad publications list them,
+but as scanned PDFs); NBB annual accounts (the CBSO API needs a free key).
+
 ### The reverse path, second slice: publication-volume claims against OpenAlex (2026-09-22, interactive session)
 
 `reconcile.extract_publication_claim` reads the strongest count ("over 200

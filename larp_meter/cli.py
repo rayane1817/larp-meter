@@ -429,6 +429,14 @@ def cmd_explain(args):
     incorporated, with no predecessor on record, counts against the subject;
     anything the register cannot settle is shown as a note. Not run in web mode.
 
+    Belgian companies (NV, BV, BVBA, SRL, SPRL, CVBA, VZW, and SA with a
+    Belgian location) are checked the same way against the KBO/BCE register,
+    in Dutch, French or English ("Gedelegeerd bestuurder van X NV sinds 2004").
+    A contradiction there also needs a search showing no sole-trader business
+    under the subject's name before the company, since running a business in
+    one's own name and incorporating it later is the honest version of the
+    same date gap.
+
     With --name, --verify also checks a publication-volume claim ("over 200
     papers", "published extensively") against OpenAlex author records tied to
     the subject by an institution the text names or an ORCID it cites. A

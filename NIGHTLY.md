@@ -5479,3 +5479,9 @@ purpose -- do not flip it; OpenAlex's author splitting means a shortfall is
 never evidence, so this source can confirm but never contradict. Every
 OpenAlex search costs keyless budget ($0.10/day shared with the rest of the
 tool); do not add lookups that run without a claim to check.
+
+Also the same day: Belgian companies go to `reconcile.KboPublic` (KBO/BCE
+public search, keyless HTML). Its contradiction path has one condition the
+Swiss one does not -- `_earlier_sole_trader` -- because KBO does not link a
+sole trader to the company it became. Keep it; do not remove it to make a
+test pass.

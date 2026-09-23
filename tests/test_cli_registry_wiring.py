@@ -22,6 +22,22 @@ that, and a console whose default encoding cannot represent the report's own
 glyphs (the ASCII-incompatible code page pytest/unittest hit on the Windows
 CI runners) would otherwise crash the test on the report's own bullet glyph
 rather than on anything this file is trying to check.
+
+`--verify` reaches the network through TWO independent layers, not one:
+`cli.make_fetcher` (used by providers.py's Wikipedia/OpenAlex signals path)
+and `reconcile._http` (used by reconcile.py's Zefix/KBO/OpenAlex reverse-path
+check, added 2026-09-22, well after this file). A test whose bio contains a
+company-role or publication-volume claim reaches `reconcile.reconcile_text`
+from `run_audit` regardless of whether `cli.make_fetcher` was stubbed — live-
+confirmed: stubbing only `cli.make_fetcher` let six tests below silently
+issue a real `https://api.openalex.org/authors?search=...` request apiece,
+observed live hitting OpenAlex's own rate limit. That is exactly the
+project's scarcest resource ($0.10/day keyless budget the whole reverse path
+depends on), spent by nothing more than running the test suite. Every test
+whose text can carry a company-role or publication-volume claim must stub
+`reconcile._http` too, via `_stub_http` below -- see
+`test_every_verify_path_stays_fully_offline`, which pins this for the file
+as a whole rather than one test at a time.
 """
 
 import contextlib
@@ -29,9 +45,11 @@ import io
 import json
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
+from larp_meter import reconcile
 from larp_meter.cli import build_parser, cmd_batch, cmd_from_json, cmd_text, cmd_url
 
 WIKI_BODY = json.dumps({"query": {"search": [
@@ -75,9 +93,57 @@ def _stub_fetcher(mapping, calls=None):
     return make_fetcher
 
 
+def _stub_http(mapping):
+    """Stand-in for reconcile._http, matching cli.make_fetcher's stub by the
+    same substring mapping so both layers agree on what the world looks like."""
+    def http(url, payload=None, headers=None):
+        for needle, body in mapping.items():
+            if needle in url:
+                return True, 200, body
+        return False, 0, ""
+    return http
+
+
 def _silent():
     """Swallow whatever a cmd_* call prints, on any platform's console encoding."""
     return contextlib.redirect_stdout(io.StringIO())
+
+
+class TestNoRealNetworkEscapesTheStub(unittest.TestCase):
+    def test_a_publication_claim_reaches_reconcile_without_touching_the_real_network(self):
+        """Live-confirmed 2026-09-23: with only cli.make_fetcher stubbed (the
+        state every test in this file was in before this fix), a bio
+        containing a vague publication-volume claim ("published extensively")
+        makes run_audit's reconcile.reconcile_text call reconcile._http for
+        real -- observed hitting the live OpenAlex API and its own rate
+        limit. That path is invisible to every assertion in this file, so
+        nothing failed; it just silently spent the project's scarcest shared
+        resource on every test run in a networked environment. Patching
+        urllib.request.urlopen to fail loudly, with reconcile._http properly
+        stubbed via _stub_http, is what pins the fix: this must raise nothing."""
+        args = build_parser().parse_args([
+            "--text", BIO_NO_IDENTIFIERS, "--name", "Ada Lovelace",
+            "--verify", "--quiet", "--no-save",
+        ])
+        fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
+        http = _stub_http({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
+
+        def _forbidden(*a, **kw):
+            raise AssertionError("a real network request escaped both stubs")
+
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+             mock.patch.object(reconcile, "_http", http), \
+             mock.patch("urllib.request.urlopen", _forbidden), _silent():
+            report = cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
+        self.assertEqual(report["signals"]["openalex"]["works"], 11)
+        # AMBIGUOUS, not UNCHECKABLE: the stub answered (no institution/ORCID
+        # tie in this bio, which is a separate, correct outcome) rather than
+        # the request being blocked or falling through to a real, unmocked
+        # network call -- see the docstring above for what UNCHECKABLE here
+        # would actually mean.
+        pubs = [r for r in report["reconciliations"] if r["kind"] == "publications"]
+        self.assertEqual(pubs[0]["outcome"], "AMBIGUOUS")
+        self.assertNotEqual(pubs[0]["detail"], "OpenAlex could not be reached.")
 
 
 class TestTextModeReachesTheRegistry(unittest.TestCase):
@@ -89,7 +155,9 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+        http = _stub_http({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+             mock.patch.object(reconcile, "_http", http), _silent():
             report = cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         flag6 = next(f for f in report["flags"] if f["id"] == 6)
         self.assertEqual(flag6["status"], "PASSED")
@@ -143,7 +211,8 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({}, calls=calls)
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+             mock.patch.object(reconcile, "_http", _stub_http({})), _silent():
             cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         self.assertFalse(any("duckduckgo" in u for u in calls))
 
@@ -192,7 +261,9 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY,
                                  "openalex.org": json.dumps({"results": []})})
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+        http = _stub_http({"openalex.org": json.dumps({"results": []})})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+             mock.patch.object(reconcile, "_http", http), _silent():
             report = cmd_text(args, "Marcus Vane", bio)
         self.assertIsNone(report["signals"]["openalex"])
         flag6 = next(f for f in report["flags"] if f["id"] == 6)
@@ -213,7 +284,9 @@ class TestTextModeReachesTheRegistry(unittest.TestCase):
             "--verify", "--quiet", "--no-save",
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_MERGED_BODY})
-        with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+        http = _stub_http({"openalex.org": OPENALEX_MERGED_BODY})
+        with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+             mock.patch.object(reconcile, "_http", http), _silent():
             report = cmd_text(args, "Ada Lovelace", BIO_NO_IDENTIFIERS)
         flag6 = next(f for f in report["flags"] if f["id"] == 6)
         self.assertEqual(flag6["status"], "PASSED")
@@ -292,8 +365,10 @@ class TestBatchTextModeReachesTheRegistry(unittest.TestCase):
                 "--csv", str(Path(tmp) / "out.csv"),
             ])
             fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY})
+            http = _stub_http({"openalex.org": OPENALEX_BODY})
             try:
                 with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+                     mock.patch.object(reconcile, "_http", http), \
                      mock.patch("larp_meter.cli.OUTPUT_DIR", Path(tmp) / "output"), _silent():
                     cmd_batch(args)
             finally:
@@ -310,12 +385,14 @@ class TestUrlModeReachesTheRegistry(unittest.TestCase):
         ])
         fetcher = _stub_fetcher({"wikipedia.org": WIKI_BODY, "openalex.org": OPENALEX_BODY,
                                  "api.github.com": ""})
+        http = _stub_http({"openalex.org": OPENALEX_BODY})
         import larp_meter.cli as cli_mod
         captured = {}
         orig_emit = cli_mod._emit
         cli_mod._emit = lambda report, a: captured.setdefault("report", report)
         try:
-            with mock.patch("larp_meter.cli.make_fetcher", fetcher), _silent():
+            with mock.patch("larp_meter.cli.make_fetcher", fetcher), \
+                 mock.patch.object(reconcile, "_http", http), _silent():
                 cmd_url(args)
         finally:
             cli_mod._emit = orig_emit

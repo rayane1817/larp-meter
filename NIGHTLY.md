@@ -5485,3 +5485,178 @@ public search, keyless HTML). Its contradiction path has one condition the
 Swiss one does not -- `_earlier_sole_trader` -- because KBO does not link a
 sole trader to the company it became. Keep it; do not remove it to make a
 test pass.
+
+---
+
+## 2026-09-23
+
+### Open-PR queue (for visibility only, not acted on tonight)
+
+**1 open `nightly/*` PR** — well below the 3-PR cap, so tonight proceeded
+normally rather than going into review-only mode.
+
+- **PR #29** `nightly/2026-09-22` — "reconcile.py: a departed company officer
+  no longer reads as a current one." Draft, CI status `pending` (never ran —
+  no status checks reported). **`mergeable_state: "dirty"`**: it branched
+  from `70b2ed9` (the reverse path's *first* slice, company roles only) and
+  master has since gained the second and third slices (OpenAlex publications,
+  KBO/BCE) on top, so it now conflicts. Not touched tonight — queue depth is
+  1, well under the cap that would call for that. Worth a rebase whenever a
+  human or a future night picks it up; its own content (Zefix departed-vs-
+  current officer parsing) looked sound from its PR description and doesn't
+  overlap tonight's change.
+
+### Backlog tally
+
+CRITICAL (15): **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open** —
+unchanged from the last count (2026-08-27). Tonight's change doesn't close
+any of the 4 open criticals (the top one, "one-way claim-anchored funnel,"
+remains [IN PROGRESS] as of the 2026-08-30 note); it protects the resource
+the reverse-path slices toward that item depend on, rather than advancing
+the item itself. See BACKLOG.md's new "Shipped since" entry (topmost) for
+full detail.
+
+### What I did
+
+Read the standing brief's "known core gap" section expecting to pick a new
+reverse-path slice (UK Companies House was the suggested next one). Before
+committing to a brand-new country integration I can't live-verify without an
+API key I don't have, I did the mandated "review the newest modules" pass
+over `reconcile.py` (landed 2026-09-22, one day old, never reviewed) and its
+existing test coverage instead.
+
+Read through `reconcile.py`'s Swiss/Belgian company logic and publication
+reconciliation looking for false-accusation and evasion gaps (red-team +
+fairness lenses) — found the design already careful (about_someone_else
+gating, founding-slack years, `gate()`'s CONTRADICTED-only chokepoint,
+KboPublic's sole-trader check) and didn't find a live bug there. What I did
+find, while checking how `audit.py` wires `reconcile.reconcile_text`
+alongside `cli._subject_registry_signals`'s own separate OpenAlex call: the
+two are architecturally independent, and `tests/test_cli_registry_wiring.py`
+— written 2026-08-15, before reconcile.py existed — only stubs one of them.
+
+Proved it live rather than assuming: patched `urllib.request.urlopen` to
+record every call while running that test file, and separately made one
+direct probe call to `api.openalex.org` from this sandbox, which came back
+`HTTP 429` — confirming this environment has real outbound network access,
+so the leak is not hypothetical here. Then ran the same instrumentation
+across the ENTIRE test suite (not just that one file) to find every instance
+rather than guessing: found six leaking tests in `test_cli_registry_wiring.py`,
+one more in `test_report.py` with the same root cause, and one unrelated
+pre-existing leak in `test_profiles.py` (a real LinkedIn profile fetch,
+nothing to do with reconcile.py — documented below, not fixed tonight).
+
+Wrote the pinning regression test first
+(`TestNoRealNetworkEscapesTheStub.test_a_publication_claim_reaches_reconcile_without_touching_the_real_network`)
+and watched it fail against the unfixed file (asserting `AMBIGUOUS`, got
+`UNCHECKABLE` — the mutated/blocked network path's actual observable
+signature, since `reconcile._http`'s own `except Exception` swallows
+whatever the network layer raises and turns it into "could not be
+reached," which is why none of the six leaking tests' own assertions had
+ever caught this: they don't inspect `report["reconciliations"]` at all).
+Then stubbed `reconcile._http` in all six affected tests plus the one in
+`test_report.py`, using a `_stub_http` helper mirroring the file's existing
+`_stub_fetcher`. Zero production code touched. 661 → 662 tests, all green;
+re-ran the whole-suite network sweep afterward and confirmed zero
+reconcile.py leaks remain.
+
+End-to-end CLI sanity check (no production code changed, but cheap and the
+brief asks for it after anything verify.py-adjacent): ran `larp-meter.py`
+directly, `--verify --name`, on a fabricated-DOI sample (correctly
+NOT_FOUND, flag 11 TRIGGERED, INSUFFICIENT DATA) and a real-DOI-under-a-
+fake-name sample (correctly MISMATCH — the DOI is real but not this
+subject's, exactly the attribution check working as designed). Both
+completed without error against the real Crossref/GitHub APIs.
+
+### BACKLOG.md: confirmed / refuted
+
+Nothing in the original 63-finding list touched tonight. The new "Shipped
+since" entry (topmost in BACKLOG.md) documents tonight's fix in the same
+format the reverse-path slices use, since it's a real, live-verified defect
+in code that shipped this week, even though it's a test-only fix.
+
+### Mutation-test log
+
+Mandatory sanity pass, one mutation per required file, all confirmed to
+either be caught or traced as dead:
+
+| file | mutation | result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught (`test_coverage_exactly_at_min_coverage_is_still_scored`) |
+| `names.py` | `len(present) >= 2` → `>= 1` | Caught (5 tests, incl. `test_unanswerable_name_comparison_is_not_a_mismatch`) |
+| `flags.py` | logo-wall `len(distinct) >= 4` → `>= 3` | Caught (`test_three_partners_is_below_the_logo_wall_threshold`) |
+| `verify.py` | `_ror_names`: drop `n.get("value")` truthiness check on ROR v2 entries | **Survived — traced, confirmed dead, not pinned** |
+
+The `verify.py` survivor: an empty-`value` ROR v2 name entry, once let
+through, becomes `variant=""` in `verify_institution`'s loop, but
+`_significant_tokens("")` returns `set()`, which is falsy, so the
+pre-existing `if not have: continue` guard at verify.py:514 skips it
+regardless — confirmed by direct call (`_significant_tokens('') == set()`).
+The `n.get("value")` check inside `_ror_names` is redundant with that
+downstream guard for every path that reaches it; no test was written for
+the same reason PR #29 deleted rather than pinned its own dead 4th mutation
+survivor. `verify.py` has now had this file's mandated per-cycle mutation
+touched again; its fuller sweep history is in earlier entries above.
+
+All four required files: mutation-tested again tonight (spot-check depth,
+per the cycle's own minimum). `flags.py` and `verify.py` still have their
+most recent *exhaustive* multi-mutation sweeps sitting on older entries
+above rather than fresh tonight, consistent with prior nights' "queue
+permitting, spot-check is the mandated floor, not the ceiling" practice.
+
+### What I learned
+
+- **A test file's own `except Exception: return False, 0, ""` can hide a
+  network leak from the test author twice over**: once by making the call
+  fail silently instead of erroring, and again because the resulting
+  `UNCHECKABLE` reconciliation is exactly what an intentionally-unmocked,
+  "nothing to check here" scenario also produces — the two are
+  indistinguishable from a test's assertions alone. The only way to tell
+  them apart is to instrument the actual network call, not to trust that a
+  passing test with a plausible-looking stub means the stub was reached.
+- **Grep for "does this test file's network stub cover every network-calling
+  module the code under test now imports" is a cheap, high-value check
+  whenever a new module (reconcile.py, here) adds an independent network
+  path.** This is the mirror image of the ROR/HANDLERS dead-code bug this
+  project keeps re-learning: that bug was "the test double is real but
+  production can't reach it"; this one is "the test double is real but
+  doesn't cover everything production *does* reach." Same root cause (a
+  contract between two files that nothing enforces), opposite direction.
+  Worth checking `test_reconcile*.py`'s own dedicated tests too as a
+  followup, though those already correctly patch `rc._http` per-test — the
+  gap was specifically in the *older* file that predates reconcile.py.
+- Reviewing a brand-new module (reconcile.py) for red-team/fairness bugs
+  directly, rather than through its own dedicated test files, turned up
+  nothing tonight — the module's `about_someone_else`/`gate()`/founding-slack
+  design already reads as carefully defensive. The real gap was one layer
+  out, in a much older file's coverage of the new one. Worth remembering
+  that reviewing "the newest module" sometimes means reviewing what changed
+  *around* it, not just the module's own file.
+
+### What the next run should pick up first
+
+1. **`tests/test_profiles.py`'s `test_url_plus_pasted_text_is_scored_against_the_anchor`
+   still leaks a real fetch to `https://be.linkedin.com/in/jan-fictief`**
+   (confirmed via the same whole-suite `urlopen` sweep tonight used for the
+   OpenAlex leaks). Different root cause (`profiles.read_profile`'s own
+   fetch, not reconcile.py) and lower stakes (no dollar-budget concern like
+   OpenAlex), so left open rather than expanding tonight's scope — but it's
+   the same class of bug and should get the same fix (stub `cli.make_fetcher`
+   in that specific test, which currently doesn't).
+2. **PR #29 is now `dirty`** (see queue section above) — needs a rebase onto
+   current master before it can land; its own content looked sound.
+3. **The core architectural gap** (BACKLOG.md's top CRITICAL) is still
+   4-of-15 open. UK Companies House remains the next-named reverse-path
+   slice, but needs a live API key this environment doesn't have to verify
+   response shapes against (per the standing brief's own "measured live, not
+   from docs" requirement) — worth designing with `COMPANIES_HOUSE_API_KEY`
+   optional-degrade-to-UNCHECKABLE (matching `GITHUB_TOKEN`'s pattern in
+   verify.py) whenever a future run either has a key or is willing to design
+   against public docs alone and flag the gap explicitly, the way ZefixWeb's
+   and KboPublic's docstrings already flag their own "keyless but
+   undocumented" / "if the markup changes, UNCHECKABLE never a finding" risk.
+4. `flags.py`'s fuller exhaustive mutation sweep and `verify.py`'s
+   `_ror_country`'s two fallback paths (v1/v2) still haven't had a dedicated
+   from-scratch pass directly on `master` — spot-checked again tonight
+   (1 mutation each) but the full sweeps referenced in earlier entries above
+   remain the more complete passes on record.

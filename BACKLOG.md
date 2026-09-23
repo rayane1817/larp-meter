@@ -13,6 +13,49 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### Six CLI-level tests were silently spending the reverse path's own OpenAlex budget on every test run (2026-09-23, nightly)
+
+Not a new source slice — a fix to test hygiene that protects the resource the
+last three slices above all depend on. `tests/test_cli_registry_wiring.py`
+(2026-08-15) stubs `cli.make_fetcher`, the network layer `providers.py`'s
+Wikipedia/OpenAlex signals path uses. `reconcile.py` (2026-09-22) added a
+SECOND, independent network layer (`reconcile._http`) that six of that
+file's existing tests never stubbed, because their bios happen to carry a
+vague publication-volume claim ("published extensively") that
+`run_audit` → `reconcile.reconcile_text` dispatches on whenever `--verify`
+and a subject name are both present — which in this file, is always.
+
+Live-confirmed, not assumed: `urllib.request.urlopen` really was reached
+with `https://api.openalex.org/authors?search=...` from inside these tests,
+observed hitting OpenAlex's own live rate limit on nothing more than
+`python -m unittest discover`. A comprehensive sweep of the WHOLE suite
+(`urlopen` patched to record every call, across every test file) found two
+more instances of the same bug — `tests/test_report.py`'s
+`test_a_zero_identifier_profile_reports_zero_lookups_when_verify_is_passed`
+(same cause: NO_IDENTIFIERS' "40 peer-reviewed publications" reaches
+reconcile.py too) — plus one unrelated pre-existing leak, not fixed
+tonight: `tests/test_profiles.py`'s
+`test_url_plus_pasted_text_is_scored_against_the_anchor` fetches a real
+`https://be.linkedin.com/in/jan-fictief` via `profiles.read_profile`,
+nothing to do with reconcile.py or this cycle's OpenAlex-budget concern.
+
+**Fix:** stub `reconcile._http` alongside `cli.make_fetcher` in all six
+affected tests (a `_stub_http` helper mirroring the file's existing
+`_stub_fetcher`), plus a new permanent regression,
+`TestNoRealNetworkEscapesTheStub`, that fails loudly (not just silently,
+via a swallowed exception inside `reconcile._http`'s own `except Exception`)
+if a future test in this file forgets the second stub. No production code
+changed. 661 → 662 tests, all green; the whole-suite `urlopen` sweep now
+finds zero reconcile.py leaks (the LinkedIn one above is still open).
+
+**Why this matters more than a normal test-hygiene fix:** every nightly run
+executes the full suite as its own final gate, in an environment that (as of
+tonight) has real internet access. Every run of this file, since
+2026-09-22, has likely been spending real, live queries against the
+project's single scarcest resource — the reverse path's $0.10/day keyless
+OpenAlex budget — purely by running its own tests, with nothing surfacing
+that cost anywhere.
+
 ### The reverse path, third slice: Belgian companies against KBO/BCE (2026-09-22, interactive session)
 
 `reconcile.KboPublic` reads the KBO public search (kbopub.economie.fgov.be,

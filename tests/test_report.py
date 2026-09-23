@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from larp_meter import reconcile
 from larp_meter.audit import run_audit
 from larp_meter.report import (caveats, render_terminal, render_markdown, render_html, save_all)
 
@@ -131,10 +132,22 @@ class TestCaveats(unittest.TestCase):
 
     def test_a_zero_identifier_profile_reports_zero_lookups_when_verify_is_passed(self):
         """The real end-to-end case: a fabricator citing no identifiers makes
-        --verify a structural no-op (nothing in HANDLERS to dispatch to), and
-        the report must say so plainly rather than silently behaving as if
-        the flag had done something."""
-        with tempfile.TemporaryDirectory() as d:
+        --verify a structural no-op for Verifier.HANDLERS (nothing in it to
+        dispatch to), and the report must say so plainly rather than silently
+        behaving as if the flag had done something.
+
+        NO_IDENTIFIERS also carries a publication-volume claim ("40
+        peer-reviewed publications"), which reconcile.py's reverse path (added
+        2026-09-22, after this test) does dispatch on -- reconcile._http must
+        be stubbed here, or this test silently makes a real, live OpenAlex
+        request for "Marcus Vane" every run, live-confirmed to happen with
+        the un-patched call. It stays deterministic either way: the bio names
+        no institution or ORCID to tie a match to, so reconcile.py can only
+        ever answer NO_RECORD/AMBIGUOUS/UNCHECKABLE here, never CONFIRMED or
+        CONTRADICTED -- verification_effective's assertion below does not
+        depend on which of those three a live call would have returned."""
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.object(reconcile, "_http", lambda *a, **kw: (False, 0, "")):
             report = audit(NO_IDENTIFIERS, verify=True, cache_dir=d,
                             subject_name="Marcus Vane")
         self.assertTrue(report["verified"])

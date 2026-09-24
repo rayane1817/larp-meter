@@ -5485,3 +5485,207 @@ public search, keyless HTML). Its contradiction path has one condition the
 Swiss one does not -- `_earlier_sole_trader` -- because KBO does not link a
 sole trader to the company it became. Keep it; do not remove it to make a
 test pass.
+
+---
+
+## 2026-09-24 (nightly run)
+
+### Open-PR queue (checked before any other work)
+
+**2 open `nightly/*` PRs — under the 3-PR cap, so tonight proceeded
+normally** (branched fresh from `origin/master` at `9fe23ff`, per the
+brief's instructions for a clear-enough queue):
+
+- **PR #29** `nightly/2026-09-22` — "reconcile.py: a departed company
+  officer no longer reads as a current one." Draft, CI `pending` (no status
+  checks reported — never ran). Content: `reconcile.py` +
+  `tests/test_reconcile.py`. Not touched tonight; doesn't overlap this
+  branch's files.
+- **PR #30** `nightly/2026-09-23` — "Tests: stop reconcile.py's OpenAlex
+  calls from leaking past the network stub." Draft, CI `pending` (same).
+  Content: `tests/test_cli_registry_wiring.py` + `tests/test_report.py`.
+  This is the exact fix for the two OpenAlex leaks tonight's own
+  whole-suite `urlopen` sweep (below) still finds on `master` — confirmed
+  they're the same pre-existing bug, not new, so not duplicated here.
+
+Neither PR touches `tests/test_profiles.py` or `larp_meter/verify.py`, the
+two files tonight's branch changes — no expected conflict with either.
+
+### Backlog tally
+
+**CRITICAL (15 canonical / 17 raw headings): 11 [FIXED] / 2 [PARTIALLY
+FIXED] tagged tonight, up from 09-23's 10/1 count** — the KBO/BCE and
+OpenAlex-publications reverse-path slices that landed after 09-23 picked up
+tags on two more headings. Still, per 09-22's and 09-23's own analysis (not
+re-derived tonight — recomputing the raw-finding taxonomy exactly has
+already produced one correction and isn't where budget belongs), the
+untagged remainder is effectively the same **4 still open**: one raw
+heading is a stale duplicate of an already-`[FIXED]` one, and the rest
+restate the one top CRITICAL (the one-way, claim-anchored funnel) rather
+than being distinct problems. That top item remains the priority; tonight's
+work didn't advance it directly (see "what's next").
+
+### What I did
+
+Read 09-23's "what the next run should pick up first" list, which named two
+concrete, already-diagnosed items: the leftover `test_profiles.py` LinkedIn
+leak from that night's own whole-suite `urlopen` sweep, and `verify.py`'s
+mandatory mutation-test rotation (specifically `_ror_country`'s v1/v2
+fallback paths, next in line after `_ror_names`'s ranking/messaging logic
+got its sweep on 2026-09-20/22-ish nights). Did both — they're small,
+independent, and don't touch either open PR's files.
+
+**1. The LinkedIn leak.** Confirmed live first: patched `urllib.request.urlopen`
+to record calls and raise, ran only
+`test_url_plus_pasted_text_is_scored_against_the_anchor`, and got exactly
+one recorded call to `https://be.linkedin.com/in/jan-fictief` — the test's
+own `main()` invocation carries no `cli.make_fetcher` stub at all, so
+`cmd_url`'s real fetcher runs, contradicting the module's own docstring
+("All network access is stubbed."). `fetch()`'s `except Exception: return
+""` is why this was invisible: it swallows a blocked/failing request and
+the test's assertions (URL/mode echoed from the request itself, not the
+fetched body) pass regardless of what the network did.
+
+Fix: wrapped that test's `main()` call in `mock.patch("larp_meter.cli.make_fetcher",
+lambda cache_dir, refresh=False: stub({}))` — the existing `stub()` helper
+already in this file. Added a permanent guard,
+`test_url_mode_never_touches_a_real_socket`, using a spy that *records*
+into a list before raising (raising alone doesn't work as a guard here,
+since the same swallow-everything `except Exception` would eat the spy's
+exception too — the list is the only way to observe the leak from outside
+`fetch()`). Watched the guard fail first against the unstubbed call (spy
+recorded the live URL, `assertEqual(calls, [])` failed) before finalizing.
+661 -> 662 tests.
+
+**2. `verify.py`'s ROR v1 fallback is dead, not just untested.** Grepped
+`tests/test_verify.py`'s ROR fixtures — every one uses the v2 `names`-list /
+`locations`-with-`geonames_details` shape; none ever exercises
+`_ror_names`'s `legacy = [item.get("name")...]` branch or
+`_ror_country`'s `item.get("country")` branch. Deleting either branch
+outright left all 662 tests green, which by itself only proves "untested,"
+not "unreachable" — before writing a synthetic pin (the usual move for a
+survivor), checked whether a real ROR response could ever take that branch.
+`WebSearch` turned up ROR's own changelog: the *unversioned* endpoint this
+code calls (`https://api.ror.org/organizations?query=...`, no `/v1/` or
+`/v2/` in the path) has defaulted to v2-schema responses since the week of
+2025-07-28, and v1 of the API and schema was retired entirely during the
+week of 2025-12-08 (`/v1/` now returns HTTP 410 — per
+ror.readme.io/changelog/2025-12-04-version-1-of-the-ror-api-and-schema-is-sunsetting
+and the 2025-07-01 entry). Confirmed directly too, not just from the
+changelog: `curl`'d the exact endpoint URL live and got back v2-shaped JSON
+(a `names` array of `{value, types, lang}` dicts). Given today's date
+(2026-09-24) is nine months past the full v1 shutdown, there is no live
+response shape left that could ever reach either fallback branch.
+
+Deleted both fallback branches rather than pinning them with a test for
+behavior production cannot reach — the same call `nightly/2026-09-22`'s PR
+#29 made for its own dead 4th mutation survivor (a "currently-on-record
+takes precedence" guard that no caller could ever observe otherwise). No
+new test added for this half, by design.
+
+**Cross-function check (mandatory per the brief's step 5, and doubly so
+after touching `verify.py`):** grepped every call site of `_ror_names` and
+`_ror_country` — both are private to `verify.py` and called only from
+`verify_institution` (4 call sites total, all shown together in the same
+function), so there is no second caller silently depending on the deleted
+fallback's return shape. The return contract is unchanged for every input
+`verify_institution` can actually receive (a v2-shaped ROR item): same list
+of name strings, same `" (Country)"` or `""` string. The only behavioral
+difference is for a hypothetical v1-shaped item, which the live evidence
+above says cannot occur.
+
+**End-to-end CLI check (mandatory after touching verify.py):** ran the real
+CLI against the live ROR API, no mocking:
+- `--verify --name "Jane Doe" --text "Jane Doe holds a PhD from the
+  Massachusetts Institute of Technology..."` -> `degree_institution` claim
+  `VERIFIED`, detail `"Real institution: Massachusetts Institute of
+  Technology (United States)"` — confirms the refactored `_ror_country`
+  still produces a correct country annotation against a real v2 response.
+- `--verify --name "John Smith" --text "John Smith holds a PhD from the
+  Zanderfield Institute of Technology..."` (invented institution) ->
+  `NOT_FOUND`, detail names the nearest real match ("The Institute of
+  Concrete Technology (United Kingdom)") and explicitly says "confirm
+  directly before drawing any conclusion" — never an accusation, matching
+  the project's "existence is not attribution" / "never libel" rule for an
+  absence result.
+
+### Mutation-test log
+
+| file | mutation | result |
+|---|---|---|
+| `verify.py` | `_ror_names`: delete the v1 fallback (`legacy = ...`) entirely | **Survived — confirmed dead** (ROR's own changelog + a live `curl`: the unversioned endpoint has returned only v2 shape since 2025-07-28, and v1 was fully retired 2025-12-08). Deleted rather than pinned. |
+| `verify.py` | `_ror_country`: delete the v1 fallback (`item.get("country")...`) entirely | **Survived — confirmed dead**, same evidence. Deleted rather than pinned. |
+| `verify.py` | `_ror_country`: invert `if not locations: return ""` to `if locations: return ""` (post-refactor sanity check on the new code) | Caught |
+| `verify.py` | `_ror_names`: force the v2-list branch to always return `[]` | Caught (multiple `test_verify.py` institution tests) |
+
+`verify.py` has now had a real mutation-testing pass again tonight, on top
+of the earlier `verify_institution` ranking/messaging sweeps referenced in
+prior entries. `scoring.py`, `names.py`, and `flags.py` were **not**
+touched tonight — all of tonight's mutation budget went to the two
+`_ror_*` helpers, since they were 09-23's specifically named next target
+and turned into a real (dead-code) finding rather than a routine
+spot-check. Per the brief's own minimum ("at least one real pass" per
+file, not every night), this is acceptable, but the rotation should return
+to `scoring.py`/`names.py`/`flags.py` next time budget allows a full pass
+rather than a targeted one.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed and fixed**, live: both findings above are documented in
+  BACKLOG.md's new topmost "Shipped since" entry, in the same evidence-first
+  style the reverse-path slices use.
+- Did not touch the original 63-finding list's own content tonight —
+  out of scope for two small, targeted fixes.
+
+### What I learned
+
+- **"Deleting a branch and watching the suite stay green" only proves a
+  branch is untested by the CURRENT tests — it does not by itself prove the
+  branch is unreachable in production.** Those are different claims, and
+  the second one needs external evidence (a live request, a vendor's own
+  changelog), not just an absence of failing tests. Tonight's ROR finding
+  only became a safe deletion once `WebSearch` + a real `curl` established
+  that the exact endpoint in use structurally cannot return the old shape
+  anymore — without that step, the right move would have been a synthetic
+  pin, not a deletion, exactly per the brief's own "verify API shapes
+  against live documentation or a real request; do not trust training
+  data" instruction.
+- A module's own docstring claim ("All network access is stubbed.") is
+  worth spot-checking against every test in the file, not assumed true
+  because most tests in it do stub correctly — `test_profiles.py` had
+  exactly one test that didn't, sitting under that same claim for however
+  long the file has existed.
+- Recording calls into a list (rather than trusting a spy's raised
+  exception to propagate) is the right pattern for detecting a network leak
+  in this codebase specifically, because `fetch()` and `reconcile._http`
+  both use a blanket `except Exception` around the actual `urlopen` call.
+  This is the second time this exact pattern has been needed (09-23's
+  `TestNoRealNetworkEscapesTheStub` was the first) — worth remembering as
+  the default technique rather than rediscovering it a third time.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task** — this makes a
+   third small, independent nightly PR sitting alongside #29 and #30 (still
+   under the 3-PR cap as of tonight, but worth watching).
+2. **The mandatory mutation-test rotation owes `scoring.py`, `names.py`, and
+   `flags.py` a full pass** — tonight's budget went entirely to `verify.py`'s
+   two ROR helpers. `flags.py` in particular hasn't had a from-scratch
+   exhaustive sweep directly on `master` in a while (prior entries note its
+   fuller sweeps live only on old, now-probably-stale unmerged branches).
+3. **The core architectural gap is still the top priority and still
+   untouched tonight.** UK Companies House remains blocked on a live API
+   key this environment doesn't have. Re-verify OpenAlex's live rate limits
+   before extending that integration further — the standing brief's own
+   numbers are now over a year stale (measured 2026-08-14); given how much
+   ROR's own API shape changed underneath this codebase in the meantime
+   (v1 -> v2 default, then v1 retired) without anyone noticing until
+   tonight, don't assume OpenAlex's shape or limits have stayed static
+   either.
+4. Once the PR queue clears, PR #29 (`nightly/2026-09-22`) needs a rebase —
+   09-23 already flagged it `dirty` against a master that has since gained
+   two more reverse-path slices underneath it.
+5. **The stale duplicate CRITICAL heading** (BACKLOG.md's `## CRITICAL
+   (15)`/`(16)` sections have 17 raw `###` headings between them, not 15)
+   is still cheap, still unfixed, still low priority — same note as 09-23's
+   entry.

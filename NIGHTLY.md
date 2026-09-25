@@ -5689,3 +5689,249 @@ rather than a targeted one.
    (15)`/`(16)` sections have 17 raw `###` headings between them, not 15)
    is still cheap, still unfixed, still low priority — same note as 09-23's
    entry.
+
+
+---
+
+## 2026-09-25 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Three open, unmerged `nightly/*` PRs against `master`, all draft, all CI
+green, all zero review comments:
+
+| PR | Branch | Mergeable | CI |
+|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with master — flagged 09-23, still unresolved) | green (6/6) |
+| #30 | `nightly/2026-09-23` | clean | green (6/6) |
+| #31 | `nightly/2026-09-24` | clean | green (6/6) |
+
+Queue is at exactly the 3-PR cap named in the standing brief. Per the
+brief's rule, tonight did **not** open a new PR or push a new branch —
+this entry is committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, the
+newest open branch), touching no other file, as the brief's one exception
+allows.
+
+### Running backlog tally (15 CRITICALs)
+
+Carried forward from every recent entry: **10 [FIXED] / 1 [PARTIALLY
+FIXED] / 4 still open**. Tried to recount directly tonight and hit a real
+discrepancy worth recording rather than silently re-asserting the carried
+figure: `awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f' BACKLOG.md
+| grep -c '^### '` gives **17** raw `###` headings in that section, not 15
+— matching 09-23's and 09-24's own "17 raw headings" note at the bottom of
+their entries. Of those 17: 11 carry `[FIXED]`, 1 carries `[PARTIALLY
+FIXED]`, 4 are the already-documented "core one-way funnel + three
+near-duplicate write-ups" still-open cluster, and 1 pair (the
+"Word-wrapped negation loses its scope..." heading, appearing twice
+back-to-back — once bare, once as `[FIXED]`) is a literal accidental
+duplicate from a past merge, already flagged 09-23/09-24. Collapsing that
+one pair gives 16, still one over 15. Traced the extra: two of the 11
+`[FIXED]` headings ("ROR is wired into the verifier but no claim ever
+reaches it — the institution check is dead code" and "ROR institution
+verification is unreachable: HANDLERS keys on a subtype extract.py never
+emits") are, on a full read of both bodies, two independently-written
+descriptions of the *same* underlying bug (the HANDLERS/extract.py
+subtype mismatch that made ROR dead code) — the same pattern the 4
+still-open findings already use ("the core... finding and its three
+near-duplicate write-ups"), just not yet labeled that way for the FIXED
+side. That would bring FIXED down to an effective 10 if near-duplicate
+write-ups are merged the same way on both sides of the ledger — matching
+the long-carried "10" exactly. **Not re-editing BACKLOG.md tonight**
+(capped night, NIGHTLY.md-only) — flagging for a future night: merge the
+literal word-wrap duplicate pair into one heading, and either merge or
+explicitly cross-reference the two ROR-dead-code write-ups as duplicates,
+so a fresh grep-based recount lands on 15 without this archaeology. This
+does not change which findings are fixed vs. open — it's bookkeeping, not
+a new result.
+
+### What I did
+
+Spent the night on the mandatory mutation-testing pass plus backlog
+verification, per the brief's capped-night rule — no code or test changes
+committed (see below for why the one regression test written tonight was
+reverted rather than pushed).
+
+**Mutation-testing pass, `flags.py` primary (last full pass 2026-08-16/17;
+only spot-checked since), one spot-check each in `scoring.py`, `names.py`,
+`verify.py`.** Chose `flags.py` specifically because 09-24's own "what the
+next run should pick up" item 2 named it as owed a full pass, and because
+`flags.py`'s flag 11/flag 6 integration with `reconcile.py` (landed
+2026-09-20 through 2026-09-22, i.e. after `flags.py`'s last full sweep) is
+new surface no mutation pass has touched yet.
+
+**Found a real survivor in flag 11's reconciliation integration — and it
+has zero existing test coverage, not just an unpinned mutation:**
+
+- **Mutation:** `flags.py`'s `f_contradicted`, the line
+  `if refuted or mismatched or rec_contra:` → `if refuted or mismatched:`
+  (dropping the newer `rec_contra` disjunct added when `reconcile.py`
+  landed). Suite stayed green: **662 tests, zero failures.**
+- **Why it survived:** grepped `tests/` for `rec_contra`,
+  `f_contradicted`, and `reconciliations=` outside `test_reconcile*.py` —
+  **no test anywhere constructs an `AuditContext` with both a checkable
+  identifier claim AND a `reconciliations` list.** Every existing
+  reconciliation-path test for flag 11 goes through the
+  `if not checkable:` branch (checkable empty), and every checkable-claim
+  test for flag 11 leaves `reconciliations` at its default empty list. The
+  specific combination the mutated line guards — a checkable identifier
+  present (so the earlier `if not checkable:` branch is skipped) *and* a
+  contradicted company-role reconciliation — has never been exercised.
+- **Real-world failure this allows:** a subject with one genuine,
+  CONFIRMED identifier (a real DOI, say) and one company directorship the
+  KBO/BCE or Zefix register contradicts. Under the mutation, execution
+  falls through past the dropped disjunct to the `if confirmed:` branch
+  and reports **PASSED** ("All 1 checked identifier(s) confirmed by their
+  registries") — the register's own contradiction disappears entirely
+  from this tool's heaviest, floor-bearing flag (weight 2.5, `floor
+  ="ORANGE"`), precisely because the subject happens to also have one
+  real, checkable identifier. A fabricator gains a strict incentive to
+  pad their profile with one easy-to-verify real credential specifically
+  to bury an unrelated lie a registry would otherwise catch.
+- **Confirmed genuinely reachable, not a defensive-only branch:** traced
+  the call path — `audit.py` always passes `reconciliations=` (populated
+  whenever `--verify` + a subject name are given, per `audit.py:39-40`,
+  landed 2026-09-20+) alongside whatever identifier claims `extract.py`
+  found in the same text, so a profile naming both a real DOI and a
+  fabricated company role hits this exact combination in the real CLI
+  pipeline, not just in a hand-built test fixture.
+- **Wrote and verified a regression test, then reverted it (not pushed,
+  per tonight's capped-night rule — no code/test commits allowed except
+  this file).** Full source, ready to paste into
+  `tests/test_flags.py`'s `TestMutationSurvivorsFlags` class (add
+  `from larp_meter import reconcile as rc` to the file's imports) for
+  whichever run lands it:
+
+```python
+    def test_a_contradicted_company_role_still_triggers_alongside_a_confirmed_identifier(self):
+        """Mutation `if refuted or mismatched or rec_contra:` -> `if refuted
+        or mismatched:` survived.
+
+        No existing test gave flag 11 both a checkable identifier AND a
+        reconciliation at once, so nothing exercised this branch with
+        `rec_contra` non-empty while `refuted`/`mismatched` are both
+        empty. That combination is exactly a subject with one real,
+        confirmed DOI and one company directorship the commercial
+        register contradicts -- the confirmed DOI must not let the
+        register's own contradiction go unreported on this tool's
+        heaviest, floor-bearing flag."""
+        c = ctx_for("Our work: 10.1038/s41586-020-2649-2.",
+                    verified=True, subject_name="Ada Lovelace")
+        for claim in c.claims:
+            if claim.subtype == "doi":
+                claim.status, claim.detail = ex.VERIFIED, "Paper exists and lists the subject."
+        c.reconciliations = [rc.Reconciliation(
+            kind="company", company="Acme AG", role="director", outcome=rc.CONTRADICTED,
+            detail="register lists no such director")]
+        result = evaluate(c)[11]
+        self.assertEqual(result.status, TRIGGERED)
+        self.assertIn("contradicted by the commercial register", result.description)
+```
+
+  Verified this test fails on the mutated line (`AssertionError: 'PASSED'
+  != 'TRIGGERED'`) and passes once the mutation is reverted, exactly as
+  the brief requires before trusting a pin — the verification happened,
+  only the commit didn't, per the capped-night rule.
+
+**Also tried, mutated, and confirmed CAUGHT (no gap, re-confirming existing
+coverage rather than new findings):**
+
+- `flags.py`: `if not checkable and not recs:` → `... or not recs:` in the
+  same function — 26 test failures, well-covered.
+- `scoring.py`: `category_scores`'s `if r is None or r.status not in
+  (TRIGGERED, PASSED): continue` → `and` — caught (`test_scoring.py`).
+- `names.py`: the surname-abbreviation `extra` filter's `len(w) > 1` →
+  `len(w) >= 1` (would make a bare initial in a candidate string count as
+  disqualifying "extra" text, breaking the "A. Lovelace" abbreviation
+  match this tool relies on for non-Western given-name-first surnames
+  too) — caught, 10 test failures.
+- `verify.py`: spot-check re-confirmation only (queue-cap discipline —
+  `verify.py`'s ROR v1 fallback was deleted by tonight's #31 itself, so
+  avoided spending budget mutating code already confirmed dead there).
+  `_is_ambiguous_acronym`'s `<= 5` → `< 5` boundary — still caught,
+  fourth-ish reconfirmation of this guard.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` | `f_contradicted`: `if refuted or mismatched or rec_contra:` → drop `rec_contra` | **Survived — real, zero test coverage for the combination. Test written & verified, not pinned (capped night) — full source above.** |
+| `flags.py` | `f_contradicted`: `if not checkable and not recs:` → `or` | Caught (26 failures) |
+| `scoring.py` | `category_scores`: `r is None or r.status not in (...)` → `and` | Caught |
+| `names.py` | surname-abbreviation `extra` filter: `len(w) > 1` → `len(w) >= 1` | Caught (10 failures) |
+| `verify.py` | `_is_ambiguous_acronym`: `<= 5` → `< 5` | Caught (spot-check re-confirmation) |
+
+`flags.py` now has a real, fresh full-ish pass on `master`'s current code
+(last one was 2026-08-16/17, pre-dating the `reconcile.py` integration
+entirely) — the one real finding is specifically in the code added since
+then. `scoring.py` and `names.py` got one confirming spot-check each.
+`verify.py` was deliberately spot-checked only, since #31 already mutated
+and resolved its two live candidates (`_ror_names`/`_ror_country`)
+tonight.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Did not investigate any of the 15 named CRITICALs' underlying claims
+  tonight beyond the heading-count archaeology above (see "Running
+  backlog tally") — that was a bookkeeping check, not new verification of
+  any finding's substance.
+- Did not touch any MAJOR/MODERATE/MINOR entry.
+
+### What I learned
+
+- **A mutation surviving with zero relevant tests is a stronger signal
+  than a mutation surviving where *some* related tests exist but happen
+  not to cover this exact branch** — worth distinguishing the two in
+  future logs. Tonight's finding wasn't "one edge case missed among many
+  covered ones"; grepping turned up literally no test anywhere that gives
+  flag 11 both a checkable claim and a reconciliation together, which
+  means the entire interaction between the original identifier-based
+  verification path and the newer reconcile.py path has never been
+  exercised as a *combination*, only as two separate paths. That's exactly
+  the shape of gap the brief's step 5 (grep every call site, trace every
+  return value) is meant to catch, and it's exactly why `reconcile.py`
+  landing on top of `flags.py` without `flags.py`'s own mutation pass
+  being repeated afterward left this invisible for five nights (09-20
+  through tonight).
+- Confirmed live during this same read that `audit.py` really does pass
+  both identifier claims and `reconciliations` into the same
+  `AuditContext` unconditionally (not gated on one excluding the other),
+  so this is a real, reachable production combination, not a
+  theoretical one — checked before writing the test, not after.
+- The backlog heading-count discrepancy (11 vs. 10 `[FIXED]`) resolves
+  cleanly once near-duplicate write-ups are treated consistently on both
+  the fixed and open sides of the ledger — the open side's "core finding
+  + 3 near-duplicates" framing was already established, it just hadn't
+  been applied to the fixed side's own near-duplicate pair (the two
+  ROR-dead-code write-ups). Worth remembering as the reconciliation
+  method next time this comes up, rather than re-deriving it.
+
+### What the next run should pick up first
+
+1. **Land the reverse-path regression test above.** It's fully written,
+   verified failing-on-mutant / passing-on-fix, and ready to paste into
+   `tests/test_flags.py` (`TestMutationSurvivorsFlags`, plus the one-line
+   `from larp_meter import reconcile as rc` import) — no re-derivation
+   needed, just apply it (ideally alongside a small, independent PR once
+   the queue has room, or as part of whichever queued branch touches
+   `flags.py` next).
+2. **Check the PR queue depth again before picking a task.** Still
+   exactly 3 tonight; watch for a 4th or for #29's `dirty` state to
+   spread to the others as master keeps moving.
+3. **BACKLOG.md's CRITICAL-section bookkeeping** (the literal word-wrap
+   duplicate heading, and the two ROR-dead-code write-ups that describe
+   one bug) is still cheap, still low priority, but now has an exact fix
+   spelled out above rather than just "17 not 15" — a future night can
+   merge both pairs in one small NIGHTLY.md+BACKLOG.md-only cleanup once
+   the queue allows a push.
+4. **The core architectural gap is still the top priority and still
+   untouched tonight** — capped-night rules correctly kept it off the
+   table again. Once the queue clears enough for real feature work,
+   re-verify OpenAlex's live rate limits before extending the reverse
+   path further, per every recent entry's standing caveat.
+5. `scoring.py`, `names.py`, and `verify.py`'s full from-scratch
+   mutation sweeps (as opposed to tonight's and recent nights' targeted
+   spot-checks) still haven't been repeated directly against `master`
+   since 2026-09-15/09-16/09-20 respectively — fine per the brief's "at
+   least one real pass" minimum, but due for a rotation back once
+   `flags.py` isn't the most-owed file anymore.

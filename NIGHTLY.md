@@ -5935,3 +5935,241 @@ tonight.
    since 2026-09-15/09-16/09-20 respectively — fine per the brief's "at
    least one real pass" minimum, but due for a rotation back once
    `flags.py` isn't the most-owed file anymore.
+
+---
+
+## 2026-09-26 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Still three open, unmerged `nightly/*` PRs against `master`, unchanged in
+membership from 09-25's entry — all draft, all CI green, all zero review
+comments, re-checked fresh tonight rather than carried forward:
+
+| PR | Branch | Mergeable | CI |
+|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with master — flagged 09-23, still unresolved, three nights running) | green (6/6) |
+| #30 | `nightly/2026-09-23` | clean | green (6/6) |
+| #31 | `nightly/2026-09-24` | clean | green (6/6) |
+
+Queue is at exactly the 3-PR cap, so per the standing brief tonight did
+**not** open a new PR or push a new branch. This entry is committed
+NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest open
+branch — no new branches were created since 09-25), touching no other
+file.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly rather than carried forward:
+`awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f' BACKLOG.md | grep -c '^### '`
+gives **17** raw headings, of which **11** carry `[FIXED]` and **1**
+carries `[PARTIALLY FIXED]`. Exactly matches 09-25's own recount (same
+17/11/1 split, same explanation: one literal duplicate heading pair plus
+one pair of independently-written write-ups describing the same
+HANDLERS/extract.py dead-ROR-code bug). Collapsing both duplicate pairs
+the way the open side already does gives the long-carried figure:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+The 4 still-open CRITICALs remain the core one-way/claim-anchored funnel
+finding and its three near-duplicate write-ups from the original
+five-lens review. Not re-editing BACKLOG.md's heading duplication tonight
+(capped night, NIGHTLY.md-only) — the exact merge instructions are
+already spelled out in 09-25's entry for whichever night has queue room.
+
+### What I did
+
+Mandatory mutation-testing pass, one real attempt in each of the four
+required files, plus a fresh reconfirmation of the PR queue and the
+backlog tally above. No code or test changes committed — a capped night
+carries this file only.
+
+**`names.py` — a genuine survivor that turns out to be a provable
+equivalent mutant, not a coverage gap.**
+
+- Mutation: `name_matches`'s abbreviation-consistency check,
+  `if not extra or all(w in mine for w in extra): return True` → `if not
+  extra and all(w in mine for w in extra): return True`. Suite stayed
+  green: 661/661.
+- Before writing a test, checked whether the two branches can ever
+  actually disagree. They cannot, and this is provable rather than
+  merely untested: `extra` is built from words that literally appear in
+  the one candidate string under test, and `present` (computed earlier
+  against the full joined `blob` of every candidate) contains every
+  token of `mine` that appears as a whole word anywhere in that same
+  text. Any word in `extra` that also sits in `mine` would therefore
+  already have been picked up into `present` — but `present` has exactly
+  one member at this point in the function (`matched`), and `extra`
+  explicitly excludes `matched` (`w != matched`). So "`extra` is
+  non-empty and every word in it is in `mine`" is a contradiction: it
+  can never be true. `not extra or all(...)` and `not extra and
+  all(...)` therefore always evaluate the same way for every reachable
+  input — a true equivalent mutant, not a missed test.
+- Checked the proof empirically too, not just by argument: a 20,000-trial
+  random fuzz over hyphenated/particled/multi-token name combinations
+  (script in this session's scratchpad, not committed) found zero cases
+  where `extra` was non-empty and a subset of `mine` while `present` had
+  exactly one member. Zero survivors matches the proof.
+  Wrote no regression test, because none can exist that fails on the
+  mutant and passes on the original — the brief's "write a failing test"
+  step assumes a real behavioral gap, and this file's own comment above
+  the mutation-testing sections already distinguishes findings from
+  notes; recording this as the latter. **Cleanup opportunity for a future
+  night with queue room:** the `all(w in mine for w in extra)` disjunct
+  can be deleted and the line simplified to `if not extra: return True`
+  with zero behavior change — worth doing only alongside a real change to
+  this function, not as a bare mechanical simplification PR.
+
+**`verify.py` — a genuine, previously-unpinned gap, cosmetic-only
+severity.**
+
+- Mutation: `_ror_country`'s `locations[0].get("geonames_details")` →
+  `locations[-1].get("geonames_details")`. Suite stayed green: 661/661.
+- Unlike the `names.py` finding above, this one is real: no fixture
+  anywhere in `tests/` gives a ROR record more than one entry in its
+  `locations` array, so first-vs-last is genuinely never exercised.
+  ROR v2 records for a multi-site or multi-national institution (CERN,
+  WHO regional bodies, some multi-campus universities) can carry more
+  than one location, and nothing pins which one this tool reports.
+- Severity is low and bounded: `_ror_country`'s return value only ever
+  feeds a cosmetic `" (Country)"` suffix appended to `claim.detail`
+  (verify.py:523, :536) — it never reaches `claim.status`, so this cannot
+  flip VERIFIED/NOT_FOUND/MISMATCH and cannot manufacture or hide an
+  accusation. Filed as a real but low-priority gap, in the same family as
+  the long-tracked ROR overlap tie-break (also message-only) — not worth
+  its own emergency fix, but a legitimate candidate the next time
+  `verify.py`'s ROR helpers get a dedicated regression pass.
+
+**`flags.py` — a genuine survivor that is *also* structurally an
+equivalent mutant today, but won't stay one.**
+
+- Mutation: `f_output`'s publications-reconciliation check,
+  `if any(r.outcome == rc.CONFIRMED for r in pubs): return PASSED` → `if
+  all(r.outcome == rc.CONFIRMED for r in pubs) and pubs: return PASSED`.
+  Suite stayed green: 661/661.
+- Traced why: `pubs = [r for r in ctx.reconciliations if r.kind ==
+  "publications"]` can hold at most **one** element in the real pipeline
+  today. `reconcile.extract_publication_claim` returns the single
+  strongest publication-volume claim in the text (not a list), and
+  `reconcile.reconcile_text` calls `_reconcile_publications` on it at
+  most once per audit, appending at most one `kind="publications"`
+  Reconciliation to `out`. For a list of length 0 or 1, `any(...)` and
+  `all(...) and bool(list)` are identical by construction — so today this
+  really cannot diverge in the live pipeline, matching the pattern PR
+  #30's own description independently found in `_ror_names` for a
+  different reason (a downstream guard making a branch dead).
+- Confirmed this is not permanently equivalent, unlike the `names.py`
+  finding: hand-built a `ctx.reconciliations` with two publications-kind
+  entries (one CONFIRMED, one AMBIGUOUS) and ran both the real `f_output`
+  and an in-memory copy with the mutation applied. Real code: `PASSED`.
+  Mutated code: `UNKNOWN`. The two branches diverge exactly when this
+  project's own BACKLOG.md "Not done" note under the OpenAlex slice
+  ("Semantic Scholar as a second source") gets built — a second
+  publications source would let `pubs` hold two entries for the first
+  time, and at that point `any()` (correctly credit a subject whose
+  *one* confirmed source outweighs an ambiguous second one) versus
+  `all()` (silently withhold credit whenever any source is less than
+  fully confirming) stop being the same function. Flagging now so
+  whoever builds that slice writes the two-source test at the same time,
+  rather than rediscovering this survivor cold.
+
+**`scoring.py` — spot-check only, re-confirming existing coverage.**
+`_apply_floors`'s tie-break, `if _SEVERITY_ORDER.index(strongest["floor"])
+<= _SEVERITY_ORDER.index(level):` → `<`. Caught immediately (1 failure,
+`TestFloorTieBreak`). No new finding — `scoring.py` remains the
+most-thoroughly-pinned of the four files; a genuinely fresh full sweep
+would need either new REGISTRY shapes or a change to the file itself to
+find anything new, per several recent nights' own conclusion.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `names.py` | `name_matches`: `if not extra or all(w in mine for w in extra):` → `and` | Survived — **proven equivalent mutant** (formal argument + 20k-trial fuzz, zero counterexamples). Not a coverage gap; simplification opportunity only. |
+| `verify.py` | `_ror_country`: `locations[0]` → `locations[-1]` | Survived — **real, unpinned gap**, message-only severity (never touches `claim.status`). |
+| `flags.py` | `f_output`: `if any(r.outcome == rc.CONFIRMED for r in pubs):` → `if all(...) and pubs:` | Survived — **equivalent mutant today** (reconcile.py never produces >1 `publications`-kind reconciliation yet), confirmed genuinely divergent once `pubs` has 2+ elements. Will need its own test the day a second publication source lands. |
+| `scoring.py` | `_apply_floors` tie-break: `<=` → `<` | Caught (spot-check re-confirmation) |
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section heading split directly (17 raw / 11
+  `[FIXED]` / 1 `[PARTIALLY FIXED]`) rather than trusting the carried
+  "10/1/4" figure blindly — matches 09-25's own recount exactly, so the
+  tally is unchanged and re-verified, not merely repeated.
+- Did not investigate any individual CRITICAL/MAJOR/MODERATE/MINOR
+  finding's underlying substance tonight beyond that bookkeeping check —
+  all of tonight's budget went to the mutation-testing pass above, which
+  itself surfaced two BACKLOG-adjacent notes (the `names.py` dead-code
+  disjunct, and the `flags.py` survivor's link to the still-open
+  "Semantic Scholar as a second source" TODO under the OpenAlex reverse-
+  path slice) rather than a new standalone finding.
+
+### What I learned
+
+- **Not every mutation survivor is the same kind of finding, and
+  collapsing them together wastes a future night's time.** Tonight's four
+  attempts produced three different shapes: a real, low-severity coverage
+  gap worth a future test (`verify.py`); a survivor that is *currently*
+  equivalent but will become real and load-bearing the moment specific,
+  already-planned future work lands (`flags.py`); and a survivor that is
+  *permanently* equivalent given the function's own internal invariants,
+  where writing a test would be theater (`names.py`). Worth checking "can
+  this branch ever actually differ" analytically (and, where cheap,
+  empirically via a fuzz script) before spending time hand-deriving a
+  regression fixture that can't exist — the `names.py` proof took a few
+  minutes; guessing at an unfindable test case could have taken much
+  longer.
+- Proving an equivalent mutant is worth doing rigorously, not just
+  asserting: the formal argument for `names.py` and the 20,000-trial fuzz
+  independently agree, which is much stronger evidence than either alone
+  — a fuzz that happened to miss a rare counterexample would have given
+  false confidence, and a proof with a subtle error would too.
+- The `flags.py` and `verify.py` (`_ror_names`, PR #30's own description)
+  survivors are now two independent instances of the same shape: a
+  mutation in reconciliation/registry-adjacent code surviving because
+  some *other* part of the pipeline (a single-claim-per-audit design, a
+  downstream truthiness guard) currently keeps the mutated branch
+  unreachable. Worth watching for a third instance — if this keeps
+  happening, it may be worth a standing note in the mutation-testing
+  section of the brief itself about checking reachability before
+  concluding "missing test."
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Still
+   exactly 3, unchanged in membership for the second night running.
+   #29 has now been `dirty` for three consecutive nights (09-23 through
+   tonight) without anyone rebasing it — if a future run has the queue
+   room to pick a task, resolving that conflict (merge `master` into
+   `nightly/2026-09-22` and re-push) would be a small, safe, high-value
+   use of a slot, since #29's own diff (departed-officer handling in
+   `reconcile.py`) is unlikely to conflict semantically with anything
+   `master` has gained since (Belgian companies, publications, this
+   session's own capped-night notes).
+2. **`verify.py`'s `_ror_country` first-vs-last `locations` gap** (found
+   tonight) is a small, self-contained, low-risk test-only PR whenever
+   there's queue room: a synthetic ROR fixture with two `locations`
+   entries in different countries, pinning that index `[0]` is the
+   intended one. Low priority relative to the items below, but genuinely
+   ready to pick up with no further research needed.
+3. **The core architectural gap is still the top priority and still
+   untouched tonight** — capped-night rules correctly kept it off the
+   table again, for the second night running. Once the queue clears
+   enough for real feature work, re-verify OpenAlex's live rate limits
+   before extending the reverse path further, per every recent entry's
+   standing caveat.
+4. **09-25's already-written, already-verified `flags.py` regression
+   test** (the `rec_contra` disjunct in `f_contradicted` — a subject with
+   one confirmed identifier and one register-contradicted company role
+   silently reading PASSED instead of TRIGGERED) is still unapplied.
+   Full source is in that entry, ready to paste into
+   `tests/test_flags.py::TestMutationSurvivorsFlags` — still no
+   re-derivation needed, still just waiting on queue room.
+5. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw headings
+   for a "(15)" section; the literal word-wrap duplicate; the two
+   ROR-dead-code write-ups) is unchanged, still cheap, still low
+   priority, exact fix still spelled out in 09-25's entry.
+6. If a second publications source (Semantic Scholar, per BACKLOG.md's
+   "Not done" note under the OpenAlex slice) is ever built: write the
+   two-source `f_output` test tonight's `flags.py` finding names *at the
+   same time*, not after — the survivor described above will stop being
+   equivalent the moment that lands.

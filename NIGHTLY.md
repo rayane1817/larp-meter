@@ -6173,3 +6173,258 @@ find anything new, per several recent nights' own conclusion.
    two-source `f_output` test tonight's `flags.py` finding names *at the
    same time*, not after — the survivor described above will stop being
    equivalent the moment that lands.
+
+## 2026-09-27 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Third consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, unchanged in membership since 09-22 —
+re-checked fresh tonight (mergeability, CI, and review comments), not
+carried forward:
+
+| PR | Branch | Mergeable | CI | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with master — flagged 09-23, now unresolved for **five** consecutive nights) | green | 0 |
+| #30 | `nightly/2026-09-23` | clean | green | 0 |
+| #31 | `nightly/2026-09-24` | clean | green | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not**
+open a new PR or push a new branch. This entry is committed NIGHTLY.md-only
+to `nightly/2026-09-24` (#31, still the newest open branch), touching no
+other file.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly, not carried forward:
+`awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f' BACKLOG.md | grep -c '^### '`
+→ **17** raw headings, **11** `[FIXED]`, **1** `[PARTIALLY FIXED]` —
+identical to 09-25's and 09-26's own recounts (same duplicate-heading
+pair, same explanation). Collapsed:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged for the
+third night running.**
+
+### What I did
+
+Mandatory mutation-testing pass, deliberately targeting **lines the two
+prior capped nights had not already tried** in the four required files,
+rather than re-running the same four mutations a third time — repeating
+09-25/09-26's exact mutations would have re-derived the same three
+conclusions (two equivalent mutants, one cosmetic gap) without adding
+anything. Ten mutations attempted across the four files; nine were caught
+immediately, one survived and is a real, previously-untested gap.
+
+**`names.py` — six attempts, all caught, confirming the file's mutation
+surface is close to exhausted for now.** `at_an_end`'s `parts[0] ==
+matched or parts[-1] == matched` → `and` (10 failures); `mine_is_latin !=
+blob_is_latin` → `==` (61 failures + 11 errors); `tokens()`'s `split |
+joined` → `split & joined` (1 failure,
+`test_double_barrel_surname_still_matches_on_its_final_half`);
+`len(present) >= 2` → `> 2` (44 failures + 11 errors); plus the two
+already-tried lines from 09-26 were not repeated. This matches
+BACKLOG.md's own note (~line 935) that a prior 13-mutation sweep of
+`names.py`/`name_matches` already found and pinned 4 real gaps and 1
+equivalent mutant — there isn't much surface left in this file that
+hasn't already been walked.
+
+**Incidental finding while reading `names.py`: `initials()` (line 65) is
+dead code.** `grep -rn "\.initials(" larp_meter/*.py tests/*.py` returns
+nothing — no production call site and no test. Same shape as the
+already-documented `verify.py` `_name_matches` dead code (BACKLOG.md
+MODERATE section, "No contract and no observability..."; re-confirmed
+live tonight, current line verify.py:247 — the write-up's line numbers
+137/160-162 are stale as the file has grown, but the finding itself still
+holds exactly as described). Neither is fixed tonight (capped night,
+NIGHTLY.md-only); noting `initials()` here since it isn't in BACKLOG.md
+yet under either name.
+
+**`verify.py` — three attempts, all caught.** `_is_ambiguous_acronym`'s
+`" " not in stripped` → `" " in stripped` (2 failures, an MIT/Philippines
+fixture); `_disclaims_authorship`'s `bool(context) and bool(...)` → `or`
+(6 failures, the retraction end-to-end test); `_significant_tokens`'s
+`len(t) > 1` → `len(t) > 0` (1 failure, the "A & M" stopword-vs-initial
+test). No new finding — the helper functions here are thoroughly pinned.
+
+**`flags.py` — four attempts; three caught, one real survivor.**
+`f_experience`'s `claimed not in dom.CREDENTIAL_GATED` → `in` (14
+failures) and `f_vague_partnerships`'s `len(vague) >= 2 and len(vague) >
+len(concrete)` → `>=` (2 failures) were both caught immediately. The
+survivor:
+
+- Mutation: `_rec_confirmed_summary`'s `if len(companies) <
+  len(confirmed):` → `if len(companies) <= len(confirmed):`. Full suite
+  stayed green: 662/662.
+- Traced why: `companies = [r for r in confirmed if r.kind ==
+  "company"]`. When `confirmed` (the CONFIRMED-outcome reconciliations
+  passed to flag 11's PASSED branch) contains **only** company-kind
+  entries, `len(companies) == len(confirmed)` — a tie. The original `<`
+  correctly treats a tie as "no publications reconciliation is present,
+  so don't credit one"; the mutated `<=` treats the same tie as "credit
+  one anyway".
+- Confirmed the fabrication directly, not just the tie logic: ran
+  `_rec_confirmed_summary([Reconciliation(company="Vane Systems AG",
+  outcome=CONFIRMED, detail="named")])` under both versions. Original:
+  `"The commercial register names the subject at 1 claimed company"`.
+  Mutated: the same text plus `"; OpenAlex holds a scholarly record
+  consistent with the claimed publication volume, tied to the subject by
+  a stated institution or ORCID"` — a flat fabrication, since no
+  publications-kind reconciliation exists anywhere in the input. This is
+  the credit-side mirror of a false accusation: crediting the subject
+  with independent scholarly corroboration that was never checked, in a
+  PASSED description on flag 11 (the ORANGE-floored contradiction flag),
+  which is exactly the kind of overstated evidence the project's "existence
+  is not attribution" principle exists to prevent, just running in the
+  generous direction instead of the accusing one.
+- Root cause of the gap: `tests/test_reconcile.py`'s existing
+  `test_a_confirmed_company_role_passes_flag_11_without_any_identifier`
+  (line 305) builds exactly this single-company, no-publications case and
+  asserts only `result.status == PASSED` — it never inspects
+  `result.description`, so the fabricated OpenAlex sentence would have
+  sailed through unnoticed even in production, not just under the
+  mutation.
+- Wrote the regression test first, watched it fail against the mutated
+  line (`AssertionError: 'OpenAlex' unexpectedly found in ...`), then
+  watched it pass restored. Reverted before committing — a capped night
+  carries NIGHTLY.md only. Full source, ready to paste into
+  `tests/test_reconcile.py`'s `TestFlag11UsesReconciliation` class
+  (immediately after `test_a_confirmed_company_role_passes_flag_11_without_any_identifier`,
+  before `test_notes_alone_leave_flag_11_undecided`):
+
+  ```python
+      def test_a_confirmed_company_role_alone_never_credits_a_nonexistent_openalex_record(self):
+          """Mutation `len(companies) < len(confirmed)` -> `<=` in
+          _rec_confirmed_summary survived: with a single CONFIRMED
+          company-kind reconciliation and nothing else, companies and
+          confirmed are the same length (1 == 1), and `<=` -- unlike `<` --
+          is true on that tie. The summary then appends "OpenAlex holds a
+          scholarly record consistent with the claimed publication volume,
+          tied to the subject by a stated institution or ORCID" even though
+          no publications-kind reconciliation exists anywhere in `confirmed`.
+          Existence is not attribution in either direction: fabricating
+          corroborating evidence that was never checked is the credit-side
+          mirror of a false accusation, and the existing
+          test_a_confirmed_company_role_passes_flag_11_without_any_identifier
+          only asserted flag 11's status, never its description text, so it
+          passed unmodified under the mutation."""
+          r = rc.Reconciliation(company="Vane Systems AG", outcome=rc.CONFIRMED, detail="named")
+          result = evaluate(self._ctx(r))[11]
+          self.assertEqual(result.status, PASSED)
+          self.assertNotIn("OpenAlex", result.description)
+  ```
+
+**`scoring.py` — no new attempt tonight.** Two prior nights (09-26's spot
+check, plus the file's own long-standing thorough pinning) already cover
+its main tie-break and boundary logic; skimmed `category_scores` and
+`_apply_floors` for an untried line and found the remaining candidates
+(the `r is None or r.status not in (...)` filter, the boundary conditions
+already tested at lines 260-310 of `tests/test_scoring.py`) already
+directly pinned by name in that file's own docstrings. Not claiming a
+mutation attempt here would be dishonest bookkeeping — recording the
+skip explicitly instead of inventing a fourth attempt.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `names.py` | `at_an_end`: `parts[0] == matched or parts[-1] == matched` → `and` | Caught (10 failures) |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught (61 failures, 11 errors) |
+| `names.py` | `tokens()`: `split \| joined` → `split & joined` | Caught (1 failure) |
+| `names.py` | `len(present) >= 2` → `> 2` | Caught (44 failures, 11 errors) |
+| `verify.py` | `_is_ambiguous_acronym`: `" " not in stripped` → `" " in stripped` | Caught (2 failures) |
+| `verify.py` | `_disclaims_authorship`: `and` → `or` | Caught (6 failures) |
+| `verify.py` | `_significant_tokens`: `len(t) > 1` → `len(t) > 0` | Caught (1 failure) |
+| `flags.py` | `f_experience`: `claimed not in dom.CREDENTIAL_GATED` → `in` | Caught (14 failures) |
+| `flags.py` | `f_vague_partnerships`: `len(vague) >= 2 and len(vague) > len(concrete)` → `>=` | Caught (2 failures) |
+| `flags.py` | `_rec_confirmed_summary`: `len(companies) < len(confirmed)` → `<=` | **Survived — real gap.** Fabricates an "OpenAlex holds a scholarly record..." sentence on flag 11 when only a company reconciliation is confirmed. Regression test written, verified, reverted (source above). |
+| `scoring.py` | (skipped — see note above) | — |
+
+Files mutation-tested so far, by night: `scoring.py` (09-20, 09-23,
+09-26), `names.py` (09-15, 09-20, 09-23, 09-26, 09-27), `flags.py`
+(09-16, 09-23, 09-25, 09-26, 09-27), `verify.py` (09-16, 09-20, 09-23,
+09-24, 09-26, 09-27). All four have now had at least one real pass;
+09-27 is the first night to deliberately avoid repeating a prior night's
+exact mutation in the files it touched.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section heading split directly (17 raw / 11
+  `[FIXED]` / 1 `[PARTIALLY FIXED]`) — matches 09-25/09-26 exactly,
+  unchanged.
+- Re-confirmed `Verifier._name_matches` (BACKLOG.md MODERATE, "No
+  contract and no observability at the extract->verify seam") is still
+  dead code: `grep -n "_name_matches\b" larp_meter/verify.py tests/*.py`
+  returns only its own definition, now at verify.py:247 (the write-up's
+  cited lines 160-162 have drifted as the file grew — the finding is
+  otherwise unchanged and still accurate).
+- New, not yet in BACKLOG.md under either name: `names.initials()`
+  (names.py:65) is likewise dead code — zero call sites in production or
+  tests. Same shape as `_name_matches`, smaller (a 2-line pure function
+  with no side effects, so the fix-direction "delete it" from the
+  `_name_matches` write-up applies here too whenever that MODERATE item
+  gets picked up).
+- Did not re-investigate any CRITICAL/MAJOR finding's substance beyond
+  this tonight — budget went to the mutation pass, which is itself where
+  the `flags.py` survivor and the `initials()` dead code turned up.
+
+### What I learned
+
+- **Repeating the exact same mutation on a second or third capped night
+  is close to pure waste.** 09-25 and 09-26 each ran the same four
+  mutations and got the same three conclusions; tonight deliberately
+  picked ten different lines instead and found one real gap in the first
+  file that hadn't had a second, differently-targeted pass. When a queue
+  cap forces several consecutive mutation-only nights, each one should
+  pick genuinely new lines, not re-verify the same ones — the log above
+  (which mutation was tried on which night) exists specifically so a
+  future run can check this before picking a target.
+- **A test that only asserts `.status` and never `.description` can hide
+  a fabricated evidence sentence indefinitely**, even in code birthed
+  alongside a thorough test file. This is the same shape as the
+  `_ror_country` cosmetic-suffix gap (09-26) and the `f_contradicted`
+  `rec_contra` disjunct (09-25): recent reconciliation-adjacent code
+  keeps getting less scrutiny on its *generated text* than on its status
+  transitions, even though the text is exactly what a due-diligence
+  reader actually reads. Worth treating "does any test read
+  `.description`/`.detail` for this branch" as its own checklist item
+  the next time flags.py or reconcile.py grows a new PASSED/UNKNOWN
+  message.
+- Dead code (`initials()`, `_name_matches`) tends to survive silently in
+  this codebase specifically in small, self-contained pure functions with
+  no side effects — nothing breaks by leaving them, so nothing forces
+  their discovery except deliberately grepping for call sites while
+  reading nearby code for an unrelated reason, which is how both of
+  tonight's and 09-24's PR #31 instance were found.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Still
+   exactly 3. #29 (`nightly/2026-09-22`) has now been `dirty` for **five**
+   consecutive nights (09-23 through tonight). If a future run has queue
+   room, merging `master` into `nightly/2026-09-22` and re-pushing is
+   still small, safe, and increasingly overdue — #29's diff (departed-
+   officer handling in `reconcile.py`) is still unlikely to conflict
+   semantically with anything master has gained since.
+2. **Apply tonight's `flags.py` regression test** (full source above,
+   pastes directly into `tests/test_reconcile.py`'s
+   `TestFlag11UsesReconciliation`) the moment there's queue room — no
+   re-derivation needed, already verified failing-then-passing.
+3. **09-25's already-written `flags.py` regression test** (the
+   `rec_contra` disjunct in `f_contradicted`, full source in that entry)
+   is also still unapplied and still just waiting on queue room — now two
+   ready-to-paste tests queued behind the cap, both in the same file.
+4. **The core architectural gap (the one-way, claim-anchored verification
+   funnel) is still the top priority and still untouched** — capped-night
+   rules correctly kept it off the table for the third night running.
+   Once the queue clears enough for real feature work, re-verify
+   OpenAlex's live rate limits before extending the reverse path further.
+5. **`names.initials()` and `verify.py`'s `Verifier._name_matches`**
+   (both dead code, confirmed tonight) are both small, safe, near-zero-risk
+   deletions whenever a future PR already touches either file for another
+   reason — not worth a dedicated PR on their own, per the project's own
+   standing preference against bare mechanical-only changes.
+6. **`verify.py`'s `_ror_country` first-vs-last `locations` gap** (found
+   09-26) is still open, still a small self-contained test-only PR
+   whenever there's queue room.
+7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw headings
+   for a "(15)" section) is unchanged, still cheap, still low priority.

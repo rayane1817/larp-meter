@@ -6428,3 +6428,255 @@ exact mutation in the files it touched.
    whenever there's queue room.
 7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw headings
    for a "(15)" section) is unchanged, still cheap, still low priority.
+
+---
+
+## 2026-09-28 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Fourth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, unchanged in membership since 09-22 —
+re-checked fresh tonight (mergeable state via `pull_request_read`, CI via
+the `tests` GitHub Actions workflow rather than the legacy commit-status
+API, which this repo doesn't populate — 0 statuses there is not the same
+as CI not having run), and review comments:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with master — flagged 09-23, now unresolved for **six** consecutive nights) | success | 0 |
+| #30 | `nightly/2026-09-23` | clean | success | 0 |
+| #31 | `nightly/2026-09-24` | clean | success (run #61, on tonight's soon-to-be-previous head `9dfefc1`) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not**
+open a new PR or push a new branch. This entry is committed NIGHTLY.md-only
+to `nightly/2026-09-24` (#31, still the newest open branch — no new
+branches were created since 09-25), touching no other file.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly rather than carried forward, and cross-checked a
+discrepancy before trusting it: a naive `grep -c '\[PARTIALLY FIXED\]'`
+over the CRITICAL section returns 2, not 1 — but the second hit is a
+body-text cross-reference inside the "Word-wrapped negation loses its
+scope..." finding (it mentions the confidentiality-reasons finding by
+name, "[PARTIALLY FIXED] above"), not a second heading. Counting only
+`### ` headings gives the same split every prior night since 09-25 has
+found: **17 raw headings, 11 `[FIXED]`, 1 `[PARTIALLY FIXED]`.** Collapsing
+the two known duplicate pairs (the literal word-wrapped-negation heading
+appearing once bare and once `[FIXED]`; the two independently-written
+`[FIXED]` write-ups of the same HANDLERS/extract.py dead-ROR-code bug)
+gives the long-carried:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+The 4 still-open CRITICALs remain the core one-way/claim-anchored funnel
+finding and its three near-duplicate write-ups. Not re-editing BACKLOG.md's
+heading duplication tonight (capped night, NIGHTLY.md-only) — the merge
+instructions are already spelled out in 09-25's entry for whichever night
+has queue room.
+
+### What I did
+
+Mandatory mutation-testing pass across all four required files, one real
+attempt each, deliberately on lines the prior four capped nights (09-24
+through 09-27) had not already tried — checked the running per-file log
+at the bottom of recent entries before picking targets, per 09-27's own
+"repeating a mutation is close to pure waste" lesson. Also re-verified the
+PR queue's mergeable/CI state directly via the GitHub API rather than
+trusting the carried table, and recounted the backlog tally (found and
+resolved the `[PARTIALLY FIXED]` grep discrepancy above).
+
+**`scoring.py` — a real, previously untested gap, and it's a different
+shape than anything found in this file before: an output field nothing
+downstream reads.**
+
+- Mutation: `score()`'s own `"triggered"` key,
+  `sum(1 for r in results.values() if r.status == TRIGGERED)` →
+  `... if r.status == PASSED)`. Full suite stayed green: **661/661.**
+- Traced why, rather than assuming "just untested": `grep -rn
+  '\["decided"\]\|\["triggered"\]\|"decided"\|"triggered"'
+  larp_meter/*.py tests/*.py` outside `scoring.py` itself returns nothing.
+  `audit.run_audit` (`larp_meter/audit.py:76-83`) is the only production
+  caller of `scoring.score()`, and it cherry-picks specific keys out of
+  the returned `verdict` dict by name — `level`, `larp_score` (`score`),
+  `raw_score`, `scored`, `evidence_coverage_pct` (`coverage`), `summary`,
+  `categories` — but never `verdict["decided"]` or `verdict["triggered"]`.
+  Neither key reaches the CLI's JSON output, the terminal/markdown/HTML
+  renderers, or any test assertion anywhere in `tests/`. They are computed
+  correctly every call and then silently dropped by the pipeline's one
+  real caller.
+- This is not the same shape as the file's own well-pinned `MIN_COVERAGE`/
+  `_apply_floors`/LEVELS boundaries (all reachable and read by
+  `audit.run_audit`), and it is not the same shape as `names.initials()`
+  or `verify.py`'s `_ror_v1` fallback either (those are unreachable code
+  paths; this is *reachable, executing* code whose *output* nothing reads).
+  It's closer in kind to the reconciliation "description text nothing
+  asserts" pattern 09-25/09-26/09-27 each found in `flags.py` and
+  `verify.py` — except here the unread data isn't prose a human due-
+  diligence reader might skim past, it's a numeric field any *direct*
+  caller of `scoring.score()` (which is how most of `test_scoring.py`'s
+  own 30+ tests already call it, not through `run_audit`) would reasonably
+  trust as part of the function's contract.
+- Severity: low and cannot currently produce a false accusation or a false
+  clearance — the field is inert in the shipped CLI pipeline today, since
+  `run_audit` never lets it reach a report. The risk is purely latent: any
+  future code that starts reading `verdict["decided"]`/`verdict["triggered"]`
+  directly (a new renderer, a library consumer calling `scoring.score()`
+  itself, a future audit.py refactor that widens what it forwards) would
+  inherit an unpinned field with zero regression coverage.
+- **Recommendation for whoever picks this up, deliberately not decided
+  tonight (capped night, no code changes):** add a test, don't delete the
+  field. Unlike `initials()`/the ROR v1 fallback, this isn't unreachable —
+  it's live, correct, public-function output that just happens to have no
+  consumer *yet*; deleting it would be removing part of `scoring.score()`'s
+  documented-by-example contract (most of this file's own test suite
+  calls `score()` directly and could start relying on either key at any
+  time) rather than clearing away genuinely dead code. A two-line test
+  suffices — written and verified tonight, reverted rather than committed
+  per the capped-night rule:
+
+```python
+    def test_decided_and_triggered_counts_match_the_results_passed_in(self):
+        """`score()`'s own `decided`/`triggered` keys are computed but never
+        read by `audit.run_audit` (which cherry-picks `level`, `score`,
+        `raw_score`, `scored`, `coverage`, `summary`, `categories` only by
+        name) or by any existing test -- a mutation swapping `PASSED` for
+        `TRIGGERED` on the `triggered` key's own status check left the
+        whole suite green. Any direct caller of `scoring.score()`, which is
+        how most of this file's own tests already use it, still receives
+        these two keys as part of the function's contract."""
+        results = {1: FlagResult(TRIGGERED), 2: FlagResult(TRIGGERED),
+                   3: FlagResult(PASSED), 4: FlagResult(UNKNOWN)}
+        verdict = score(results)
+        self.assertEqual(verdict["decided"], 3)
+        self.assertEqual(verdict["triggered"], 2)
+```
+
+  Fits directly into `tests/test_scoring.py`'s `TestScoring` class (no new
+  imports needed — `FlagResult`, `TRIGGERED`, `PASSED`, `UNKNOWN`, `score`
+  are all already imported there). Verified failing on the mutated line
+  (`3 != 2`) and passing restored before reverting.
+
+**`names.py`, `verify.py`, `flags.py` — one attempt each, all caught,
+confirming rather than extending coverage:**
+
+- `names.py`: `tokens()`'s bare-initial filter, `len(t) > 1` → `>= 1` (the
+  split-reading half, not the already-pinned surname-abbreviation `extra`
+  filter inside `name_matches` — a different line, same shape). Caught: 1
+  failure, `test_bare_single_letter_given_name_still_matches_via_surname_alone`
+  — a bare initial like "A" would otherwise count as a real token and
+  break the "A. Lovelace"-style abbreviation match this tool leans on for
+  Chinese/Korean/Vietnamese/Hungarian surname-first names too.
+- `verify.py`: `verify_nct`'s `who = ", ".join([n for n in ([sponsor] +
+  officials) if n][:4])` → `[:1]`. Caught: `test_clinical_trial_records_
+  existence_without_claiming_attribution` fails because the sponsor sits
+  first in the list, so a `[:1]` slice silently drops every named
+  official — `"Jane Roe"` no longer appears in `claim.detail`, and a
+  trial's own principal investigator (the one name a human reader most
+  needs to see to judge attribution by hand) would go missing from a real
+  report.
+- `flags.py`: `f_contradicted`'s retraction guard, `if retracted and not
+  standing:` → `if retracted or not standing:`. Caught:
+  `test_standing_papers_plus_one_retraction_pass_with_the_retraction_
+  named` fails (`PASSED` expected, `UNKNOWN` got) — three standing,
+  confirmed papers plus one retracted one would wrongly fall into the
+  "nothing stands as corroboration" branch under the mutation, exactly
+  the false-accusation shape this flag's own comments warn against
+  reintroducing.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `score()`: `"triggered"` key's `r.status == TRIGGERED` → `== PASSED` | **Survived — real gap.** `verdict["decided"]`/`["triggered"]` are computed but never read by `audit.run_audit` or any test. Live, correct, unpinned public-function output — not dead code. Test written, verified, reverted (source above). |
+| `names.py` | `tokens()`: split reading's `len(t) > 1` → `>= 1` | Caught (1 failure) |
+| `verify.py` | `verify_nct`: officials/sponsor `[:4]` → `[:1]` | Caught (1 failure) |
+| `flags.py` | `f_contradicted`: `if retracted and not standing:` → `or` | Caught (1 failure) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, **09-28**), `names.py` (09-15, 09-20,
+09-23, 09-26, 09-27, **09-28**), `flags.py` (09-16, 09-23, 09-25, 09-26,
+09-27, **09-28**), `verify.py` (09-16, 09-20, 09-23, 09-24, 09-26, 09-27,
+**09-28**). Tonight is the first capped night whose real finding landed in
+`scoring.py` specifically — the file previous nights kept concluding was
+"most thoroughly pinned" and skipping. It took a different kind of check
+(tracing every consumer of a function's *return dict*, not just mutating
+comparison operators inside it) to find something there.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section heading split directly and, this time,
+  traced down a real (if shallow) discrepancy in the recount method itself
+  before accepting it — the naive `grep -c` over the whole section body
+  overcounts `[PARTIALLY FIXED]` by one because of a body-text
+  cross-reference, not a second heading. Counting only `### ` lines gives
+  17/11/1, matching every night since 09-25. Tally unchanged: **10 [FIXED]
+  / 1 [PARTIALLY FIXED] / 4 still open.**
+- Did not investigate any individual CRITICAL/MAJOR/MODERATE/MINOR
+  finding's substance beyond that bookkeeping check — all of tonight's
+  budget went to the mutation-testing pass, which is itself where the
+  `scoring.py` finding turned up.
+
+### What I learned
+
+- **"Nothing reads this value" is a distinct mutation-survivor shape from
+  both "dead code" and "undertested description text," and it needs its
+  own check.** Dead code (`initials()`, the ROR v1 fallback) is proven by
+  showing no *input* can ever reach a branch. Undertested description text
+  (the `_rec_confirmed_summary`/`_ror_country` findings from 09-25 through
+  09-27) is proven by showing a test only checks `.status`, never
+  `.description`/`.detail`. Tonight's finding needed a third check: grep
+  every consumer of a function's *return value* by key name, across the
+  whole call graph, not just within the function or its own direct tests.
+  `scoring.score()`'s own test file calls it 30+ times and never once
+  reads `verdict["decided"]` or `verdict["triggered"]` either — the gap
+  survives not because the code is unreachable and not because a test
+  under-asserts on a value it already has in hand, but because *nothing
+  anywhere ever asked for these two specific keys* even though the
+  function always freely hands them out.
+- Distinguishing "delete this, it's unreachable" from "test this, it's a
+  live but unconsumed public contract" matters for the recommendation, not
+  just the finding: unlike `initials()`/the ROR v1 fallback (where 09-24's
+  and 09-27's own evidence-gathering proved deletion was safe), nothing
+  here proves `scoring.score()`'s callers will *stay* limited to
+  `audit.run_audit`'s cherry-picked subset forever — most of this file's
+  own tests already prove direct callers exist and already lean on other
+  keys of the same dict. Recommending a test rather than a deletion,
+  opposite of the last two "found dead output, deleted it" nights.
+- Checking the running per-file mutation log before picking a target
+  (09-27's technique) continues to pay off: three of tonight's four
+  attempts landed on genuinely fresh lines on the first try rather than
+  re-deriving an already-caught result.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Still
+   exactly 3. #29 (`nightly/2026-09-22`) has now been `dirty` for **six**
+   consecutive nights (09-23 through tonight) — rebasing it (merge
+   `master` into the branch, re-push) remains small, safe, and now the
+   single most overdue piece of queue-clearing housekeeping available,
+   the moment there's a slot to spend on it.
+2. **Apply tonight's `scoring.py` regression test** (full source above,
+   pastes directly into `tests/test_scoring.py`'s `TestScoring` class, no
+   new imports needed) the moment there's queue room.
+3. **Two other ready-to-paste regression tests are still queued behind
+   the cap**, both in `flags.py`/`reconcile.py`-adjacent code, both fully
+   written and verified in earlier entries: 09-25's `f_contradicted`
+   `rec_contra` disjunct test (full source in that entry) and 09-27's
+   `_rec_confirmed_summary` tie-break test (full source in that entry).
+   Three ready tests now queued in total — worth landing together in one
+   small PR once the queue clears, rather than three separate ones.
+4. **The core architectural gap (the one-way, claim-anchored verification
+   funnel) is still the top priority and still untouched** — capped-night
+   rules correctly kept it off the table for the fourth night running.
+   Once the queue clears enough for real feature work, re-verify
+   OpenAlex's live rate limits before extending the reverse path further,
+   per every recent entry's standing caveat.
+5. **`names.initials()`, `verify.py`'s `Verifier._name_matches`, and now
+   `scoring.py`'s "decided"/"triggered" dead-output pair** are all small,
+   low-risk cleanups (two deletions, one added test) whenever a future PR
+   already touches the relevant file for another reason.
+6. **`verify.py`'s `_ror_country` first-vs-last `locations` gap** (found
+   09-26) is still open, still a small self-contained test-only PR.
+7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw headings
+   for a "(15)" section) is unchanged, still cheap, still low priority.

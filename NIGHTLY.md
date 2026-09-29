@@ -6680,3 +6680,247 @@ comparison operators inside it) to find something there.
    09-26) is still open, still a small self-contained test-only PR.
 7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw headings
    for a "(15)" section) is unchanged, still cheap, still low priority.
+
+---
+
+## 2026-09-29 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Fifth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, unchanged in membership since 09-22.
+Re-checked mergeable state and CI fresh via the GitHub API (the `tests`
+GitHub Actions workflow — this repo's legacy commit-status API stays at
+0 statuses regardless, that is not the same as CI not running) rather
+than carrying the table forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with master — flagged 09-23, unresolved for **seven** consecutive nights now) | success (run #53) | 0 |
+| #30 | `nightly/2026-09-23` | clean | success (run #57) | 0 |
+| #31 | `nightly/2026-09-24` | clean | success (run #62, on tonight's soon-to-be-previous head `4cbebe2`) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not**
+open a new PR or push a new branch. This entry is committed NIGHTLY.md-only
+to `nightly/2026-09-24` (#31, still the newest open branch — no new
+branches have been created since 09-25), touching no other file.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly against the current `## CRITICAL (15)` section rather
+than carried forward: 17 raw `### ` headings, 11 carrying `[FIXED]`, 1
+carrying `[PARTIALLY FIXED]`. Collapsing the two known duplicate pairs
+(the bare "Word-wrapped negation..." heading immediately followed by its
+own `[FIXED]` write-up; the two independently-authored `[FIXED]`
+write-ups of the same HANDLERS/extract.py dead-ROR-dispatch bug) gives
+the long-standing:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+
+### What I did
+
+Mandatory mutation-testing pass across all four required files, checking
+the running per-file log at the bottom of recent entries first (per
+09-27/09-28's own lesson that repeating an already-caught mutation is
+close to pure waste) and picking lines those nights had not already
+tried.
+
+**`verify.py` — a real, previously-untested survivor, but an equivalent
+mutant once traced into its caller, not a coverage gap:**
+
+- Mutation: `verify_orcid`'s emptiness guard,
+  `self._attribute(claim, [full] if full else [], "ORCID record", url)`
+  → `self._attribute(claim, [full], "ORCID record", url)` (drop the
+  guard that keeps an ORCID holder's blank/private name from being
+  passed to `_attribute` as a candidate). Full suite stayed green:
+  **661/661.**
+- Traced rather than assumed: `_attribute` (verify.py:248-266) rebuilds
+  its own `usable` list from whatever `candidate_names` it is handed —
+  `usable = [n for n in candidate_names or [] if n and n.strip()]` — so
+  a blank `full` (`""`, from an ORCID record with no given/family name)
+  is filtered right back out by `_attribute` itself regardless of
+  whether `verify_orcid` passed `[]` or `[""]`. Both paths reach the
+  exact same `elif not usable:` → `UNCHECKABLE` branch. Confirmed by
+  hand: `Verifier(...)._attribute(claim, [""], "ORCID record", url)` and
+  `Verifier(...)._attribute(claim, [], "ORCID record", url)` produce
+  byte-identical `claim.status`/`claim.detail`.
+- Not a fairness gap: this is belt-and-suspenders defensive code — the
+  outer guard in `verify_orcid` and the inner filter in `_attribute`
+  both exist to stop the same "ORCID holder set their name private"
+  case from ever reading as a MISMATCH, and either one alone already
+  suffices. Not pinning this with a synthetic test, per the project's
+  own precedent (PR #30/#31 on the `_ror_names`/`_ror_country` v1
+  fallbacks): the guard is genuinely redundant, not silently broken,
+  and forcing a test onto behavior that can never diverge would just be
+  testing that Python's own `if`/`else` works. Worth a one-line
+  simplification (`self._attribute(claim, [full], ...)` unconditionally,
+  relying on `_attribute`'s own filter) the next time this file is
+  touched for another reason — not urgent enough to spend tonight's one
+  code-touching slot on, since a capped night carries NIGHTLY.md only.
+
+**`names.py`, `flags.py`, `scoring.py` — one or more attempts each, all
+either caught or already-known equivalent mutants, confirming rather
+than extending coverage:**
+
+- `names.py`: repeated the single-token loop's `if not extra or
+  all(w in mine for w in extra):` → `and` mutation independently,
+  without first re-reading 09-25/09-26's own log (should have checked
+  first, per the lesson above — caught after the fact). Same result:
+  **survived**, and independently re-derived the same reachability
+  argument 09-26 already proved formally — `present` is computed by
+  searching the *entire* blob for every token in `mine`, so any token
+  `w` split out of a single candidate's `words` that is also in `mine`
+  would already have been found by that whole-blob search, forcing
+  `len(present) >= 2` and routing execution to the two-token branch
+  before this loop is ever reached with `extra` non-empty and
+  `all(w in mine for w in extra)` true. Confirmed with four constructed
+  candidates (`Anne-Sophie Martin`/`Martin AS`, `Zhang Wei`/`Wei Zhang`,
+  `Maria Garcia Lopez`/`Garcia Maria`, `Nguyen Van An`/`An Nguyen`) —
+  every one that has a second real token match takes the `len(present)
+  >= 2` branch directly, never this one. No new information for
+  BACKLOG.md; recorded here mainly as a caution to future nights to
+  check the per-file mutation log *before* mutating, not just before
+  writing up.
+  Also tried `names.py`'s `at_an_end = bool(parts) and (parts[0] ==
+  matched or parts[-1] == matched)` → `and` (surname-first-or-last check
+  narrowed to "only a mononym"): **caught** — 10 failures, including the
+  Chinese/Korean/Vietnamese surname-first regressions this guard exists
+  for.
+- `flags.py`: `f_output`'s newest branch (commit `f8d32b0`, landed
+  2026-09-22, never mutation-tested before tonight — chosen because
+  "review the newest modules" is one of the standing lenses and this
+  code has been live for a week with no dedicated pass). Two mutations:
+  `if any(r.outcome == rc.CONFIRMED for r in pubs):` → `!=` (**caught**
+  — `test_a_tied_record_is_verifiable_output_even_among_namesakes` and
+  `test_an_unconfirmed_publication_claim_is_not_called_absent` both
+  fail), and dropping the trailing `if pubs:` UNKNOWN-with-evidence
+  guard (**caught** — the unconfirmed-claim test's `assertNotIn("No
+  output is claimed", ...)` fails, since removing the guard lets a
+  claimed-but-untied publication fall all the way through to the
+  generic "no output is claimed" text). This module's newest addition
+  is solidly pinned on both branches.
+- `scoring.py`: `score()`'s `larp = round(100 * trig_w / decided_w) if
+  decided_w else 0` → drop the `if decided_w else 0` guard. **Caught** —
+  `test_unknown_never_counts_as_passed` (an all-`UNKNOWN` `results`
+  dict, the exact "empty profile" case the test's own docstring names)
+  raises `ZeroDivisionError` instead of returning `INSUFFICIENT DATA`,
+  crashing the audit entirely rather than degrading gracefully. Real,
+  live protection, freshly confirmed rather than assumed.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `verify.py` | `verify_orcid`: `[full] if full else []` → `[full]` (drop the emptiness guard before `_attribute`) | Survived — **equivalent mutant**, traced to `_attribute`'s own `usable = [n for n in candidate_names or [] if n and n.strip()]` re-filtering the same way regardless. Redundant defensive code, not a coverage gap; a one-line simplification opportunity, not pinned. |
+| `names.py` | single-token loop: `if not extra or all(w in mine for w in extra):` → `and` | Survived — **re-derived, not new**; same equivalent-mutant conclusion 09-25/09-26 already reached and pinned in BACKLOG.md. Should have checked the log first. |
+| `names.py` | `at_an_end = bool(parts) and (parts[0] == matched or parts[-1] == matched)` → `and` | Caught (10 failures) |
+| `flags.py` | `f_output`'s reconciliation branch: `if any(r.outcome == rc.CONFIRMED for r in pubs):` → `!=` | Caught (3 failures) |
+| `flags.py` | `f_output`'s trailing `if pubs:` UNKNOWN guard, dropped | Caught (1 failure) |
+| `scoring.py` | `score()`: `if decided_w else 0` guard, dropped | Caught — `ZeroDivisionError` on an all-`UNKNOWN` `results` dict |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, **09-29**), `names.py` (09-15,
+09-20, 09-23, 09-26, 09-27, 09-28, **09-29**), `flags.py` (09-16, 09-23,
+09-25, 09-26, 09-27, 09-28, **09-29**), `verify.py` (09-16, 09-20, 09-23,
+09-24, 09-26, 09-27, 09-28, **09-29**).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section tally directly (17 headings, 11/1
+  split as above) — unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4
+  still open**.
+- **New observation, not acted on tonight (capped night, NIGHTLY.md
+  only):** the top CRITICAL entry ("Verification is a one-way,
+  claim-anchored funnel...") and its three open duplicates have not
+  been annotated since the 2026-08-30 `[IN PROGRESS]` note, but
+  `reconcile.py`'s three reverse-path slices (company roles against
+  Zefix and KBO/BCE, publication-volume claims against OpenAlex — all
+  landed 2026-09-22, described in this file's own 2026-09-22 entry and
+  in BACKLOG.md's "Shipped since" section) are real, shipped, tested
+  progress on exactly this finding's own fix direction: "reverse path
+  (subject -> registry -> record -> compare against claims)" now
+  exists end-to-end for two claim types, gated through `reconcile.gate()`
+  so only CONTRADICTED can count against anyone, matching the
+  finding's own safety requirement. The "Shipped since" entries already
+  say this ("Partially closes the top CRITICAL"), but the CRITICAL
+  section's own inline annotations — the thing a reader actually
+  checking "is this finding still open" would read first — do not yet
+  reflect it. This is a bookkeeping gap, not a code gap: the fix
+  direction's items (1) "merge providers.py into the claim layer" and
+  "run the provider chain in every mode" are still open (reconcile.py
+  is a parallel `Reconciliation` type, not a `Claim`), so the finding
+  should move from "open" to a new `[IN PROGRESS — nightly/2026-09-22]`
+  note, not to `[FIXED]`. Left BACKLOG.md untouched tonight per the
+  capped-night rule (NIGHTLY.md-only); recommending this annotation as
+  the next available BACKLOG.md-touching night's first small task.
+
+### What I learned
+
+- **Check the per-file mutation log *before* mutating, not just before
+  writing up.** Tonight independently re-ran and re-derived a mutation
+  (`names.py`'s `extra` loop `or`/`and`) that 09-25 and 09-26 had
+  already found, proven equivalent, and pinned in BACKLOG.md — wasted
+  effort that a five-minute `grep` against this file's own running log
+  would have caught before spending the time, not just when writing
+  this entry up. 09-27 and 09-28 both explicitly built this check into
+  their process and it paid off both times; tonight is a reminder of
+  what skipping it costs, not a new technique.
+- **"Equivalent mutant, traced into the caller" is now a three-time
+  pattern in this codebase, and it has a common shape worth naming for
+  future nights:** a producer function (`verify_orcid`, `_ror_names`)
+  carries a defensive guard whose entire effect is already reproduced by
+  a filter inside the one function that consumes its output
+  (`_attribute`, the ROR ranking loop's own `if not have: continue`).
+  The guard is not wrong or dead in the "unreachable" sense
+  (`initials()`, the ROR v1 schema fallback) — it executes and its
+  branch is taken — but removing it changes nothing observable because
+  the consumer re-derives the same filter independently. Worth checking
+  new mutation survivors against this shape specifically (does the
+  immediate caller already filter the same condition?) before assuming
+  "survived" means "untested gap."
+- Confirming BACKLOG.md's own bookkeeping (the CRITICAL-section
+  annotation gap above) took longer to articulate precisely than to
+  find — the substance (reconcile.py's slices) was already fully
+  described in two other places in this same file and in BACKLOG.md's
+  "Shipped since" section. The gap was purely that the *inline* note on
+  the finding itself, which is what a reader scanning "is this closed"
+  would actually check, was stale by three weeks of real, shipped work.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Still
+   exactly 3. #29 (`nightly/2026-09-22`) has now been `dirty` for
+   **seven** consecutive nights (09-23 through tonight) — rebasing it
+   (merge `master` into the branch, re-push) is still small, safe, and
+   still the single most overdue piece of queue-clearing housekeeping
+   available the moment there is a slot to spend on it.
+2. **Annotate BACKLOG.md's top CRITICAL entry and its three open
+   duplicates** with a `[IN PROGRESS — nightly/2026-09-22]` note
+   describing `reconcile.py`'s three reverse-path slices (see "What I
+   confirmed / refuted" above for the exact wording this needs) — a
+   small, low-risk, BACKLOG.md-only documentation fix, worth doing the
+   moment the queue has room (or even on a future capped night, since
+   the capped-night rule restricts *this* run to NIGHTLY.md but a future
+   run should re-check whether that restriction still makes sense to
+   extend to BACKLOG.md specifically before assuming it does).
+3. **Apply the three regression tests already written, verified, and
+   reverted on prior capped nights** (09-25's `f_contradicted`
+   `rec_contra` disjunct test, 09-27's `_rec_confirmed_summary` tie-break
+   test, 09-28's `scoring.py` `decided`/`triggered` test — full source
+   in each entry) the moment there is queue room, ideally landed
+   together in one small PR.
+4. **The core architectural gap is still the top priority and still
+   untouched** — capped-night rules correctly kept it off the table for
+   a fifth night running. Once the queue clears enough for real feature
+   work, re-verify OpenAlex's live rate limits before extending the
+   reverse path further, per every recent entry's standing caveat.
+5. **`names.initials()`, `verify.py`'s `Verifier._name_matches`,
+   `scoring.py`'s `decided`/`triggered` dead-output pair, and now
+   `verify_orcid`'s redundant emptiness guard** are all small, low-risk
+   cleanups (three deletions/simplifications, one added test) whenever a
+   future PR already touches the relevant file for another reason.
+6. **`verify.py`'s `_ror_country` first-vs-last `locations` gap** (found
+   09-26) is still open, still a small self-contained test-only PR.
+7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw
+   headings for a "(15)" section) is unchanged, still cheap, still low
+   priority.

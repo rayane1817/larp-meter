@@ -6924,3 +6924,265 @@ Files mutation-tested so far, by night (continuing the running log):
 7. **BACKLOG.md's CRITICAL-section heading bookkeeping** (17 raw
    headings for a "(15)" section) is unchanged, still cheap, still low
    priority.
+
+---
+
+## 2026-09-30 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Sixth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, unchanged in membership since 09-22 —
+eight days with zero human review activity on any of them. Re-checked
+mergeable state, CI and reviews fresh via the GitHub API rather than
+carrying the table forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with `master` — flagged 09-23, unresolved for **eight** consecutive nights now) | success (run #53) | 0 |
+| #30 | `nightly/2026-09-23` | clean | success (run #57) | 0 |
+| #31 | `nightly/2026-09-24` | clean | success (run #63, current head) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not**
+open a new PR or push a new branch. This entry is committed NIGHTLY.md-only
+to `nightly/2026-09-24` (#31, still the newest open branch — no new
+branches created since 09-25), touching no other file.
+
+**Flagging this explicitly rather than folding it into the routine table:**
+this is the sixth straight night the automation has found real, verified
+work (see below) and had nowhere to put it, and #29 has now carried an
+unresolved merge conflict for over a week. None of this requires urgent
+action — CI is green everywhere and nothing is a security issue — but a
+human hasn't looked at this queue in over a week and the situation is
+purely getting harder to unwind the longer it sits (more commits behind
+`master`, more independently-rediscovered findings piling up in this file
+instead of shipping). Worth a look when there's a free half hour: reviewing
+and merging #30 and #31 (both clean, both green, both small) would drop
+the queue to 1 and unblock real feature work on the core architectural
+gap, which has now sat untouched since 2026-08-27.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly against the current `## CRITICAL (15)` section (BACKLOG.md:1606-1944)
+rather than carried forward: 17 raw `### ` headings, 11 carrying `[FIXED]`,
+1 carrying `[PARTIALLY FIXED]`. Collapsing the two known duplicate pairs
+(the bare "Word-wrapped negation..." heading immediately followed by its
+own `[FIXED]` write-up; the two independently-authored `[FIXED]`
+write-ups of the same HANDLERS/extract.py dead-ROR-dispatch bug) gives the
+long-standing:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+
+Also re-confirmed 09-29's bookkeeping observation still holds: the top
+CRITICAL entry ("Verification is a one-way, claim-anchored funnel...",
+BACKLOG.md:1608) still has no `[IN PROGRESS — nightly/2026-09-22]` note
+for `reconcile.py`'s three shipped reverse-path slices (Zefix/KBO company
+roles, OpenAlex publication volume), even though those are real, tested,
+merged progress on exactly this finding's own fix direction. Its most
+recent inline note is still the 2026-08-30 one. Left untouched tonight
+(capped night, NIGHTLY.md-only) — this is a small, low-risk BACKLOG.md
+documentation fix the moment a future run has room to touch that file.
+
+### What I did
+
+Mandatory mutation-testing pass across all four required files. Checked
+this file's own running per-file log first and picked lines/branches not
+already listed there, one real production-code mutation per file, restoring
+the source and re-confirming a clean `python -m unittest discover` after
+every attempt (662 tests throughout).
+
+**`scoring.py` — a genuinely fresh survivor, but an equivalent mutant under
+the current `REGISTRY`, with a real latent gap once that changes:**
+
+- Mutation: `_apply_floors`'s `strongest = max(floored, key=lambda f:
+  _SEVERITY_ORDER.index(f["floor"]))` → `min(...)` (pick the *weakest*
+  triggered floor instead of the strongest when several TRIGGERED flags
+  carry one). Full suite stayed green: **662/662.**
+- Traced rather than assumed: `grep -n 'floor='` shows exactly one call
+  site in `flags.py` sets a non-`None` `floor` (flag 11, `floor="ORANGE"`).
+  `floored` (line 73-74's list comprehension) can therefore only ever have
+  length 0 or 1 today, and `max`/`min` over a list of at most one element
+  are identical. Not a coverage gap in the sense the project's own
+  "equivalent mutant, traced into the caller" pattern (see 09-29's entry)
+  names — same shape, different direction: here the *producer*
+  (`REGISTRY`) currently can't manufacture the input that would
+  distinguish the two functions, rather than a *consumer* re-deriving the
+  same filter.
+- Not fixed or pinned tonight (nothing to fix — the code is correct, just
+  untestable against the current flag set): recorded as a real latent gap
+  for whoever adds a second floored flag of different severity — `_apply_
+  floors`' whole reason to exist (per its own docstring: "stop a
+  categorically strong signal being averaged away") is specifically about
+  the multi-floor case, and that exact case has zero test coverage right
+  now because it cannot occur. Worth a synthetic test with two fake
+  `FLAG_BY_ID` entries the day this file is next touched for scoring
+  logic, to lock in "strongest wins" before a second floor makes it
+  possible to get wrong silently.
+
+**`names.py` — caught, confirming existing coverage:**
+
+- Mutation: `name_matches`'s `present = {t for t in mine if any(re.search(...)
+  for v in blob_variants)}` → `all(...)` (require a token to match in
+  *both* the hyphen-collapsed and un-collapsed blob readings, not just
+  one). **Caught** — `test_attached_name_match_is_symmetric`
+  (`tests/test_names.py`) fails: `name_matches("Ahmed Alsayed", ["Ahmed
+  Al-Sayed"])` goes from `True` to `False`, exactly the asymmetric-fold
+  regression this test exists to catch. Still fully protected.
+
+**`flags.py` — caught, but by a single test; worth naming the fragility:**
+
+- Mutation: `_is_career_start_anchor`'s `return any(str(year) in ctxt for
+  ctxt in degree_contexts)` → `all(...)`. **Caught** (1 failure,
+  `test_two_recent_role_dates_alone_still_dont_anchor_a_career`) — but
+  worth flagging *why* only one test catches it: `all()` over an *empty*
+  `degree_contexts` list is vacuously `True`, so the mutant doesn't just
+  weaken the "does a degree year match" check, it flips the "no degree
+  claims at all" case from "not anchored" to "anchored", letting `f_timeline`
+  fire TRIGGERED off zero corroborating evidence in that scenario instead
+  of resting at UNKNOWN. Only the one existing test happens to exercise
+  "years present, no degree claims, anchor question reachable and
+  decisive" — removing that specific test would make this invisible.
+  Recorded rather than acted on; a future dedicated test for `_is_career_
+  start_anchor(year, ctx, [])  == False` would make the protection
+  explicit instead of incidental.
+
+**`verify.py` — a real, previously-uncaught survivor, test written and
+verified, reverted per the capped-night rule:**
+
+- Mutation: `_is_retracted`'s `if isinstance(rel, dict) and rel.get("type")
+  == "retraction":` → `or`. Full suite stayed green: **662/662 — survived.**
+- Why: `isinstance(rel, dict) or rel.get(...)` short-circuits to `True` on
+  the very first `update-to` entry that happens to be a dict, regardless of
+  its own `type` — so a Crossref record whose `update-to` list carries only
+  `"correction"` or `"expression_of_concern"` entries (real, live shape —
+  see `_is_retracted`'s own docstring re: the Nature lutetium-hydride case)
+  would read as retracted even with an entirely ordinary title.
+- Why no existing test catches it: the one test with a non-retraction
+  `update-to` entry
+  (`test_retracted_paper_is_flagged_via_title_when_update_to_lacks_the_relation`)
+  *also* gives the record a `"RETRACTED ARTICLE:"` title prefix, so it
+  passes via the title path regardless of what the mutation does to the
+  `update-to` path — the two signals are never isolated from each other in
+  any existing test.
+- Wrote the isolating test, watched it fail on the mutant, watched it pass
+  on the restored original, then reverted per the capped-night rule (no
+  code changes on a capped night). Full source, ready to land verbatim
+  the moment there's queue room:
+
+  ```python
+  def test_a_correction_entry_in_update_to_does_not_read_as_a_retraction(self):
+      """A `correction`/`expression_of_concern` entry in `update-to` must
+      not be conflated with a `retraction` one -- `_is_retracted`'s
+      `isinstance(rel, dict) and rel.get("type") == "retraction"` check
+      degrades to always-True on the first dict entry if the `and` is ever
+      weakened to `or`, and no existing test isolates the `update-to` path
+      from the title-prefix path (the one test with a non-retraction
+      update-to entry also carries a retracted title)."""
+      body = json.dumps({"message": {
+          "title": ["A Study of Underwater SLAM"],
+          "author": [{"given": "Ada", "family": "Lovelace"}],
+          "update-to": [{"DOI": "10.1000/xyz", "type": "correction"}]}})
+      v = StubVerifier({"api.crossref.org": (body, True)}, subject_name="Ada Lovelace")
+      claim = Claim(kind="artifact", subtype="doi", value="10.1000/xyz")
+      v.verify_doi(claim)
+      self.assertFalse(claim.retracted)
+  ```
+
+  (Belongs in `tests/test_verify.py`'s `TestRetraction` class, alongside
+  the two tests it's disambiguating.)
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors`: `strongest = max(floored, key=...)` → `min(...)` | Survived — **equivalent mutant today** (only one flag in `REGISTRY` currently sets `floor`, so `floored` never exceeds length 1); real latent gap the day a second floored flag lands. |
+| `names.py` | `name_matches`: `present = {... if any(...) for v in blob_variants}` → `all(...)` | Caught (`test_attached_name_match_is_symmetric`) |
+| `flags.py` | `_is_career_start_anchor`: `any(str(year) in ctxt for ctxt in degree_contexts)` → `all(...)` | Caught (1 failure) — but only by one test, and the mutant is more dangerous than "weaker match": vacuous `all([])` flips "no degree claims" from not-anchored to anchored. |
+| `verify.py` | `_is_retracted`: `isinstance(rel, dict) and rel.get("type") == "retraction"` → `or` | **Survived — real gap.** Regression test written, verified fail-then-pass, reverted (capped night) — full source above. |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, **09-30**), `names.py`
+(09-15, 09-20, 09-23, 09-26, 09-27, 09-28, 09-29, **09-30**), `flags.py`
+(09-16, 09-23, 09-25, 09-26, 09-27, 09-28, 09-29, **09-30**), `verify.py`
+(09-16, 09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, **09-30**).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section tally directly (17 headings, 11/1 split
+  as above) — unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still
+  open**.
+- Re-confirmed 09-29's observation that the top CRITICAL entry's inline
+  annotations are stale by five weeks relative to `reconcile.py`'s shipped
+  reverse-path work — see "Running backlog tally" above. Not a new
+  finding, just re-verified live against the current file rather than
+  assumed still true.
+- Did not find any new BACKLOG.md items to confirm or refute tonight;
+  time went to the mutation pass and the queue/tally re-checks per the
+  capped-night rule.
+
+### What I learned
+
+- **"Equivalent mutant" has (at least) two distinct shapes now, and
+  they call for different write-ups.** 09-29 named the shape where a
+  *consumer* function re-derives the same filter a mutated *producer*
+  guard would have enforced (`_attribute` re-filtering `verify_orcid`'s
+  candidate list). Tonight's `scoring.py` survivor is the mirror image:
+  the *producer* (`REGISTRY`'s flag definitions) simply hasn't yet
+  created an input shape (two TRIGGERED flags with different-severity
+  floors) that would let the mutated function diverge from the original.
+  Both are "survived, not a bug" — but the first is permanently
+  equivalent (the guard is provably redundant), while the second is only
+  *accidentally* equivalent given today's data and will stop being so the
+  moment someone adds a second `floor=` argument to `@flag(...)`. Worth
+  checking `REGISTRY`/data-shape assumptions specifically before writing
+  off a survivor as equivalent, not just tracing the immediate caller.
+- **A mutation "caught by exactly one test" is worth a second look at
+  *why* that test catches it, not just whether it does.** Tonight's
+  `flags.py` mutation was caught, but for a more alarming reason than the
+  mutation itself suggests on its face (`any`→`all` reads like "slightly
+  stricter matching"; the actual effect on the empty-list case is "treats
+  uncorroborated as corroborated"). A green mutation-testing table entry
+  can still be hiding a fragile single point of coverage worth flagging
+  in prose, not just marking "Caught" and moving on.
+- Six consecutive capped nights is long enough that documenting the queue
+  problem once more, with the specific cost made concrete (a ready-to-land
+  test sitting idle, a second one from 09-26, a third from 09-28, a fourth
+  from 09-25, plus an eight-day-old merge conflict), is more useful to
+  the next reader than another paragraph of "still capped, still
+  patient."
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it's
+   dropped below 3, the highest-value small, independent, ready-to-land
+   work sitting in this file (in rough order of how long it's been
+   ready): tonight's `_is_retracted` update-to/title disambiguation test
+   (above), 09-28's `scoring.py` `decided`/`triggered` dead-output test,
+   09-27's `_rec_confirmed_summary` tie-break test, 09-26's `verify.py`
+   `_ror_country` first-vs-last `locations` test, 09-25's `f_contradicted`
+   `rec_contra` disjunct test. None of these conflict with each other's
+   files enough to block landing several in one small PR.
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for eight consecutive
+   nights.** Rebasing it (merge `master` into the branch, re-push) remains
+   the single most overdue piece of queue-clearing housekeeping, the
+   moment there is a slot to spend on it.
+3. **Annotate BACKLOG.md's top CRITICAL entry** with a `[IN PROGRESS —
+   nightly/2026-09-22]` note describing `reconcile.py`'s three shipped
+   reverse-path slices — small, low-risk, BACKLOG.md-only, still not done
+   after being named two nights running now.
+4. **The core architectural gap is still the top priority and still
+   untouched** since 2026-08-27's OpenAlex merge-risk labeling slice —
+   capped-night rules have correctly kept it off the table for six nights
+   running, but this is now the single largest cost of the queue sitting
+   this long. Re-verify OpenAlex's live rate limits before resuming, per
+   every recent entry's standing caveat (the brief's own numbers are now
+   over six weeks old).
+5. **`_apply_floors`'s multi-floor case has zero real test coverage**
+   (tonight's finding) — worth a synthetic two-floor test the next time
+   `scoring.py` is touched for any reason, even though nothing is
+   currently broken.
+6. Unchanged from prior nights, still open, still low priority:
+   `names.initials()`/`verify.py`'s `_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard, `verify.py`'s
+   `_ror_country` first-vs-last `locations` gap, BACKLOG.md's CRITICAL
+   heading-count bookkeeping (17 raw headings for "(15)").

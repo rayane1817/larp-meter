@@ -7186,3 +7186,388 @@ Files mutation-tested so far, by night (continuing the running log):
    `verify_orcid`'s redundant emptiness guard, `verify.py`'s
    `_ror_country` first-vs-last `locations` gap, BACKLOG.md's CRITICAL
    heading-count bookkeeping (17 raw headings for "(15)").
+
+---
+
+## 2026-10-01 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Seventh consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, unchanged in membership since 09-22 —
+re-checked fresh via the GitHub API (`pull_request_read` for mergeable
+state and review comments, `actions_list` for the `tests` workflow) rather
+than carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** (conflicts with `master` — flagged 09-23, unresolved for **nine** consecutive nights now) | success | 0 |
+| #30 | `nightly/2026-09-23` | clean | success (run #57) | 0 |
+| #31 | `nightly/2026-09-24` | clean | success (run #64, current head `db1ab0b`) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not**
+open a new PR or push a new branch. This entry is committed NIGHTLY.md-only
+to `nightly/2026-09-24` (#31, still the newest open branch — no new
+branches created since 09-25), touching no other file.
+
+Nine days since PR #29 first went `dirty`, nine days since any of the
+three PRs received a review comment, and this is the seventh straight
+night the automation has produced real, independently-verified findings
+with nowhere to land them (see "What the next run should pick up first"
+for the growing tally of ready-to-paste tests). Pushed a direct notification
+to the user about this tonight rather than only noting it here, since the
+pattern itself — not any single finding — is now the thing most worth a
+human's attention.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly: `awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f'
+BACKLOG.md | grep -c '^### '` → 17 raw headings, 11 `[FIXED]`, 1
+`[PARTIALLY FIXED]`. Collapsing the two known duplicate pairs gives the
+long-standing:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+
+**New bookkeeping finding, separate from the 17-vs-15 duplicate-heading
+issue every night since 09-25 has already explained:** `grep -n '^## CRITICAL'
+BACKLOG.md` returns **two** hits, not one — `## CRITICAL (16)` at line 1487
+and `## CRITICAL (15)` at line 1606. Read both: line 1487's section (through
+line 1605) is not a second set of critical findings at all — it is two
+nightly mutation-testing write-ups (2026-09-16's `verify.py` patent/ROR
+sweep and 2026-09-20's `verify_institution` ranking/messaging sweep),
+written in exactly the "Shipped since the original review" log's own style
+(and immediately preceded by that section's content, unbroken), but given a
+stray `## CRITICAL (16)` header instead of continuing as `###` entries
+under "Shipped since." Every prior night's own tally script anchored
+specifically on `## CRITICAL \(15\)` (not a bare `## CRITICAL`), which is
+why this never produced a wrong count — but a generic `## CRITICAL` grep,
+or a human skimming the table of contents for "the CRITICAL section," would
+see two and reasonably wonder whether 16 + 15 = 31 findings exist rather
+than 15. Pure heading-text bug, zero effect on the tally above. Not fixed
+tonight (capped night, NIGHTLY.md-only); exact fix for a future
+BACKLOG.md-touching night: re-head line 1487 from `## CRITICAL (16)` to
+`###` (two entries, matching its own content's two `###`-level
+sub-write-ups) and move/fold it under the "Shipped since" section it
+already reads as part of.
+
+**Second, more substantive correction to an existing entry — found while
+verifying tonight's `names.py` mutation finding below, not went looking
+for it:** BACKLOG.md:1868's `[PARTIALLY FIXED]` entry ("normalize() folds
+only combining marks...") states "Fixed in `larp_meter/names.py`: Added an
+explicit fold table for the non-decomposable Latin letters (ø→o, ł→l, đ→d,
+ð→d, þ→th, æ→ae, ı→i, ħ→h, ŋ→n)... Regression tests in
+`tests/test_names.py`." The fold table itself is correctly implemented and
+correctly applied (verified live tonight, see below) — but "regression
+tests" is only true for **2 of the 9** listed characters (ø, þ). The other
+seven (ł, đ, ð, æ, ı, ħ, ŋ) are named only in `TestNonDecomposableLatinLetters`'s
+own class docstring, never in an assertion. This is not a new bug — the
+fold table works — but the entry's own claim of being test-protected is
+false for 7/9 of what it lists, and that gap is exactly what tonight's
+mutation pass found and confirmed live (full account below). Not editing
+BACKLOG.md tonight (capped night); flagging precisely so a future
+BACKLOG.md-touching night can correct the entry's own claim rather than
+re-trust it.
+
+### What I did
+
+Spent the night on the mandatory mutation-testing pass plus backlog
+verification, per the capped-night rule — no code or test commits (all
+mutations applied, verified, and reverted; `git status` clean throughout
+except for this file). Checked the running per-file mutation log at the
+bottom of recent entries first, and deliberately picked two kinds of
+target this file's log shows no night has tried yet: functions nobody has
+mutated at all (`flags.py`'s `f_title_inflation`, `verify.py`'s
+`summarize`), and a known-fixed area's own *test coverage claim*
+(`names.py`'s `_EXTRA_FOLDS`) rather than another comparison-operator
+sweep of the same handful of already-exhausted guards.
+
+**1. `names.py`'s `_EXTRA_FOLDS` — a real, fairness-relevant gap in the
+project's own claimed-fixed code, not a new bug.** `_EXTRA_FOLDS` (names.py:26-29)
+lists nine Latin letters NFKD decomposition cannot strip (ø, ł, đ, ð, þ,
+æ, ı, ħ, ŋ) — exactly the brief's own named fairness risk (non-Western
+naming conventions, transliteration). Grepped `tests/test_names.py`'s
+`TestNonDecomposableLatinLetters` class: only `test_norwegian_o_slash_folds_to_o`
+(ø) and `test_icelandic_thorn_folds_to_th` (þ) assert anything; the class
+docstring names all nine but the other seven have no test. Confirmed live,
+one character at a time, in a **fresh subprocess per mutation** (not an
+in-process `importlib.reload` — that gave false negatives on the first
+attempt due to this project's own documented stale-bytecode/cache trap
+from the 2026-08-16/17 entry, caught and redone correctly before trusting
+the result): removing any one of `("ł","l")`, `("đ","d")`, `("ð","d")`,
+`("æ","ae")`, `("ı","i")`, `("ħ","h")` individually flips a real name match
+from `True` to `False`, and the full 662-test suite stays green every
+time:
+
+| Fold removed | Example | With fold | Without fold |
+|---|---|---|---|
+| ł → l | "Lukasz Nowak" / "Łukasz Nowak" | `True` | `False` |
+| đ → d | "Dinh Duc Nguyen" / "Đinh Đức Nguyễn" | `True` | `False` |
+| ð → d | "Gudmundsson" / "Guðmundsson" | `True` | `False` |
+| æ → ae | "Lars Naess" / "Lars Næss" | `True` | `False` |
+| ı → i | "Kilic" / "Kılıç" | `True` | `False` |
+| ħ → h | "Noel Hili" / "Noel Ħili" | `True` | `False` |
+
+(`ŋ → n` not independently verified tonight — no realistic name example was
+constructed; flagging as still-unconfirmed rather than claiming a seventh
+data point.) A real person — Polish, Vietnamese, Icelandic, Scandinavian,
+Turkish, or Maltese — whose name a registry (ORCID, Crossref) spells with
+the native letter while the subject typed the bare-Latin romanization into
+`--name`, or vice versa, would silently fail to match today in exactly the
+"punishes an honest person" direction the brief's fairness lens exists to
+catch — `verify.py:236`'s "ORCID record exists but does NOT list the
+subject" path, floored at ORANGE on flag 11, same failure mode
+BACKLOG.md:1868 already measured for ø/þ before the fold table existed.
+
+Wrote and verified (fail-then-pass, then reverted — capped night) a single
+test exercising all six confirmed characters at once:
+
+```python
+    def test_the_other_seven_extra_folds_also_fold_not_just_o_slash_and_thorn(self):
+        cases = [
+            ("Lukasz Nowak", "Łukasz Nowak"),
+            ("Dinh Duc Nguyen", "Đinh Đức Nguyễn"),
+            ("Gudmundsson", "Guðmundsson"),
+            ("Lars Naess", "Lars Næss"),
+            ("Kilic", "Kılıç"),
+            ("Noel Hili", "Noel Ħili"),
+        ]
+        for ascii_form, native_form in cases:
+            with self.subTest(native_form):
+                self.assertTrue(names.name_matches(ascii_form, [native_form]))
+```
+
+Added to `tests/test_names.py`'s `TestNonDecomposableLatinLetters` class
+(after `test_still_rejects_a_genuinely_different_name_after_folding`);
+confirmed 663 tests green with it in place, confirmed it reverts cleanly.
+Ready to paste directly — no re-derivation needed. Whoever lands this
+should also add a `ŋ` case if a confident real-name example turns up, and
+should correct BACKLOG.md:1868's "Regression tests in tests/test_names.py"
+claim to say "2 of 9" rather than implying full coverage, per the
+bookkeeping note above.
+
+**2. `flags.py`'s `f_title_inflation` — a real, previously-untouched gap
+(this function has never appeared in any prior mutation log).** The
+TRIGGERED branch's description and evidence each slice `degrees`
+(`degrees[:3]` in the message, `degrees[:4]` in `result.evidence`) when a
+self-applied 'Dr.'/'Prof.' title isn't supported by any stated doctorate.
+Mutating both slices to `[:1]` left the whole suite green (662/662) —
+every existing test for this flag (`test_title_without_a_doctorate_triggers`
+and siblings) asserts only `.status`, never `.description`/`.evidence`,
+matching the exact "status-only assertion hides a text/evidence
+regression" shape 09-25 through 09-28 each found elsewhere in this file.
+Confirmed a real difference with a repro of four cleanly-extracted
+non-doctorate degrees ("Dr. Priya Rao holds an MBA. She also has an MEng
+in Robotics. She has a BEng in Electronics. She also holds an LLB."):
+original code's description lists "MBA, MEng Robotics, BEng Electronics"
+and evidence is all four degrees; under the mutation, both collapse to
+just "MBA". Severity is message/evidence-only (status stays TRIGGERED
+either way, so this cannot flip an accusation), but a due-diligence reader
+relying on the evidence list to see the subject's *actual* claimed
+education would see an incomplete picture. Wrote and verified (fail-then-pass,
+reverted) the pinning test:
+
+```python
+    def test_a_long_non_doctorate_education_list_is_shown_in_full(self):
+        """f_title_inflation's TRIGGERED message and evidence each slice
+        `degrees` ([:3]/[:4]) -- no existing test gives this flag more than
+        two non-doctorate degrees, and every existing test asserts only
+        .status, never .description/.evidence, so narrowing either slice
+        to [:1] left the whole suite green. A due-diligence reader deserves
+        the subject's whole stated non-doctorate education, not just the
+        first entry."""
+        text = ("Dr. Priya Rao holds an MBA. She also has an MEng in Robotics. "
+                "She has a BEng in Electronics. She also holds an LLB.")
+        result = evaluate(ctx_for(text, subject_name="Priya Rao"))[13]
+        self.assertEqual(result.status, TRIGGERED)
+        self.assertIn("MBA, MEng Robotics, BEng Electronics", result.description)
+        self.assertEqual(result.evidence, ["MBA", "MEng Robotics", "BEng Electronics", "LLB"])
+```
+
+Belongs in `tests/test_flags.py`'s title-inflation test block (after
+`test_no_subject_name_is_unknown`).
+
+**3. `verify.py`'s `summarize()` — reachable, live production code with
+zero test coverage anywhere, feeding the on-disk JSON report.** Never
+appeared in any prior mutation log. `audit.run_audit` calls
+`summarize(claims)` unconditionally and stores the result as
+`report["claim_status_counts"]` (audit.py:99); `report.save_all` writes
+the full report dict verbatim to the output JSON file
+(`json.dumps(report, ...)`). No renderer (`render_terminal`/`render_markdown`/
+`render_html`) displays this key, and — checked directly —
+`grep -rn "summarize("  tests/` returns **nothing**: no test anywhere calls
+this function or inspects `claim_status_counts`. Mutating
+`out[c.status] = out.get(c.status, 0) + 1` to `+ 2` left all 662 tests
+green; confirmed the double-count directly (`{'VERIFIED': 2, 'NOT_FOUND': 1}`
+→ `{'VERIFIED': 4, 'NOT_FOUND': 2}` for the same three claims). Unlike
+09-28's `scoring.py` finding (computed but genuinely unread by anything),
+this one *is* consumed — by the shipped JSON artifact — just never
+checked. Anyone piping this tool's `--output-dir` JSON into another script
+(the project's own documented machine-readable mode) would silently get
+wrong counts from a bug here. Wrote and verified (fail-then-pass, reverted):
+
+```python
+    def test_summarize_counts_each_status_once_per_claim(self):
+        """summarize() (verify.py:618) feeds claim_status_counts into
+        audit.run_audit's report dict, which report.save_all writes
+        verbatim to the on-disk JSON output -- but no test anywhere calls
+        summarize() or inspects claim_status_counts, so doubling each
+        claim's count (+2 instead of +1) left the whole suite green. Any
+        script consuming this tool's JSON output would silently get wrong
+        counts."""
+        claims = [Claim(kind="artifact", subtype="doi", value="x", status=VERIFIED),
+                  Claim(kind="artifact", subtype="doi", value="y", status=VERIFIED),
+                  Claim(kind="artifact", subtype="doi", value="z", status=NOT_FOUND)]
+        self.assertEqual(summarize(claims), {VERIFIED: 2, NOT_FOUND: 1})
+```
+
+Needs `from larp_meter.verify import summarize` added to `tests/test_verify.py`'s
+imports; fits as a small standalone test class or alongside
+`TestExtractVerifyContract`.
+
+**4. `scoring.py`'s `category_scores` — real, cosmetic-only, display-order
+gap.** `sorted(buckets.items())` is the only thing giving a stable,
+alphabetical category order; removing `sorted()` (falling back to dict
+insertion order, i.e. whichever category's flag `REGISTRY` happens to list
+first) left the suite green, because dict equality in every existing test
+ignores key order. Checked whether this is actually user-visible before
+treating it as a finding: `grep -n "categories" larp_meter/report.py` shows
+all three renderers (`render_terminal`, `render_markdown`, `render_html`)
+iterate `report["categories"].items()` directly for display — so `sorted()`
+is the only code establishing consistent category order across every
+output format, and nothing pins it. Lowest-severity of tonight's four
+(purely cosmetic, never touches a status or a score), not pinned with a
+test tonight (budget went to the three above); recording for whoever next
+touches `scoring.py`'s category logic.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `names.py` | `_EXTRA_FOLDS`: remove `("ł","l")` | **Survived — real gap**, zero test coverage. See full table above for five more (đ, ð, æ, ı, ħ), each independently confirmed in a fresh subprocess. Test written, verified, reverted — full source above. |
+| `flags.py` | `f_title_inflation`: `degrees[:3]`/`degrees[:4]` → `degrees[:1]` | **Survived — real gap.** Status-only assertions hide a description/evidence truncation. Test written, verified, reverted — full source above. |
+| `verify.py` | `summarize()`: `out.get(c.status, 0) + 1` → `+ 2` | **Survived — real gap.** Zero test coverage anywhere for a function wired into the shipped JSON report. Test written, verified, reverted — full source above. |
+| `scoring.py` | `category_scores`: drop `sorted()` | Survived — real, cosmetic-only gap (category display order, all three renderers). Not pinned tonight. |
+| `flags.py` | `f_title_inflation`: `any(...)` doctorate-marker check → `all(...)` | Caught (3 failures) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, **10-01**), `names.py`
+(09-15, 09-20, 09-23, 09-26, 09-27, 09-28, 09-29, 09-30, **10-01**),
+`flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28, 09-29, 09-30,
+**10-01**), `verify.py` (09-16, 09-20, 09-23, 09-24, 09-26, 09-27, 09-28,
+09-29, 09-30, **10-01**). Tonight is the first night in this run of capped
+nights to find a real, unpinned gap in *all four* required files in one
+sitting.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL section tally directly (17 headings, 11/1 split)
+  — unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open**.
+- **New**: the stray `## CRITICAL (16)` heading at BACKLOG.md:1487 is a
+  pure heading-text bug (two "Shipped since"-style nightly write-ups
+  mislabeled), not a second set of findings — see "Running backlog tally"
+  above for the full account and exact fix.
+- **New**: BACKLOG.md:1868's `[PARTIALLY FIXED]` entry overstates its own
+  test coverage — "Regression tests in tests/test_names.py" is true for 2
+  of the 9 fold-table characters it lists (ø, þ), not all 9. The
+  underlying fix (the fold table itself) is correct and verified working
+  live tonight for 8 of 9 (ŋ unconfirmed); only the *test protection*
+  claim is wrong. See "What I did" #1 for the full account and a
+  ready-to-paste test closing most of the gap.
+- Did not investigate any other individual CRITICAL/MAJOR/MODERATE/MINOR
+  finding's substance tonight — all budget went to the mutation pass,
+  which is itself where both corrections above surfaced.
+
+### What I learned
+
+- **A `[FIXED]`/`[PARTIALLY FIXED]` tag's own "regression tests exist"
+  claim is worth spot-checking by reading the actual test class, not just
+  trusting the entry.** BACKLOG.md:1868 is not a fabrication — the fold
+  table really was added and really works — but "tests in
+  tests/test_names.py" turned out to mean "a docstring naming nine
+  characters, two of which have an assertion." This is a different failure
+  mode from anything found on prior capped nights: those were all gaps in
+  *production* code's test coverage; this is a gap in the *backlog's own
+  bookkeeping* about test coverage, discovered as a side effect of
+  mutation-testing the code the entry describes rather than by auditing
+  BACKLOG.md's prose directly. Worth treating "does the cited test file
+  actually assert what the entry claims" as its own check next time a
+  `[FIXED]` entry's underlying code gets touched for any reason.
+- **The stale-bytecode/in-process-reload trap this project's own
+  2026-08-16/17 entry documented is still live and still costs real time
+  if skipped.** First attempt at isolating each `_EXTRA_FOLDS` character
+  used `importlib.reload` inside one long-running Python process; three of
+  six characters (đ, ð, ħ) came back as *not* reproducing the gap,
+  contradicting an earlier simpler check that had already shown đ did
+  reproduce it. Redoing the same check as six independent fresh
+  subprocesses (`find . -name __pycache__ -exec rm -rf {} +` before each)
+  gave six consistent, correct failures. The lesson from two years ago in
+  this file's own terms: don't trust an in-process mutate/test/restore
+  cycle for anything beyond a single immediate check — use a fresh process
+  per mutation when verifying a batch, or clear `__pycache__` religiously
+  between every single one.
+- A function can be "shipped, reachable, and consumed" (today's
+  `summarize()`) rather than "shipped, reachable, but genuinely unread by
+  anything" (09-28's `scoring.py` `decided`/`triggered`) — worth keeping
+  this distinction explicit in writeups, since the fix recommendation
+  differs (summarize() already has a real consumer waiting — the JSON
+  file on disk — so this is overdue test debt, not a latent-contract
+  question).
+- Seven consecutive capped nights is long enough that the growing pile of
+  fully-verified, ready-to-paste regression tests (now eight, across six
+  different nights, in four different files) is itself strong evidence
+  that mutation-testing this codebase has a shrinking marginal return
+  under the current constraint — not because the code is bug-free, but
+  because the bottleneck has shifted entirely to landing what's already
+  found. Said this directly to the user tonight via a push notification
+  rather than only recording it here, since the last six nights' worth of
+  "flagging again, not acting" in this file evidently had not reached
+  them.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, land the eight ready-to-paste regression tests below
+   first — none conflict with each other's files enough to block landing
+   several in one small PR, and together they're a bigger, more
+   independently-verified contribution than anything a fresh night could
+   derive from scratch:
+   - 09-25: `flags.py`'s `f_contradicted` `rec_contra` disjunct (full
+     source in that entry)
+   - 09-27: `flags.py`'s `_rec_confirmed_summary` tie-break (full source in
+     that entry)
+   - 09-28: `scoring.py`'s `decided`/`triggered` dead-output test (full
+     source in that entry)
+   - 09-30: `verify.py`'s `_is_retracted` update-to/title disambiguation
+     (full source in that entry)
+   - 10-01 (tonight): `names.py`'s six-character `_EXTRA_FOLDS` test,
+     `flags.py`'s `f_title_inflation` degree-slice test, `verify.py`'s
+     `summarize()` counting test (full source above)
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for nine consecutive
+   nights.** Rebasing it (merge `master` into the branch, re-push) remains
+   the single most overdue piece of queue-clearing housekeeping.
+3. **Two BACKLOG.md corrections are ready to apply the moment there's room
+   to touch that file** (both documentation-only, zero behavior change):
+   re-head the stray `## CRITICAL (16)` section at line 1487 to `###` and
+   fold it under "Shipped since"; correct line 1868's "Regression tests in
+   tests/test_names.py" claim to reflect 2-of-9 coverage (or just land
+   tonight's test and make the claim true for 8-of-9).
+4. **Annotate BACKLOG.md's top CRITICAL entry** with a `[IN PROGRESS —
+   nightly/2026-09-22]` note describing `reconcile.py`'s three shipped
+   reverse-path slices — named three nights running now (09-29, 09-30,
+   tonight), still not done.
+5. **The core architectural gap is still the top priority and still
+   untouched** — capped-night rules have correctly kept it off the table
+   for seven nights running. Once the queue clears enough for real feature
+   work, re-verify OpenAlex's live rate limits before extending the
+   reverse path further — the brief's own numbers are now over seven weeks
+   old.
+6. **`scoring.py`'s category-order gap** (tonight's fourth finding) is a
+   small, cosmetic, test-only PR whenever there's room: pin `sorted()` in
+   `category_scores` against a hand-built `buckets` dict with categories
+   deliberately out of alphabetical order.
+7. **`_apply_floors`'s multi-floor case** (09-30) and `verify.py`'s
+   `_ror_country` first-vs-last `locations` gap (09-26) are both still
+   open, still low priority, still fully described in their own entries.
+8. Unchanged from prior nights: `names.initials()`/`verify.py`'s
+   `_name_matches` dead-output cleanup, `verify_orcid`'s redundant
+   emptiness guard.

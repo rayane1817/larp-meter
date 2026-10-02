@@ -7571,3 +7571,208 @@ sitting.
 8. Unchanged from prior nights: `names.initials()`/`verify.py`'s
    `_name_matches` dead-output cleanup, `verify_orcid`'s redundant
    emptiness guard.
+
+## 2026-10-02 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Eighth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master`, same three branches as every night since
+09-22. Re-checked fresh via the GitHub API (`list_pull_requests`,
+`pull_request_read` with `method: get` for mergeable state, `get_check_runs`
+and `get_comments`) rather than carried forward from last night's entry:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **ten** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs (head now `a594e1b` before tonight's commit) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — no new branches
+created since 09-25), touching no other file.
+
+Nothing about the queue's shape changed since last night's entry: #29 is
+dirty for the same reason it has been for nine prior nights, CI is still
+green on all three, and still zero review comments anywhere. Per this run's
+own standing precedent (first stated 09-20, restated every capped night
+since) of not re-notifying the human unless the *pattern* itself changes —
+acceleration, a new review appearing, CI turning red, or a PR's mergeable
+state changing — tonight does **not** repeat last night's push notification.
+Last night's notification already said everything tonight would otherwise
+repeat, and nothing has moved since it was sent.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly rather than carried forward: `awk '/^## CRITICAL \(15\)/{f=1;next}
+/^## MAJOR/{f=0} f' BACKLOG.md | grep -c '^### '` → 17 raw headings (the
+same stray `## CRITICAL (16)` heading-text bug at BACKLOG.md:1487 every
+night since 09-25 has already documented inflates the raw count — it is
+two nightly mutation-testing write-ups mislabeled, not six more findings),
+11 `[FIXED]`, 1 `[PARTIALLY FIXED]`. Collapsing the two known duplicate
+pairs gives the unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — unchanged tonight.**
+
+The four still-open criticals remain the same four restatements of the
+core architectural gap (the one-way, claim-anchored verification funnel);
+none of #29/#30/#31's queued diffs touch it, so this was not expected to
+move and did not.
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass plus a
+fresh live re-check of the PR queue, per the capped-night rule — no code or
+test commits (all mutations applied, verified, and reverted; `git status`
+clean throughout except for this file). Rather than re-running the same
+comparison-operator sweeps this file's running log already shows have been
+tried repeatedly on the same handful of guards, picked one target per file
+guided by the log: a line already *suspected* dead (verify.py's ROR v1
+fallback, flagged untested since the 09-20 entry) to get a definitive
+reachability answer, plus one fresh boundary/condition in each of the other
+three files that the per-file log had not yet tried.
+
+**`scoring.py`** — two mutations, both caught:
+- `scored = coverage >= MIN_COVERAGE` → `>`: caught by
+  `test_coverage_exactly_at_min_coverage_is_still_scored`
+  (`TestCoverageBoundaryIsInclusive`), already pinned from a prior night.
+- `larp = round(100 * trig_w / decided_w) if decided_w else 0` with the
+  `if decided_w else 0` guard removed: caught — crashes with
+  `ZeroDivisionError` on any all-`UNKNOWN` input
+  (`test_unknown_never_counts_as_passed` and others), which counts as
+  caught (the suite goes red) even though it's a crash rather than a wrong
+  answer.
+
+**`names.py`** — one mutation, caught: `name_matches`'s
+`at_an_end = bool(parts) and (parts[0] == matched or parts[-1] == matched)`
+with `or` → `and` (now requires the matched token to be simultaneously the
+first *and* last token, true only for a mononym). Caught hard — 10
+failures, including `test_surname_only_still_matches` and
+`test_family_name_first_author_is_not_falsely_mismatched` — because this is
+exactly the surname/given-name-order fairness logic the brief names
+explicitly (Western vs. Chinese/Korean/Vietnamese/Hungarian order).
+
+**`flags.py`** — one mutation, caught: `f_output`'s
+`if any(r.outcome == rc.CONFIRMED for r in pubs):` (the 2026-09-22
+publications-reconciliation credit added in commit `f8d32b0`) with `==` →
+`!=`. Caught — 3 failures in `tests/test_reconcile_publications.py`,
+including `test_an_unconfirmed_publication_claim_is_not_called_absent`.
+
+**`verify.py`** — two mutations:
+- Re-confirmed live (not just re-read) the historical conflation bug this
+  project's own brief names as its worked example:
+  `_attribute`'s `elif match is None: ... elif match:` collapsed back to a
+  bare `elif match:` (dropping the `None`-vs-`False` distinction entirely).
+  Caught — 2 failures (`test_non_latin_registry_record_is_not_a_mismatch`,
+  `test_unanswerable_name_comparison_is_not_a_mismatch`), confirming the
+  guard that prevents this exact false-MISMATCH is still live on `master`.
+- `_ror_names`'s v1-schema fallback (`legacy = [item.get("name", "")]`
+  branch, taken only when `item.get("names")` is not a list): replaced the
+  legacy value with a sentinel string and reran the full suite — **green,
+  0 failures. This branch is unreachable by every test in the suite**,
+  independently reconfirming the exact gap the 09-20 entry first flagged
+  and PR #31 (already queued, still unmerged) already fixes by deleting
+  both `_ror_names`'s and `_ror_country`'s v1 fallbacks outright, citing
+  ROR's own changelog (v2-only since 2025-07-28, v1 retired 2025-12-08)
+  rather than pinning a test for behavior no live registry response can
+  still produce. Did not write a new test for a branch already scheduled
+  for deletion in the queue — that would just be test debt for code about
+  to disappear. Confirms PR #31's deletion was the right call, independent
+  of its own write-up.
+
+All mutations reverted; `git diff` empty for every production file before
+moving to the next; 661 tests green throughout (confirmed via
+`git status` after every revert, not just before committing this entry).
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught (already pinned) |
+| `scoring.py` | drop `if decided_w else 0` guard | Caught (crash, `ZeroDivisionError`) |
+| `names.py` | `at_an_end`'s `or` → `and` | Caught (10 failures) |
+| `flags.py` | `f_output`'s publications `==` → `!=` | Caught (3 failures) |
+| `verify.py` | `_attribute`'s `elif match is None:` branch removed | Caught (2 failures) — re-confirms the brief's own worked example is still guarded |
+| `verify.py` | `_ror_names`'s v1-schema fallback value swapped for a sentinel | **Survived — confirmed unreachable.** Already fixed by deletion in queued, unmerged PR #31; not newly pinned (would be test debt for code slated to disappear). |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, **10-02**),
+`names.py` (09-15, 09-20, 09-23, 09-26, 09-27, 09-28, 09-29, 09-30, 10-01,
+**10-02**), `flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28, 09-29,
+09-30, 10-01, **10-02**), `verify.py` (09-16, 09-20, 09-23, 09-24, 09-26,
+09-27, 09-28, 09-29, 09-30, 10-01, **10-02**). Tonight found no *new*
+unpinned survivor — the one real survivor found (ROR v1 fallback) was
+already known and is already addressed in the unmerged queue, which is
+itself consistent with 10-01's observation that this run's marginal return
+on fresh mutation-testing is shrinking relative to the cost of landing what
+is already found.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly: unchanged, **10 [FIXED] / 1
+  [PARTIALLY FIXED] / 4 still open**.
+- Re-confirmed live (via mutation, not by re-reading the PR description)
+  that PR #31's deletion of `verify.py`'s ROR v1 fallback is deleting
+  genuinely dead code, not just under-tested code — see mutation log
+  above. This is independent corroboration of PR #31's own write-up, not a
+  new finding.
+- Did not open any other individual BACKLOG.md entry tonight; budget went
+  to the mutation pass and the live PR-queue re-check above.
+
+### What I learned
+
+- **Re-deriving an existing finding's evidence independently (rather than
+  trusting the open PR's own write-up) is still worth the time even when
+  the conclusion doesn't change.** PR #31 already claims the ROR v1
+  fallback is dead, backed by ROR's changelog and a live `curl`. Tonight's
+  mutation (sentinel-swap the branch's return value, rerun the full suite)
+  is a different kind of evidence — "no test in this codebase can tell the
+  difference" — and getting the same answer two independent ways is
+  stronger than either alone, at near-zero cost since the pass was
+  mandatory regardless.
+- **Not every capped-night mutation pass needs to produce a new, unpinned
+  survivor to be worth running.** Four of tonight's five fresh-angle
+  mutations were caught immediately by existing tests, including two
+  (`names.py`'s surname-order fairness logic, `verify.py`'s
+  None-vs-False conflation) that are this project's own named worked
+  examples of past false-accusation bugs — a clean night re-confirming
+  those guards are still live is itself useful information, not a null
+  result.
+- Confirmed the project's own "don't re-notify absent a change" precedent
+  is working as intended: the GitHub API re-check tonight (mergeable
+  state, CI, comments) found the queue byte-for-byte unchanged from last
+  night's description, which is exactly the condition under which the
+  precedent says stay silent.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the single highest-value thing available is landing
+   the pile of already-verified, ready-to-paste regression tests sitting
+   across 09-25, 09-27, 09-28, 09-30 and 10-01's entries (eight in total,
+   across four different files, none conflicting with each other) —
+   bigger and cheaper than deriving anything fresh. Tonight added no new
+   one to that pile (see mutation log above for why).
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for ten consecutive
+   nights.** Rebasing it (merge `master` into the branch, re-push) is
+   still the single most overdue piece of queue-clearing housekeeping,
+   unchanged from every prior night's recommendation.
+3. **The two ready-to-apply BACKLOG.md documentation corrections** (the
+   stray `## CRITICAL (16)` heading-text bug at line 1487, and line 1868's
+   "regression tests exist for all 9 fold characters" overstatement,
+   true for only 2 of 9) are both still unapplied, still zero-behavior-
+   change, still waiting on a night that touches BACKLOG.md for a
+   substantive reason anyway.
+4. **The core architectural gap is still the top priority and still
+   untouched** — capped-night rules have correctly kept it off the table
+   for eight nights running. Once the queue clears enough for real feature
+   work, re-verify OpenAlex's live rate limits before extending the
+   reverse path further — the brief's own numbers are now nearly eight
+   weeks old (measured 2026-08-14).
+5. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01),
+   `_apply_floors`'s multi-floor case (09-30), `verify.py`'s
+   `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard.

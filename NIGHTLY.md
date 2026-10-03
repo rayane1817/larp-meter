@@ -7776,3 +7776,320 @@ is already found.
    `_ror_country` first-vs-last `locations` gap (09-26),
    `names.initials()`/`_name_matches` dead-output cleanup,
    `verify_orcid`'s redundant emptiness guard.
+
+## 2026-10-03 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Ninth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master` — same three branches as every night since
+09-22. Re-checked fresh via the GitHub API (`list_pull_requests`,
+`pull_request_read` with `method: get` for mergeable state, `get_check_runs`
+and `get_comments`), not carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **eleven** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs (head `3745974` before tonight's commit) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — unchanged since
+09-25), touching no other file.
+
+Nothing about the queue's shape changed since last night: #29 is dirty for
+the same reason it has been for ten prior nights, CI is still green on all
+three, still zero review comments anywhere. Per the standing precedent
+(first stated 09-20, restated every capped night since) of not re-notifying
+the human unless the *pattern* itself changes, tonight does **not** send a
+fresh push notification — nothing here wasn't already true last night.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly, not carried forward: `awk '/^## CRITICAL \(15\)/{f=1;next}
+/^## MAJOR/{f=0} f' BACKLOG.md | grep -c '^### '` → 17 raw headings (the
+long-documented stray `## CRITICAL (16)` heading-text bug at BACKLOG.md:1487
+inflates nothing here — it mislabels two nightly mutation-testing write-ups,
+not six more findings; the `### Word-wrapped negation...` duplicate pair at
+BACKLOG.md:1852-1853 is the other known double-count). Collapsing both
+known duplicates gives the unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+The four still-open criticals are the same four restatements of the core
+architectural gap (the one-way, claim-anchored verification funnel); no
+queued PR touches it, so this was not expected to move and did not.
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass, a live
+re-check of the PR queue, and a fresh live repro re-confirming critical
+#8's "zero registry reach on a realistic prose profile" is still exactly
+as described. No code or test commits — all mutations applied, verified
+and reverted (`diff` against a saved copy of each file confirmed byte-
+identical after every revert; `git status` clean throughout except for
+this file).
+
+**Live re-check of BACKLOG.md's top CRITICAL and its "Zero registry reach"
+restatement.** Ran the CLI against a hand-written, entirely truthful MRI
+engineer bio (MSc TU Delft, BSc Antwerp, 12 years, IEEE TMI/TBME
+co-authorship, two granted patents, FDA clearance 2019, Karolinska
+collaboration, 400 installations — deliberately close to the finding's own
+worked example) with `--verify --name`:
+
+```
+extracted claims: 8 (degree x2, degree_institution, mentioned_institution,
+                     partner_org, installations, claimed_experience_years, year)
+verifier_stats: {'api_calls': 1, 'network_failures': 0}
+claim_status_counts: {'UNCHECKED': 7, 'VERIFIED': 1}
+reconciliations: []
+flag 6 (No Verifiable Output): UNKNOWN — "No output is claimed, so there is
+  nothing to verify."
+flag 11 (Contradicted Verifiable Claim): UNKNOWN — "No claim carries an
+  identifier that a registry could confirm or refute."
+level: INSUFFICIENT DATA (3 of 13 flags decided)
+```
+
+The one VERIFIED is `degree_institution` → ROR (University of Antwerp) —
+flag 8 PASSED correctly. But "Co-author on papers in IEEE Transactions on
+Medical Imaging and IEEE Transactions on Biomedical Engineering" and "Holds
+two granted patents on gradient coil design" produced **zero claim objects
+of any kind** — not UNCHECKED, not UNCHECKABLE, simply never extracted,
+because neither sentence contains an identifier-shaped pattern
+(`ARTIFACT_PATTERNS`) or a volume-claim pattern
+`reconcile.extract_publication_claim` recognizes. This is one notch worse
+than the finding's own original framing ("0 of 13 claims submitted to any
+registry") — here the claims aren't even in the ledger to be marked
+unchecked, so flag 6 reads "no output is claimed" about a bio that
+explicitly claims two kinds of output. Confirms the core gap and critical
+#8 are unchanged by the three reverse-path slices shipped 09-22: those
+slices reconcile stated *company roles* and stated *publication-volume
+counts* against a register, but neither extract.py nor reconcile.py has a
+path for "co-author on" or "holds patents" prose with no number and no
+identifier. Not a new finding — an independent, dated reconfirmation that
+the three shipped slices narrow but do not close this gap, consistent with
+BACKLOG.md's own "[IN PROGRESS]" notes on the entry.
+
+**Mutation-testing pass.** Rather than repeat the extensively-swept
+comparison-operator sweeps the running log below already shows tried
+repeatedly on `scoring.py`/`names.py`/`flags.py`/`verify.py`'s best-known
+guards, gave most of tonight's budget to `matching.py` — flagged by
+BACKLOG.md's own word-wrapped-negation write-up as "never yet swept" and
+genuinely untouched by any prior night's log — plus one quick fresh-angle
+confirmation in each of the four required files.
+
+`matching.py`'s `is_negated` has a guard (the `window > boundary and
+window > 0 and (text[window - 1].isalnum() or text[window - 1] == "_")`
+check) explicitly commented as protecting against the 200-character
+lookback window (`_MAX_LOOKBACK_CHARS`) starting mid-word on a long
+document, which could otherwise slice an unrelated word like "cannot"
+into a bare "not" fragment and fabricate a negator from nothing. No test
+anywhere exercises this guard (`grep -rn "_MAX_LOOKBACK_CHARS\|mid-word"
+tests/` returns nothing). Disabling the guard (replacing the whole `if`
+with `if False:`) left all 661 tests green — but unlike the already-known
+ROR v1-fallback finding (confirmed dead by three independent nights now,
+already deleted in queued PR #31), I built a concrete, exact repro to rule
+out "equivalent mutant" before calling this real (the `_apply_floors`
+re-check below is a reminder why that check matters):
+
+```python
+from larp_meter.matching import is_negated, _MAX_LOOKBACK_CHARS
+
+filler1 = "z" * 50
+text = filler1 + "cannot " + ("w" * (_MAX_LOOKBACK_CHARS - 5)) + " revenue this quarter."
+idx = text.index("revenue")
+# window = idx - _MAX_LOOKBACK_CHARS lands exactly 3 characters into "cannot",
+# i.e. at the start of its own "not" substring -- "cannot "[3:] == "not "
+is_negated(text, idx)
+# guard present (current master):  False  (correct -- nothing negates "revenue")
+# guard removed (mutated):         True   (fabricated -- "revenue" reads as denied)
+```
+
+This is real, not equivalent: with the guard, `text[window - 1]` is `'n'`
+(the second `n` of "cannot", alphanumeric), so the first token in the
+lookback window ("not") is correctly dropped as a fragment before the
+negator scan runs. Without the guard, that bare "not" survives into
+`tokens_before` and matches `CLAUSE_NEGATORS`, turning an assertion 200+
+characters away from any real negation into a false denial. A fabricator
+padding a profile with filler text (or just an ordinarily long document)
+could coincidentally silence a real claim this way with no intent to game
+anything — exactly the "cheapest evasion a fabricator hits naturally"
+category the review brief asks this cycle to prioritize, except here it
+runs in the wrong direction (suppresses evidence rather than manufacturing
+it), which given "never libel an honest person" matters less than a false
+MISMATCH would, but still means a truthful claim could silently vanish
+from a flag that would otherwise credit the subject.
+
+Ready-to-paste regression test (not yet added — capped night, NIGHTLY.md-only):
+
+```python
+    def test_mid_word_lookback_window_does_not_fabricate_a_negator(self):
+        """is_negated's 200-char lookback window (_MAX_LOOKBACK_CHARS) can
+        start mid-word on a long enough document. The mid-word fragment
+        guard (matching.py's 'window > boundary ... isalnum()' check)
+        exists to stop that from slicing an unrelated word like 'cannot'
+        into a bare 'not' and fabricating a negator that was never there.
+        Without the guard this reads 'revenue' as denied purely because of
+        where the 200-character window happened to land -- not because of
+        anything that actually negates it."""
+        filler1 = "z" * 50
+        text = (filler1 + "cannot "
+                + ("w" * (matching._MAX_LOOKBACK_CHARS - 5))
+                + " revenue this quarter.")
+        self.assertFalse(is_negated(text, text.index("revenue")))
+```
+
+Needs `from larp_meter import matching` added to `tests/test_negation.py`'s
+imports (only `is_negated`/`find_terms`/`has_term`/`count_occurrences` are
+currently imported by name). Fits in `TestIsNegated` after
+`test_negation_does_not_reach_across_a_long_distance`.
+
+**Quick fresh-angle confirmation in each required file** (budget-limited,
+one mutation each, not a full sweep):
+
+- `scoring.py`: re-confirmed the still-open, still-unpinned "multi-floor"
+  gap first found 09-30. `_apply_floors`'s `strongest = max(floored,
+  key=lambda f: _SEVERITY_ORDER.index(f["floor"]))` mutated to `min`:
+  suite stays green, because no existing test has two *simultaneously*
+  TRIGGERED floor-carrying flags with different floor severities to tell
+  `max` from `min` apart. Not a new finding — corroborates 09-30's
+  write-up still reproduces, nine nights on. Still not pinned tonight
+  (capped night; the fix is a test-data-construction problem, not a code
+  fix, and belongs with the other ready-to-paste tests once there's room).
+- `names.py`: tried `name_matches`'s single-token abbreviation-consistency
+  check, `all(w in mine for w in extra)` → `any(...)` (line ~152).
+  Suite stayed green, but a concrete repro attempt (subject "Jan
+  Vermeulen" against various single/multi-word candidates sharing one
+  token) could not construct a case where `extra` contains a word that is
+  in `mine` but NOT already counted in `present` earlier in the same
+  function — every word in `mine` that appears literally in a candidate
+  string is already picked up by the `present` regex scan over the shared
+  `blob`, which would instead satisfy the earlier `len(present) >= 2`
+  branch and return `True` before ever reaching this line. Concluded this
+  is very likely an **equivalent mutant** (the same class of false-positive
+  PR #29 already named and declined to pin: "survived because every caller
+  already checks X first") rather than a real gap, and did not write a
+  test for it — recording the reasoning here so a future night doesn't
+  re-spend time rediscovering the same dead end.
+- `flags.py`: `f_experience`'s `if claimed not in dom.CREDENTIAL_GATED:`
+  flipped to `if claimed in dom.CREDENTIAL_GATED:` — caught hard (14
+  failures). Confirms the credential-gated/open-entry domain split is
+  still solidly tested.
+- `verify.py`: no fresh mutation tonight (matching.py took the deep-dive
+  slot); the ROR v1-fallback finding first flagged 09-20 and already fixed
+  by deleting both branches in queued, unmerged PR #31 remains the most
+  recent result for this file (re-confirmed independently by both 10-01
+  and 10-02's entries).
+
+All mutations reverted; confirmed byte-identical via `diff` against a
+saved copy of each touched file before moving to the next, and 661 tests
+green after every single revert (not just at the end).
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `matching.py` | `is_negated`'s mid-word lookback fragment guard disabled | **Survived — real, new gap, confirmed not equivalent** (concrete repro above). Test written, verified, not yet committed (capped night). |
+| `scoring.py` | `_apply_floors`'s `max(floored, ...)` → `min(...)` | Survived — **not new**, re-confirms 09-30's still-open, still-unpinned multi-floor gap. |
+| `names.py` | `name_matches`'s single-token `all(...)` → `any(...)` consistency check | Survived in the test suite, but reasoned to be a likely **equivalent mutant** (see write-up above) — not pinned, not counted as a new finding. |
+| `flags.py` | `f_experience`'s `claimed not in CREDENTIAL_GATED` → `claimed in CREDENTIAL_GATED` | Caught (14 failures) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02,
+**10-03**), `names.py` (09-15, 09-20, 09-23, 09-26, 09-27, 09-28, 09-29,
+09-30, 10-01, 10-02, **10-03**), `flags.py` (09-16, 09-23, 09-25, 09-26,
+09-27, 09-28, 09-29, 09-30, 10-01, 10-02, **10-03**), `verify.py` (09-16,
+09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, 09-30, 10-01, 10-02,
+**10-03**: no fresh mutation, see above), `matching.py` (**10-03**: first
+pass, one real survivor — not one of this project's four mandatory files,
+but named by BACKLOG.md's own word-wrapped-negation entry as needing one).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly: unchanged, **10 [FIXED] / 1
+  [PARTIALLY FIXED] / 4 still open**.
+- **Reconfirmed, live and freshly, that critical #8 ("Zero registry reach
+  on a realistic prose profile") is still accurate after the three
+  reverse-path slices shipped 09-22** — see the Philips-engineer repro
+  above. Not a refutation or a new discovery; an independent, dated data
+  point for whoever next touches the core gap, showing the shipped slices
+  (company roles, publication-volume counts) are additive narrowings, not
+  a closure of the underlying architectural gap BACKLOG.md's top CRITICAL
+  describes.
+- Did not open any other individual CRITICAL/MAJOR/MODERATE/MINOR entry
+  tonight; budget went to the mutation pass and the live reconfirmation
+  above.
+
+### What I learned
+
+- **"All mutation survives" is necessary but not sufficient to call a gap
+  real — ruling out an equivalent mutant is itself part of the pass, not
+  an optional nicety.** Tonight's `names.py` attempt would have gone in
+  the mutation-testing log as a fourth "real gap" if I had stopped at "661
+  green, therefore a finding." Tracing exactly why `all`/`any` can't
+  actually diverge here (every word in `mine` that's literally present in
+  a candidate string is already caught by the earlier `present` scan over
+  the same `blob`) took about as long as constructing the matching.py
+  repro that *did* turn out real — the two are not reliably
+  distinguishable by the "did the suite stay green" signal alone, only by
+  building or failing to build a concrete counter-example.
+- **Picking a file *outside* the four mandatory ones, when BACKLOG.md
+  itself flags it as never-swept, found more tonight than another pass
+  over the same four files' already-exhausted guards would have.** Eleven
+  nights of (correctly) mandatory sweeps across `scoring.py`/`names.py`/
+  `flags.py`/`verify.py` have left a shrinking pool of untried angles in
+  exactly those files (10-02's entry already named this directly); this
+  project's brief requires those four every night but does not forbid
+  spending surplus budget elsewhere, and `matching.py` had an entire
+  category of guard (the lookback-window fragment boundary) that eleven
+  nights of focus on the other four files structurally could never have
+  reached.
+- The Philips-engineer repro is a useful reminder that "the reverse path
+  narrows the gap" and "the reverse path closes the gap" are different
+  claims this file should keep stating precisely — prose claims with no
+  number and no identifier ("co-author on", "holds patents") still fall
+  through every seam: `ARTIFACT_PATTERNS` (no identifier),
+  `extract_publication_claim` (no stated volume), and ROR/company-register
+  reconciliation (no institution or company named in that sentence).
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the pile of already-verified, ready-to-paste
+   regression tests is now **nine** across six different nights and five
+   files, none conflicting with each other — bigger and cheaper than
+   deriving anything fresh:
+   - 09-25: `flags.py`'s `f_contradicted` `rec_contra` disjunct
+   - 09-27: `flags.py`'s `_rec_confirmed_summary` tie-break
+   - 09-28: `scoring.py`'s `decided`/`triggered` dead-output test
+   - 09-30: `verify.py`'s `_is_retracted` update-to/title disambiguation
+   - 10-01: `names.py`'s six-character `_EXTRA_FOLDS` test, `flags.py`'s
+     `f_title_inflation` degree-slice test, `verify.py`'s `summarize()`
+     counting test
+   - 10-03 (tonight): `matching.py`'s mid-word lookback-fragment test
+     (full source above)
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for eleven consecutive
+   nights.** Rebasing it (merge `master` into the branch, re-push) is
+   still the single most overdue piece of queue-clearing housekeeping,
+   unchanged from every prior night's recommendation.
+3. **The two ready-to-apply BACKLOG.md documentation corrections** (the
+   stray `## CRITICAL (16)` heading-text bug at line 1487, and line 1868's
+   "regression tests exist for all 9 fold characters" overstatement, true
+   for only 2 of 9) are both still unapplied, still zero-behavior-change,
+   still waiting on a night that touches BACKLOG.md for a substantive
+   reason anyway.
+4. **The core architectural gap is still the top priority and still
+   untouched** — capped-night rules have correctly kept it off the table
+   for nine nights running. Tonight's Philips-engineer repro is fresh,
+   dated evidence of exactly how much of it remains once the queue
+   clears: prose output claims with no identifier and no stated volume
+   still produce zero claim objects, not merely unverified ones. Once real
+   feature work resumes, re-verify OpenAlex's live rate limits first — the
+   brief's own numbers are now over seven weeks old (measured 2026-08-14).
+5. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01),
+   `_apply_floors`'s multi-floor case (09-30, re-confirmed again tonight),
+   `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
+   redundant emptiness guard.

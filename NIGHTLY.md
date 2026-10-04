@@ -8093,3 +8093,250 @@ but named by BACKLOG.md's own word-wrapped-negation entry as needing one).
    `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
    `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
    redundant emptiness guard.
+
+---
+
+## 2026-10-04 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Tenth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master` — the same three branches as every night
+since 09-22. Re-checked fresh via the GitHub API (`list_pull_requests`,
+`pull_request_read` with `method: get` for mergeable state, `get_check_runs`
+and `get_comments`), not carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **twelve** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs (head `b79dada` before tonight's commit) | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — unchanged since
+09-25), touching no other file.
+
+Nothing about the queue's shape changed since last night: #29 is dirty for
+the same reason it has been for eleven prior nights, CI is still green on
+all three, still zero review comments anywhere. Per the standing precedent
+(first stated 09-20, restated every capped night since) of not re-notifying
+the human unless the *pattern* itself changes, tonight does **not** send a
+fresh push notification — nothing here wasn't already true last night.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly, not carried forward: `awk '/^## CRITICAL \(15\)/{f=1;next}
+/^## MAJOR/{f=0} f' BACKLOG.md | grep -c '^### '` → 17 raw headings, same
+two known duplicates as every prior count (the stray `## CRITICAL (16)`
+heading-text bug at BACKLOG.md:1487, which mislabels a nightly
+mutation-testing write-up rather than naming six more findings; and the
+`### Word-wrapped negation...` / `### [FIXED] Word-wrapped negation...`
+duplicate pair at BACKLOG.md:1911-1912). Collapsing both gives the
+unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+No PR merged since 10-03, so this could not have moved and did not. The
+four still-open criticals remain the same four restatements of the core
+architectural gap (the one-way, claim-anchored verification funnel).
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass and the
+PR-queue/backlog-tally re-check above. No code or test commits — every
+mutation below was applied, the suite run, then reverted and diffed
+byte-identical against a saved copy before moving to the next one;
+`git status` stayed clean throughout except for this file.
+
+Gave the required four files one fresh-angle mutation each, deliberately
+on lines the nine prior capped nights' logs (checked first, grep'd by
+file) had not already tried, and used the rest of the budget continuing
+`matching.py`'s still-young sweep (first pass 10-03, one real survivor
+already pinned-but-uncommitted there):
+
+- `scoring.py` — `score()`'s `larp = round(100 * trig_w / decided_w)`
+  mutated to read `pass_w` instead of `trig_w` (i.e. the headline LARP
+  percentage would measure how much evidence PASSED rather than how much
+  was TRIGGERED — the two prior numerator/denominator mutations on this
+  line only ever touched the `>=`/`>` comparison or the guard, never which
+  weight sum feeds the ratio). **Caught hard** — 26 failures, including
+  `test_weights_matter`, which starts asserting the opposite direction
+  entirely (a heavier-weighted trigger stops scoring *worse*). Still fully
+  protected.
+- `names.py` — `tokens()`'s split-reading filter,
+  `if len(t) > 1 and t not in PARTICLES` mutated to `or` (prior sweeps
+  tried dropping the `and t not in PARTICLES` clause entirely, and tried
+  `len(t) > 1` → `>= 1`, but not combining both conditions with `or`,
+  which admits single-character tokens AND particles as long as either
+  condition alone is satisfied — in practice almost every token satisfies
+  `t not in PARTICLES`, so this nearly disables the length filter).
+  **Caught** — 4 failures, including
+  `test_two_people_sharing_only_a_title_and_particle_do_not_match` (two
+  strangers who share only "Dr." and "Van" stopped being told apart). Still
+  fully protected.
+- `flags.py` — `f_validation`'s `if outlets or independent:` mutated to
+  `and` (every prior sweep of this file targeted `f_contradicted`,
+  `f_experience`, `f_education`, `f_timeline`, `f_logo_wall`, etc.;
+  `f_validation`'s own gate had no entry in the log). **Caught** — 3
+  failures: a subject with third-party press coverage but zero
+  independent *source URLs* (the ordinary shape of a text-mode or
+  single-source audit) stopped passing flag 10 at all. Still fully
+  protected.
+- `verify.py` — `verify_github`'s repo-shape annotation,
+  `empty = data.get("size", 0) == 0` mutated to `!= 0` (every prior sweep
+  of this file targeted the ROR institution helpers, `_attribute`,
+  `_is_ambiguous_acronym`, `_is_retracted`, or `verify_patent`/`verify_nct`
+  — nothing had yet touched `verify_github`'s own message-construction
+  line). **Caught** — 1 failure, `test_github_empty_repo_is_reported`.
+  Still fully protected — unlike the `_ror_country` `locations[0]` vs
+  `locations[-1]` gap found 09-26 (message-only, genuinely unpinned), this
+  message detail does have direct test coverage.
+- `matching.py` (continuing 10-03's sweep, three more mutations, budget
+  permitting since all four required files above caught on the first try):
+  - `_hard_newline_before`'s `is_blank_line` check,
+    `(nl + 1 < len(text) and text[nl + 1] == "\n") or (nl > 0 and
+    text[nl - 1] == "\n")` mutated to `and` (the two disjuncts detect a
+    blank line from either side of the found `\n` — "the next char is also
+    a newline" or "the previous char is also a newline" — and requiring
+    both at once misses the ordinary case where only one side has a second
+    newline). **Caught** — `test_paragraph_break_still_stops_negation`
+    fails: a genuine blank-line paragraph break stops being recognized as
+    a clause boundary, so a denial on one side of it would otherwise have
+    silently reached across into the next paragraph.
+  - `host_matches`'s `any(host == d or host.endswith("." + d) for d in
+    ...)` mutated to `and` (every domain in the bank would then have to be
+    simultaneously an exact match AND a suffix match for the same single
+    host — effectively never true for more than one domain in the list).
+    **Caught** — 4 failures, including
+    `test_aggregators_are_not_third_party_validation`: an obituary
+    aggregator stopped being recognized as non-independent, so flag 10
+    started crediting it as outside validation.
+  - `_hard_newline_before`'s own clause-boundary acceptance,
+    `if is_blank_line or _BULLET_START_RE.match(text, nl + 1):` mutated to
+    drop the bullet-start half entirely (`if is_blank_line:`). **Caught**
+    — 2 failures, including `test_numbered_list_item_stops_negation`: a
+    negation in one numbered list item reached across into the next
+    item's claim.
+
+All five mutations this round were caught — no new survivor to pin
+tonight. That is itself useful information after 09-24's three accumulated
+real `matching.py`/`scoring.py` findings sitting unpinned on this same
+branch (the mid-word lookback guard, the multi-floor tie-break, and the
+`_rec_confirmed_summary` gap from 09-25/09-27): it says the module's other
+load-bearing comparisons (blank-line detection, host-domain matching,
+bullet-boundary detection) are solidly protected, not that the file is
+exhausted — `matching.py` has had only two nights of attention against
+eleven-plus for the four mandatory files, and `_BULLET_START_RE` itself
+(the character class, not just its call site) hasn't had a dedicated
+mutation yet.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `score()`: `100 * trig_w / decided_w` → `100 * pass_w / decided_w` | Caught (26 failures) |
+| `names.py` | `tokens()` split-reading filter: `len(t) > 1 and t not in PARTICLES` → `or` | Caught (4 failures) |
+| `flags.py` | `f_validation`: `if outlets or independent:` → `and` | Caught (3 failures) |
+| `verify.py` | `verify_github`: `data.get("size", 0) == 0` → `!= 0` | Caught (1 failure) |
+| `matching.py` | `_hard_newline_before`'s `is_blank_line`: `or` → `and` | Caught (1 failure) |
+| `matching.py` | `host_matches`: `host == d or host.endswith(...)` → `and` | Caught (4 failures) |
+| `matching.py` | `_hard_newline_before`: drop the `_BULLET_START_RE` disjunct | Caught (2 failures) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03,
+**10-04**), `names.py` (09-15, 09-20, 09-23, 09-26, 09-27, 09-28, 09-29,
+09-30, 10-01, 10-02, 10-03, **10-04**), `flags.py` (09-16, 09-23, 09-25,
+09-26, 09-27, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03, **10-04**),
+`verify.py` (09-16, 09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, 09-30,
+10-01, 10-02, 10-03, **10-04**), `matching.py` (10-03, **10-04**: three
+more mutations, all caught — blank-line detection, host-domain matching,
+bullet-boundary acceptance).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged, 10
+  [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — expected, since nothing
+  merged to `master` since 10-03.
+- Did not open any individual CRITICAL/MAJOR/MODERATE/MINOR entry tonight
+  beyond the tally recount; budget went entirely to the mutation pass
+  above, which is itself a form of backlog verification (confirming the
+  four mandatory files' existing guards still hold, and that `matching.py`
+  — flagged by BACKLOG.md's own word-wrapped-negation entry as needing
+  attention — continues to hold up outside the one gap already found and
+  recorded 10-03).
+
+### What I learned
+
+- **Checking each file's own mutation-testing log line-by-line before
+  picking a mutation (rather than re-deriving "has this file been swept"
+  from memory) paid off directly tonight.** Every one of the four
+  mandatory-file mutations above targeted a line or a specific operator
+  combination that a `grep` of the running log confirmed was genuinely
+  untried — `f_validation`'s gate, `verify_github`'s size-based message,
+  the split-reading filter's `or` variant, and the ratio's numerator
+  choice. None were rediscoveries. This is a direct, cheap defense against
+  the exact waste 09-26's entry named explicitly ("re-deriving the same
+  dead end") and that 10-03's `names.py` near-miss illustrated from the
+  other side (almost re-spending time on an already-reasoned equivalent
+  mutant).
+- **All-caught is not a null result when the lines tried are new.** Ten-
+  plus nights of mandatory sweeps on four files could make "everything's
+  already been found" a reasonable prior, but tonight's five fresh
+  mutations (chosen specifically for not appearing in the log) all being
+  caught is itself the data point: it says the *marginal* uncovered
+  surface in these files is shrinking, which is useful information for
+  whichever night next decides how to split its budget between the
+  mandatory four and a less-swept file like `matching.py`.
+- `matching.py`'s `_BULLET_START_RE` character class
+  (`[•▪‣*\-–—]|\d{1,2}[.)]`) itself — as opposed to its two call sites,
+  both now mutation-tested — remains untried; a natural next slice for
+  whoever picks this file up again, since it is exactly the kind of
+  "never yet swept" territory that made 10-03's deep-dive productive in
+  the first place.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now **nine**
+   across six different nights and five files (unchanged list — nothing
+   new was added tonight, since all five fresh mutations this round were
+   caught rather than surviving):
+   - 09-25: `flags.py`'s `f_contradicted` `rec_contra` disjunct
+   - 09-27: `flags.py`'s `_rec_confirmed_summary` tie-break
+   - 09-28: `scoring.py`'s `decided`/`triggered` dead-output test
+   - 09-30: `verify.py`'s `_is_retracted` update-to/title disambiguation
+   - 10-01: `names.py`'s six-character `_EXTRA_FOLDS` test, `flags.py`'s
+     `f_title_inflation` degree-slice test, `verify.py`'s `summarize()`
+     counting test
+   - 10-03: `matching.py`'s mid-word lookback-fragment test (full source
+     in that entry)
+
+   This is bigger and cheaper than deriving anything fresh, and landing
+   even a few of these would also be a good occasion to apply the two
+   ready BACKLOG.md documentation fixes (#3 below).
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for twelve consecutive
+   nights.** Rebasing it (merge `master` into the branch, re-push) is
+   still the single most overdue piece of queue-clearing housekeeping,
+   unchanged from every prior night's recommendation.
+3. **The two ready-to-apply BACKLOG.md documentation corrections** (the
+   stray `## CRITICAL (16)` heading-text bug at line 1487, and the
+   `### Word-wrapped negation...` duplicate-heading pair at lines
+   1911-1912) are both still unapplied, still zero-behavior-change, still
+   waiting on a night that touches BACKLOG.md for a substantive reason
+   anyway.
+4. **The core architectural gap is still the top priority and still
+   untouched** — capped-night rules have correctly kept it off the table
+   for ten nights running. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now
+   over seven weeks old (measured 2026-08-14).
+5. **`matching.py`'s `_BULLET_START_RE` character class** has not had a
+   dedicated mutation yet (see "What I learned" above) — a reasonable next
+   slice of this still-young file the day there's room for more than a
+   quick spot-check.
+6. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01),
+   `_apply_floors`'s multi-floor case (09-30, re-confirmed 10-03),
+   `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
+   redundant emptiness guard.

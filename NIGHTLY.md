@@ -8340,3 +8340,268 @@ bullet-boundary acceptance).
    `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
    `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
    redundant emptiness guard.
+
+---
+
+## 2026-10-05 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Eleventh consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master` — the same three branches as every night
+since 09-22. Re-checked fresh via the GitHub API (`pull_request_read` with
+`method: get` for mergeable state, `get_check_runs`, `get_comments`), not
+carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **thirteen** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — unchanged since
+09-25), touching no other file.
+
+Nothing about the queue's shape changed since last night: #29 is dirty for
+the same reason it has been for twelve prior nights, CI is still green on
+all three, still zero review comments anywhere. Per the standing precedent
+(first stated 09-20, restated every capped night since) of not re-notifying
+the human unless the *pattern* itself changes, tonight does **not** send a
+fresh push notification.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly: `awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f'
+BACKLOG.md | grep -c '^### '` → 17 raw headings, same two known duplicates
+as every prior count. Collapsing both gives the unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+No PR merged since 10-03 (last recorded merge), so this could not have
+moved and did not. The four still-open criticals remain the same four
+restatements of the core architectural gap.
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass and the
+PR-queue/backlog-tally re-check above. No code or test commits — every
+mutation below was applied from a saved copy of the original file, the
+suite run, then the file restored from that saved copy and diffed
+byte-identical (`git diff --stat` empty) before moving to the next one;
+`git status` stayed clean throughout except for this file. `__pycache__`
+was cleared before every single run, mutated or restored, per the
+09-28(ish) lesson about stale bytecode masking a restore.
+
+Checked each of the four mandatory files' own running mutation-log lines
+first (grep'd by file/function name against this file) before picking a
+target, to avoid re-deriving a mutation already tried across the thirteen
+prior nights. `scoring.py`, `names.py`, `flags.py` and `verify.py` have
+each had a dozen-plus passes by now, so this round leaned on function-level
+mention counts (`grep -c <fn> NIGHTLY.md`) to find the least-visited
+corners rather than guessing, and also finished `matching.py`'s own
+previously-flagged gap (`_BULLET_START_RE`'s character class, called out
+explicitly in 10-04's "next run" list as never having had a dedicated
+mutation):
+
+- **`matching.py` — real survivor, found and NOT pinned tonight (capped
+  night forbids code/test changes).** `_BULLET_START_RE`'s character
+  class, `[•▪‣*\-–—]`, mutated to drop `*` (`[•▪‣\-–—]`). All 662 tests
+  stayed green. Live-confirmed this is a genuine behavior change, not an
+  equivalent mutant: `•` is independently covered by `_CLAUSE_END_CHARS`
+  (it's literally one of the chars in `".;:!?•|"`, so removing it from
+  the bullet regex is masked — tried this first, it survived too, but for
+  the uninteresting reason that the clause-end-char check already stops
+  the lookback regardless of the bullet regex). `*` has no such backstop.
+  Repro: `is_negated("* No revenue yet\n* Raising a Series A", <index of
+  "Raising">)` returns `False` (correct — not negated) on unmodified
+  `master`, but `True` (wrong — would silently suppress the "Raising a
+  Series A" claim) under the mutation. Asterisk bullets are the single
+  most common Markdown/LinkedIn-paste list marker, more common in
+  practice than the hyphen and numbered-list markers this file already
+  tests. Regression test to add (in `tests/test_negation.py`'s
+  `TestWordWrappedNegation` class, alongside
+  `test_hyphen_bullet_list_item_stops_negation`):
+  ```python
+  def test_asterisk_bullet_list_item_stops_negation(self):
+      # '*' is in _BULLET_START_RE's own character class but is NOT one of
+      # _CLAUSE_END_CHARS (unlike '•', which the clause-end check already
+      # covers independently) -- so this is the one bullet glyph whose
+      # protection comes entirely from the bullet regex itself, with no
+      # backstop if it's ever dropped.
+      text = "* No revenue yet\n* Raising a Series A"
+      self.assertFalse(is_negated(text, text.index("Raising")))
+  ```
+  Watched it fail against the mutated file (`is_negated` returned `True`)
+  and pass against the restored file before writing this up.
+
+- **`names.py` — second real survivor, found and NOT pinned tonight.**
+  `name_matches`'s script-mismatch guard computes
+  `mine_is_latin = any(re.search(r"[a-z]", t) for t in mine)`. Mutating
+  `any` to `all` left all 662 tests green. This is the first mutation
+  tried on this specific sub-expression — prior nights only ever mutated
+  the *comparison* (`!=` vs `==`) downstream of it, never the aggregation
+  inside `mine_is_latin` itself. Live-confirmed real, not equivalent: for
+  a subject name that mixes scripts (a Latin-kept given name next to a
+  surname in its native script — a genuine, common real-world pattern,
+  not a contrived edge case), `any()` correctly calls the name "Latin
+  enough" to proceed with the comparison; `all()` requires *every* token
+  to carry a Latin letter, so a single non-Latin token flips the verdict
+  to "not Latin" and the guard then reads a Latin-script candidate blob as
+  a script mismatch — even when the candidate contains the exact same
+  mixed-script name. Repro: `name_matches("Yuki 田中", ["Yuki 田中"])`
+  returns `True` (correct — exact match) on unmodified `master`, but
+  `None` (wrong — "unanswerable", discarding a confident match) under the
+  mutation. This directly hits the project's own "audit for fairness"
+  lens: an honest subject with a mixed-script name loses real
+  corroboration (lower flag-6/flag-10 coverage, a harder time clearing
+  `MIN_COVERAGE`) for no reason connected to anything they did. Regression
+  test to add (in `tests/test_names.py`'s `TestScriptMismatchIsUnanswerable`
+  class, alongside `test_both_sides_in_the_same_non_latin_script_still_compare`):
+  ```python
+  def test_mixed_script_name_still_compares_against_the_same_name(self):
+      # mine_is_latin uses any(): one Latin-script token is enough to call
+      # the whole name "Latin" for this guard, matching blob_is_latin's
+      # own single bool for the candidate blob. A name that mixes scripts
+      # (a given name kept in Latin letters next to a surname in its
+      # native script) must still compare against an identical candidate
+      # instead of being waved off as an unanswerable script mismatch.
+      self.assertTrue(names.name_matches("Yuki 田中", ["Yuki 田中"]))
+  ```
+  Watched it fail (returned `None`, not `True`) against the mutated file
+  and pass against the restored file before writing this up.
+
+- `scoring.py` — two mutations, both equivalent (not real), confirmed by
+  reasoning and live-checked rather than assumed:
+  - `_apply_floors`'s `max(floored, key=...)` → `min(...)`: re-confirmed
+    09-30's finding that this is still an equivalent mutant today — only
+    one flag in `REGISTRY` currently sets `floor`, so `floored` never has
+    more than one element for `max`/`min` to disagree over.
+  - `category_scores`'s `round(100 * v["trig"] / v["dec"]) if v["dec"]
+    else None` mutated to guard on `v["flags"]` instead of `v["dec"]`:
+    survived, but `v["dec"]` and `v["flags"]` are incremented together in
+    the same loop body every time a bucket is touched (lines 96-97), and
+    `spec["weight"]` is never zero for any registered flag, so the two
+    guards are always simultaneously truthy or falsy. Equivalent mutant,
+    not pinned.
+- `flags.py` — three mutations, all caught:
+  - `f_self_referential`'s `if partners and owned:` → `or`: caught,
+    `test_cosmetic_variation_does_not_move_the_verdict` (17 vs 14).
+  - `f_logo_wall`'s `if len(distinct) >= 4 and not deep:` → `> 4`:
+    caught, an existing exactly-4-partners test flips TRIGGERED to
+    PASSED.
+  - (`f_self_referential` and `f_logo_wall` were picked specifically for
+    having the fewest mentions in this file's own running log — 1 and 2
+    respectively — of any `f_*` function, i.e. the least-swept territory
+    left in `flags.py`.)
+- `verify.py` — one mutation, caught: `_disclaims_authorship`'s
+  `return bool(context) and bool(_NON_ATTRIBUTION_CONTEXT_RE.search(context))`
+  → `or`: caught, 6 failures including the end-to-end retraction test
+  (a retraction notice's own description text stopped mentioning
+  "retract" because the disclaimed-authorship path fired on an empty
+  context string alone).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged, 10
+  [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — expected, since nothing
+  merged to `master` since 10-03.
+- Did not open any individual CRITICAL/MAJOR/MODERATE/MINOR entry tonight
+  beyond the tally recount; all budget went to the mutation pass, which
+  doubles as backlog verification (re-confirming the four mandatory
+  files' existing guards still hold).
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `matching.py` | `_BULLET_START_RE`: drop `•` from the char class | Caught by `_CLAUSE_END_CHARS` backstop — not a real gap |
+| `matching.py` | `_BULLET_START_RE`: drop `*` from the char class | **Survived — real, new, not pinned (capped night)** |
+| `names.py` | `mine_is_latin = any(...)` → `all(...)` | **Survived — real, new, not pinned (capped night)** |
+| `scoring.py` | `_apply_floors`: `max(floored, key=...)` → `min(...)` | Survived — equivalent mutant (re-confirmed, not new) |
+| `scoring.py` | `category_scores`: guard on `v["dec"]` → `v["flags"]` | Survived — equivalent mutant (new check, same conclusion) |
+| `flags.py` | `f_self_referential`: `if partners and owned:` → `or` | Caught |
+| `flags.py` | `f_logo_wall`: `len(distinct) >= 4` → `> 4` | Caught |
+| `verify.py` | `_disclaims_authorship`: `and` → `or` | Caught (6 failures) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02,
+10-03, 10-04, **10-05**), `names.py` (09-15, 09-20, 09-23, 09-26, 09-27,
+09-28, 09-29, 09-30, 10-01, 10-02, 10-03, 10-04, **10-05: real survivor,
+see above**), `flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28,
+09-29, 09-30, 10-01, 10-02, 10-03, 10-04, **10-05**), `verify.py` (09-16,
+09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, 09-30, 10-01, 10-02,
+10-03, 10-04, **10-05**), `matching.py` (10-03, 10-04, **10-05: closed out
+the `_BULLET_START_RE` character-class gap named in 10-04's "next run"
+list — one real survivor (`*`), one false lead (`•`, already covered by
+`_CLAUSE_END_CHARS`)**).
+
+### What I learned
+
+- **Function-level mention counts in this file are a cheap, effective way
+  to find the least-swept corner of an already-heavily-tested file.**
+  `grep -c f_self_referential NIGHTLY.md` (1 hit) vs. `grep -c
+  f_contradicted NIGHTLY.md` (24 hits) immediately pointed at where
+  thirteen nights of mutation passes had and hadn't gone, and both
+  `f_self_referential` and `f_logo_wall` had never been touched before —
+  even though their first mutations both happened to be caught, picking
+  genuinely untried territory is still better than a mutation on a
+  function already confirmed solid a dozen times over.
+- **A character inside a regex character class can be "protected" by a
+  completely different, unrelated piece of code elsewhere in the same
+  function.** `•` surviving its own class membership looked like a
+  real gap until tracing it back to `_CLAUSE_END_CHARS` — a different
+  constant, checked earlier in `_hard_newline_before`'s caller, that
+  happens to also list `•`. This is exactly the kind of cross-mechanism
+  interaction the standing brief's "trace every caller, don't just trust
+  your own function's tests" principle warns about, just surfacing inside
+  mutation-testing instead of a code-review pass. Worth remembering as a
+  general check before calling any single-character-class-member removal
+  a real finding: check whether that same character has backstop coverage
+  from an unrelated constant in the same module.
+- **The names.py survivor is a clean instance of a fairness-lens bug,
+  not a safety-lens one.** It doesn't create a false accusation (`None`
+  is still the safe, non-accusatory answer) — it quietly *removes*
+  corroboration from an honest person with a mixed-script name, which is
+  exactly the category the standing brief's "audit for fairness" lens
+  asks for and exactly the kind of finding that's easy to miss because it
+  never shows up as a wrong verdict, only as a missing one.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now
+   **eleven** across seven different nights and six files — the two new
+   ones tonight (full source above) are the cheapest, highest-confidence
+   items on the list:
+   - 09-25: `flags.py`'s `f_contradicted` `rec_contra` disjunct
+   - 09-27: `flags.py`'s `_rec_confirmed_summary` tie-break
+   - 09-28: `scoring.py`'s `decided`/`triggered` dead-output test
+   - 09-30: `verify.py`'s `_is_retracted` update-to/title disambiguation
+   - 10-01: `names.py`'s six-character `_EXTRA_FOLDS` test, `flags.py`'s
+     `f_title_inflation` degree-slice test, `verify.py`'s `summarize()`
+     counting test
+   - 10-03: `matching.py`'s mid-word lookback-fragment test
+   - **10-05: `matching.py`'s asterisk-bullet test, `names.py`'s
+     mixed-script test (both full source above — these two in particular
+     are worth landing first: the asterisk gap is a plausible fabricator
+     evasion that happens naturally with zero intent to game anything,
+     and the mixed-script gap directly understates coverage for an
+     honest non-Western-named subject)**
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for thirteen consecutive
+   nights.** Rebasing it is still the single most overdue piece of
+   queue-clearing housekeeping.
+3. The core architectural gap is still the top priority and still
+   untouched — capped-night rules have correctly kept it off the table
+   for eleven nights running. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now
+   over seven weeks old (measured 2026-08-14).
+4. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01),
+   `_apply_floors`'s multi-floor case (09-30, re-confirmed 10-03 and
+   10-05), `verify.py`'s `_ror_country` first-vs-last `locations` gap
+   (09-26), `names.initials()`/`_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard, `scoring.py`'s
+   `category_scores` `v["dec"]`/`v["flags"]` guard equivalence (10-05,
+   new but same low-priority shape as the others on this list).

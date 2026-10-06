@@ -8605,3 +8605,263 @@ list — one real survivor (`*`), one false lead (`•`, already covered by
    `verify_orcid`'s redundant emptiness guard, `scoring.py`'s
    `category_scores` `v["dec"]`/`v["flags"]` guard equivalence (10-05,
    new but same low-priority shape as the others on this list).
+
+---
+
+## 2026-10-06 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Twelfth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master` — the same three branches as every night
+since 09-22. Re-checked fresh via the GitHub API (`list_pull_requests`,
+`pull_request_read` with `method: get` for mergeable state, `get_check_runs`,
+`get_comments`), not carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **fourteen** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — unchanged since
+09-25), touching no other file.
+
+Nothing about the queue's shape changed since 10-05: #29 is dirty for the
+same reason it has been for thirteen prior nights, CI is still green on all
+three, still zero review comments anywhere. Per the standing precedent
+(first stated 09-20, restated every capped night since) of not
+re-notifying the human unless the *pattern* itself changes, tonight does
+**not** send a fresh push notification — the 10-01 notification about this
+run of capped nights still covers exactly tonight's situation, and nothing
+has moved since.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly: `awk '/^## CRITICAL \(15\)/{f=1;next} /^## MAJOR/{f=0} f'
+BACKLOG.md | grep -c '^### '` → 17 raw headings, same two known duplicates
+as every prior count. Collapsing both gives the unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+No PR merged since 10-03 (last recorded merge), so this could not have
+moved and did not. The four still-open criticals remain the same four
+restatements of the core architectural gap.
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass, plus a
+mutation pass of `reconcile.py` — not one of the four mandatory files, but
+the highest-priority module per the task brief, the newest code on
+`master`, and (per 10-05's own "next run" note) never mutated at all before
+tonight. No code or test commits: every mutation below was applied from a
+saved copy of the file, the suite run, then the file restored and diffed
+byte-identical (`git diff --stat` empty) before moving to the next one.
+`__pycache__` cleared before every run, mutated or restored.
+
+Picked targets the same way 10-05 did — grepped this file for each
+candidate function/line before touching it, to avoid re-deriving a mutation
+already tried across the thirteen prior nights:
+
+- `scoring.py` — `_apply_floors`'s tie-break `<=` → `<`
+  (`_SEVERITY_ORDER.index(strongest["floor"]) <= _SEVERITY_ORDER.index(level)`).
+  **Already tried on 09-20** (and re-confirmed since) — redone tonight only
+  to reconfirm the suite still catches it; it does
+  (`TestFloorTieBreak.test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message`).
+  Not a new finding.
+- `names.py` — `at_an_end`'s `or` → `and`
+  (`at_an_end = bool(parts) and (parts[0] == matched or parts[-1] == matched)`).
+  **Already tried at least four times this streak** (09-20 and others) —
+  redone tonight for the same reconfirm-only reason; still caught (10
+  failures, including
+  `TestAttribution.test_family_name_first_author_is_not_falsely_mismatched`).
+  Not a new finding. In hindsight, `grep`-checking before mutating (the
+  `_apply_floors` and `at_an_end` mentions were sitting right there) would
+  have caught both duplicates before running them — did so for the next two
+  targets below, which is how they turned out to be genuinely fresh.
+- `flags.py` — `f_education`'s open-entry-field guard, `not in` → `in`
+  (`if claimed not in dom.CREDENTIAL_GATED:`, line 103). **Fresh**: every
+  prior night that mutated this exact pattern (09-26, 09-29, 10-03, and
+  others) targeted `f_experience`'s copy of the same guard (line 163) —
+  grepped `f_education\b` against this whole file first and got zero
+  mutation-specific hits before running this one. Caught: 13 failures,
+  including
+  `TestCredentialTransferDirection.test_an_education_degree_does_not_make_a_research_scientist`.
+- `verify.py` — `verify_github`'s user-branch bare-handle guard, `>= 2` →
+  `>= 1` (`comparable = [published] if len(published.split()) >= 2 else
+  []`). **Fresh**: grepped `comparable\|published.split\|bare.handle`
+  against the whole streak first, zero hits. Caught: 1 failure,
+  `TestExistenceIsNotAttribution.test_a_bare_handle_never_founds_a_mismatch`.
+- `reconcile.py` — **never mutated before tonight, on any branch.** Three
+  targets, since this file has thirteen nights of debt to catch up on
+  relative to the four mandatory files:
+  1. `gate()`'s own condition, `and` → `or` in the `implies_footprint and
+     source_complete` half (`not (identity == CONFIDENT and
+     implies_footprint and source_complete)` → `... implies_footprint or
+     source_complete)`). Caught: 10 failures, including
+     `TestPublicationReconciliation.test_a_vague_claim_with_a_thin_record_is_a_note`
+     — `source_complete` alone (True for a confident Swiss/Belgian company
+     match even though `implies_footprint` would have been false in some
+     other case) was enough to let a demoted case through under the
+     mutation.
+  2. `_reconcile_company`'s incorporation-date branch at line 455
+     (`elif not claim.board_role:`) → `elif claim.board_role:`. Caught: 4
+     failures — flips which incorporation-date mismatches get the
+     "founders commonly work on a business before incorporating" AMBIGUOUS
+     treatment versus going on to the CONTRADICTED check.
+  3. **`_tie`'s short-institution-name guard, `len(flat) >= 4` → `>= 3`
+     (line 878) — real survivor, found and NOT pinned tonight (capped night
+     forbids code/test changes).** All 662 tests stayed green. Live-confirmed
+     real, not equivalent, with a concrete, plausible repro — not a
+     contrived one: an OpenAlex author record whose institution
+     `display_name` happens to be the 3-letter string `"MIT"` ties to *any*
+     profile containing the ordinary German word "mit" ("with"), because
+     `_norm("MIT")` is `"mit"` (3 characters) and the guard's job is
+     specifically to keep short normalized names from matching on a
+     coincidental common word rather than a real institution mention.
+     ```python
+     from larp_meter import reconcile as rc
+     text = "Ich arbeite seit 2010 mit internationalen Teams zusammen."
+     flat_text = f" {rc._norm(text)} "
+     author = {"orcid": None,
+               "affiliations": [{"institution": {"display_name": "MIT"}}]}
+     rc._tie(author, flat_text, set())
+     # unmodified master:  None   (correct — no institution claim made)
+     # under the mutation: 'MIT'  (wrong — ties the record on a stray "mit")
+     ```
+     Watched this exact repro return `None` against the restored file and
+     `'MIT'` against the mutated one before writing this up — not inferred
+     from the test suite staying green alone. This is a fairness-lens
+     finding in the same spirit as 10-05's mixed-script `names.py` one: it
+     doesn't manufacture a false *accusation* (a false tie can only ever
+     help `_reconcile_publications` toward CONFIRMED, never toward a
+     surviving CONTRADICTED, since `OpenAlexAuthors.complete` is `False`
+     and `gate()` blocks that path regardless) — but it could falsely
+     CONFIRM a claim using a merged or unrelated author's work count,
+     specifically for institutions whose OpenAlex `display_name` happens to
+     be three ordinary-looking letters. `"MIT"` itself is almost certainly
+     stored by OpenAlex under its full name, so this is unlikely to bite in
+     practice for MIT specifically — the real risk is any institution
+     OpenAlex records under a bare 3-letter form that also happens to be a
+     common short word in some language the profile is written in (worth a
+     follow-up: grep OpenAlex institution records for any `display_name` of
+     length ≤4 before treating this as closed). Regression test to add (in
+     a new `tests/test_reconcile_publications.py` test, or a dedicated
+     `_tie`-focused class):
+     ```python
+     def test_a_three_letter_institution_name_does_not_tie_on_a_stray_word(self):
+         # _tie's "len(flat) >= 4" guard exists so a short normalized
+         # institution name can't match on an unrelated common word in the
+         # profile rather than a genuine institution mention. A record
+         # naming a 3-letter institution ("MIT") must not tie to a German
+         # bio that merely contains the ordinary word "mit" ("with").
+         text = "Ich arbeite seit 2010 mit internationalen Teams zusammen."
+         flat_text = f" {rc._norm(text)} "
+         author = {"orcid": None,
+                   "affiliations": [{"institution": {"display_name": "MIT"}}]}
+         self.assertIsNone(rc._tie(author, flat_text, set()))
+     ```
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged, 10
+  [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — expected, since nothing
+  merged to `master` since 10-03.
+- Did not open any individual CRITICAL/MAJOR/MODERATE/MINOR entry tonight
+  beyond the tally recount; all budget went to the mutation pass.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors` tie-break `<=` → `<` | Caught (re-confirm, not new) |
+| `names.py` | `at_an_end`'s `or` → `and` | Caught (re-confirm, not new) |
+| `flags.py` | `f_education`'s `claimed not in CREDENTIAL_GATED` → `in` | **Caught — fresh target (13 failures)** |
+| `verify.py` | `verify_github`: bare-handle guard `>= 2` → `>= 1` | **Caught — fresh target (1 failure)** |
+| `reconcile.py` | `gate()`: `implies_footprint and source_complete` → `or` | Caught (10 failures) |
+| `reconcile.py` | `_reconcile_company`'s `elif not claim.board_role:` → `elif claim.board_role:` | Caught (4 failures) |
+| `reconcile.py` | `_tie`'s `len(flat) >= 4` → `>= 3` | **Survived — real, new, not pinned (capped night)** |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02,
+10-03, 10-04, 10-05, **10-06**), `names.py` (09-15, 09-20, 09-23, 09-26,
+09-27, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03, 10-04, 10-05, **10-06**),
+`flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28, 09-29, 09-30, 10-01,
+10-02, 10-03, 10-04, 10-05, **10-06: first dedicated mutation of
+`f_education`'s own copy of the open-entry-field guard, as opposed to
+`f_experience`'s**), `verify.py` (09-16, 09-20, 09-23, 09-24, 09-26, 09-27,
+09-28, 09-29, 09-30, 10-01, 10-02, 10-03, 10-04, 10-05, **10-06**),
+`matching.py` (10-03, 10-04, 10-05), `reconcile.py` (**10-06: first
+mutation-testing pass ever, on any branch — three mutations, one real
+survivor in `_tie`'s short-institution-name guard, see above**).
+
+### What I learned
+
+- **Grep the running log for the exact line/pattern before mutating it, not
+  just for the function name.** Tonight's first two targets
+  (`_apply_floors`'s tie-break, `at_an_end`'s `or`/`and`) were picked by
+  eye from reading the source fresh, and both turned out to be the most
+  heavily-repeated mutations in the entire thirteen-night streak — a 30
+  second grep against this file would have redirected that budget toward
+  the two genuinely fresh targets found afterward once the search habit
+  kicked in (`f_education` specifically, as opposed to `f_experience`;
+  `verify_github`'s bare-handle guard). No harm done — reconfirming a
+  caught mutation costs little and isn't wrong, just lower-value than a
+  fresh target — but it's a cheap process fix for whoever mutates
+  `scoring.py` or `names.py` next.
+- **A file with real production logic and its own test suite can still
+  have zero mutation-testing history, even after thirteen nights of this
+  exact exercise, simply because it isn't on the mandatory list.**
+  `reconcile.py` is 956 lines, ships real CONFIRMED/CONTRADICTED verdicts,
+  and had never once been deliberately mutated before tonight despite
+  being called out by name in the task brief as the highest-priority code
+  in the repository. The brief's four named files (`scoring.py`,
+  `names.py`, `flags.py`, `verify.py`) are a floor, not a ceiling — a
+  genuinely new module needs its own first pass before "mutation-tested"
+  can be said to cover the codebase rather than just the four oldest files.
+- **The `reconcile.py` survivor is the same shape as 10-05's `names.py`
+  one: a short-string/boundary guard that exists specifically to stop a
+  coincidental match, caught by nothing because no test ever constructed
+  the coincidence.** Both were found by reading the guard's own comment
+  ("why does this length check exist?") and then deliberately building the
+  input that comment warns about, rather than by mutating first and
+  reasoning about the diff afterward. Worth treating "find the line whose
+  comment explains a defensive threshold, then construct the case it's
+  defending against" as a standing technique for this kind of review, not
+  a one-off.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now
+   **twelve** across nine different nights and seven files — tonight's
+   `reconcile.py` `_tie` test (full source above) is new and arguably the
+   most interesting: it's the first finding against the reverse-path code
+   itself, in the single function the task brief's own OpenAlex warnings
+   are most directly about (merged/misattributed author records). Land it
+   alongside 10-05's two (`matching.py` asterisk-bullet, `names.py`
+   mixed-script) first, then the older eight listed in 10-05's own entry.
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for fourteen consecutive
+   nights.** Rebasing it is still the single most overdue piece of
+   queue-clearing housekeeping.
+3. **`reconcile.py` now has a first mutation pass but is far from a full
+   sweep** — `gate()` and two company-reconciliation branches tonight,
+   nothing yet on `_reconcile_company_be` (the Belgian path), `_founding`,
+   `_registered_people`, `extract_company_claims`, or
+   `extract_publication_claim`. Natural next targets given tonight's
+   pattern: any other length/count boundary guarded by a comment explaining
+   why it's set where it is.
+4. The core architectural gap is still the top priority and still
+   untouched — capped-night rules have correctly kept it off the table
+   for twelve nights running. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now
+   over seven weeks old (measured 2026-08-14).
+5. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01),
+   `_apply_floors`'s multi-floor case (09-30, re-confirmed 10-03 and
+   10-05), `verify.py`'s `_ror_country` first-vs-last `locations` gap
+   (09-26), `names.initials()`/`_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard, `scoring.py`'s
+   `category_scores` `v["dec"]`/`v["flags"]` guard equivalence (10-05).

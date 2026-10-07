@@ -8865,3 +8865,223 @@ survivor in `_tie`'s short-institution-name guard, see above**).
    (09-26), `names.initials()`/`_name_matches` dead-output cleanup,
    `verify_orcid`'s redundant emptiness guard, `scoring.py`'s
    `category_scores` `v["dec"]`/`v["flags"]` guard equivalence (10-05).
+
+---
+
+## 2026-10-07 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Thirteenth consecutive capped night. Still exactly three open, unmerged
+`nightly/*` PRs against `master` — the same three branches as every night
+since 09-22. Re-checked fresh via the GitHub API (`list_pull_requests`,
+`pull_request_read` with `method: get` for mergeable state, `get_check_runs`,
+`get_review_comments`), not carried forward:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **fifteen** consecutive nights now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Queue is at the 3-PR cap, so per the standing brief tonight did **not** open
+a new PR or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch — unchanged since
+09-25), touching no other file.
+
+Nothing about the queue's shape changed since 10-06: #29 is dirty for the
+same reason it has been for fourteen prior nights, CI is still green on all
+three (verified against the real `get_check_runs` output, not the combined
+`get_status`, which reports `pending`/0 statuses for all three PRs on this
+repo — this project's checks run as GitHub Actions check-runs, not commit
+statuses, so `get_status` alone would have been misleading here), still
+zero review comments anywhere. Per the standing precedent (first stated
+09-20, restated every capped night since) of not re-notifying the human
+unless the *pattern* itself changes, tonight does **not** send a fresh push
+notification — the 10-01 notification about this run of capped nights still
+covers exactly tonight's situation, and nothing has moved since.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly, not carried forward: read `## CRITICAL (15)` through
+`## MAJOR (25)` in full and tallied each `### ` heading's tag by hand (17 raw
+headings; two are literal duplicate-title pairs for the same underlying
+finding — "ROR institution verification" reported twice and "Word-wrapped
+negation" reported twice with one bare header immediately followed by its
+`[FIXED]` counterpart — collapsing to 15 distinct findings, matching the
+section's own count). Result, unchanged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+No PR merged since 10-03 (still the last recorded merge), so this could not
+have moved and did not. The four still-open criticals remain the same four
+restatements of the core architectural gap: "Verification is a one-way,
+claim-anchored funnel" (the top finding), its near-duplicate "Verification is
+identifier-keyed and one-way", "Citing no identifiers disables the entire
+verification half of the tool", and "Zero registry reach on a realistic
+prose profile" (the last of these is `[IN PROGRESS]`, not `[FIXED]` — the
+09-22 `reconcile.py` work closes one slice of it but the reconciliation step
+itself, and per-claim comparison, is still only partially built).
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass plus the
+backlog recount above. No code or test commits: every mutation below was
+applied from a saved copy of the file (`cp larp_meter/X.py /tmp/X.py.orig`),
+the suite run, then the file restored from that copy and diffed
+byte-identical (`git diff --stat` empty) before moving to the next one.
+`__pycache__` cleared before every run, mutated or restored — per 08-27's
+own standing warning about stale `.pyc` files producing a phantom result.
+
+Picked targets by grepping this file's mutation-testing log first, same
+discipline 10-06 adopted after wasting part of its own budget re-deriving
+duplicates:
+
+- `scoring.py` — `category_scores`'s decided-flag filter,
+  `r.status not in (TRIGGERED, PASSED)` → `r.status not in (TRIGGERED,)`
+  (drops `PASSED` from the tuple, so a passed flag stops counting toward a
+  category's decided weight and flag count). **Fresh** — grepped the whole
+  streak's mutation log for `category_scores` and only found the unrelated
+  `v["dec"]`/`v["flags"]` equivalence noted 10-05 and the display-order gap
+  noted 10-01, neither this filter. Caught: 2 failures, including
+  `TestCategoryScoresBlendPassedAndTriggered.test_a_passed_flag_lowers_its_category_score_even_with_one_trigger`.
+- `names.py` — `name_matches`'s per-candidate abbreviation guard,
+  `all(w in mine for w in extra)` → `any(w in mine for w in extra)` (the
+  tail of the single-matched-token branch, where a candidate's other words
+  must all be consistent with an abbreviation of the subject's own name).
+  **Fresh** — grepped for `extra` and `all(w in mine` against the whole
+  streak's log, zero hits. **Survived** (661 tests green against the
+  mutated file) — traced live rather than pinned blind, see below.
+- `flags.py` — `f_output`'s ambiguous-identity guard,
+  `scholar and scholar.get("works") and not ctx.signals.get("ambiguous_identity")`
+  → drops the `not ctx.signals.get("ambiguous_identity")` clause entirely.
+  **Fresh** target on the newest-touched module (flag 6's scholarly-output
+  branch, last changed 09-22) — grepped for `ambiguous_identity` against the
+  log, zero hits. Caught: 1 failure,
+  `TestMutationSurvivorsFlags.test_an_ambiguous_openalex_match_does_not_credit_someone_elses_record`.
+- `verify.py` — `verify_github`'s user-branch bare-handle guard,
+  `len(published.split()) >= 2` → `>= 1`. Grepped the log first and found
+  this exact mutation already recorded on 10-06 — redone anyway, deliberately,
+  because it is the one mandatory-file target the log shows as only ever
+  checked once; still caught (1 failure,
+  `TestExistenceIsNotAttribution.test_a_bare_handle_never_founds_a_mismatch`).
+  Not a new finding.
+
+**The `names.py` survivor, traced:** `name_matches` only reaches this branch
+when `len(present) == 1` — exactly one of the subject's own tokens (`mine`)
+was found in the combined candidate blob. `present` itself is computed
+earlier, over the *whole* blob, as `{t for t in mine if <regex search for t
+in blob_variants>}` — i.e. every token of `mine` that appears anywhere in any
+candidate string. `extra`'s per-candidate loop later asks, for each word `w`
+in *this* candidate's own other words, whether `w in mine`. But any `w` that
+is both in `mine` and present in this candidate's text is, by construction,
+also present in the whole blob (since this candidate is part of the blob),
+so `present` would already have counted it — making `len(present) >= 2` and
+routing to the branch *above* this one, which returns `True` outright and
+never reaches `extra` at all. Confirmed this isn't a guess: built the
+concrete case that would need to exist for `extra` to contain a `mine`-member
+anddd still have `len(present) == 1`, and it provably can't —
+
+```python
+from larp_meter import names
+s = "Jan Oliveira Costa"
+print(names.name_matches(s, ["J. Costa Silva"]))        # extra={'silva'}, not in mine -> False either way
+s2 = "Jan Oliveira Costa Silva"                           # add 'silva' to mine
+print(names.tokens(s2))                                   # {'costa','silva','oliveira','jan'}
+print(names.name_matches(s2, ["J. Costa Silva"]))         # len(present) is now 2 (costa+silva) -> True via the EARLIER branch, extra never runs with this input
+```
+
+So `all(...)` and `any(...)` are extensionally equal at this call site given
+the precondition that always holds when it's reached: every `w` the `extra`
+loop could ever test is, necessarily, not in `mine` (if it were, we'd never
+have gotten past the `len(present) >= 2` check two branches up). This is the
+same shape of finding PR #30 made for `verify.py`'s `_ror_names` truthiness
+check and 10-06 avoided re-deriving for `_apply_floors`/`at_an_end`: a real
+mutation survivor that traces to genuinely dead-under-invariant code, not a
+live bug. Per the project's own standing precedent ("don't force a test onto
+a branch production can't reach"), **not pinned** — a regression test here
+would just assert that two equivalent expressions are equivalent, forever,
+and would tell a future reader nothing true about risk.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged, 10 [FIXED]
+  / 1 [PARTIALLY FIXED] / 4 still open — expected, since nothing has merged
+  to `master` since 10-03.
+- Did not open any individual CRITICAL/MAJOR/MODERATE/MINOR entry tonight
+  beyond the tally recount; all budget went to the mutation pass above.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `category_scores`'s `(TRIGGERED, PASSED)` filter drops `PASSED` | **Caught — fresh target (2 failures)** |
+| `names.py` | `name_matches`'s per-candidate guard `all(...)` → `any(...)` over `extra` | **Survived — traced live, confirmed dead-under-invariant, not pinned** |
+| `flags.py` | `f_output`'s `ambiguous_identity` guard dropped | **Caught — fresh target (1 failure)** |
+| `verify.py` | `verify_github` bare-handle guard `>= 2` → `>= 1` | Caught (re-confirm, not new) |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03,
+10-04, 10-05, 10-06, **10-07**), `names.py` (09-15, 09-20, 09-23, 09-26,
+09-27, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03, 10-04, 10-05, 10-06,
+**10-07**), `flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28, 09-29,
+09-30, 10-01, 10-02, 10-03, 10-04, 10-05, 10-06, **10-07**), `verify.py`
+(09-16, 09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, 09-30, 10-01,
+10-02, 10-03, 10-04, 10-05, 10-06, **10-07**), `matching.py` (10-03, 10-04,
+10-05), `reconcile.py` (10-06).
+
+### What I learned
+
+- **A mutation surviving is a prompt to trace it, not a license to either
+  pin it blind or wave it away.** Tonight's `names.py` survivor took roughly
+  as long to trace as the three caught mutations took to run combined, but
+  the alternative — writing a regression test asserting `all`/`any` differ
+  — would have been actively wrong, since they provably don't at this call
+  site. The tracing method that worked: identify the invariant the
+  surrounding code establishes before this branch is ever reached (here,
+  "`present` already counted every `mine`-token findable in the blob"), then
+  try to construct an input that violates it. When construction fails for a
+  structural reason (adding the supposedly-missed token to `mine` always
+  promotes it into `present` first, because it's the same blob), that's the
+  proof, not a hunch.
+- **`get_status` and `get_check_runs` answer different questions on this
+  repo and only one of them is true here.** `get_status` returned `pending`
+  / 0 statuses for all three open PRs tonight — taken at face value, that
+  would misreport CI as never having run. `get_check_runs` showed all 6 jobs
+  green on each PR's current head. Worth remembering for any future run
+  that checks CI health on this repo: use `get_check_runs`, not `get_status`,
+  since the `tests` workflow reports via GitHub Actions check-runs, which
+  `get_status`'s combined-commit-status view does not see.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now
+   **twelve** across nine different nights and seven files — unchanged by
+   tonight, since tonight's one real survivor was traced as dead code
+   rather than added to the pile. Land 10-06's `reconcile.py` `_tie` test
+   and 10-05's two (`matching.py` asterisk-bullet, `names.py` mixed-script)
+   first, then the older eight listed in 10-05's own entry.
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for fifteen consecutive
+   nights.** Rebasing it is still the single most overdue piece of
+   queue-clearing housekeeping.
+3. The core architectural gap is still the top priority and still
+   untouched — capped-night rules have correctly kept it off the table for
+   thirteen nights running. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now over
+   seven weeks old (measured 2026-08-14).
+4. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01) and
+   `v["dec"]`/`v["flags"]` guard equivalence (10-05), `_apply_floors`'s
+   multi-floor case (09-30, re-confirmed 10-03 and 10-05), `verify.py`'s
+   `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
+   redundant emptiness guard. Tonight's own `names.py` `extra`
+   `all`/`any` equivalence joins this list as a documented-dead-end, not a
+   to-do.
+5. `reconcile.py` still has only one mutation-testing pass (10-06, three
+   mutations, one real unpinned survivor in `_tie`'s short-institution-name
+   guard — see 10-06's entry for the full repro). Still far from a full
+   sweep: `_reconcile_company_be`, `_founding`, `_registered_people`,
+   `extract_company_claims` and `extract_publication_claim` are all
+   untouched by any mutation so far.

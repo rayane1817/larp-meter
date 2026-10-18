@@ -9085,3 +9085,293 @@ Files mutation-tested so far, by night (continuing the running log):
    sweep: `_reconcile_company_be`, `_founding`, `_registered_people`,
    `extract_company_claims` and `extract_publication_claim` are all
    untouched by any mutation so far.
+
+---
+
+## 2026-10-18 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+**Eleven-day gap in nightly execution.** The last entry in this file is
+10-07's ("thirteenth consecutive capped night"); nothing ran 10-08 through
+10-17. This is the first run since, and the cause of the gap is not visible
+from inside this session — possibly the shared rate limit the standing
+brief itself warns about ("eight such sessions once exhausted the weekly
+limit and killed the following nights' runs outright, twice"), possibly the
+schedule was paused by the human. Either way: treat the "consecutive night"
+counters below as *calendar days since first flagged*, not *consecutive
+runs*, since a run of unknown length is missing from the middle.
+
+Re-checked the queue fresh (not carried forward from 10-07), via
+`list_pull_requests`, `pull_request_read` with `method: get` (mergeable
+state), `get_check_runs`, and `get_comments`/`get_reviews`:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **26 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still exactly the three open, unmerged `nightly/*` PRs from every prior
+entry in this file — nothing merged to `master` since 10-03, nothing
+commented on, nothing changed except the calendar. Queue is at the 3-PR
+cap, so per the standing brief tonight did **not** open a new PR or push a
+new branch. This entry is committed NIGHTLY.md-only to `nightly/2026-09-24`
+(#31, still the newest open branch), touching no other file.
+
+Given the gap itself is a change in pattern — not just "still capped," but
+"the automation that was supposed to check this every night didn't run for
+eleven days" — tonight **does** send a push notification, breaking the
+"don't re-notify unless the pattern changes" precedent on purpose: the
+pattern changed.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly (read `## CRITICAL (15)` through `## MAJOR (25)` in
+`BACKLOG.md` in full, 17 raw `### ` headings, the same two duplicate-title
+pairs as every prior count — "ROR institution verification" and
+"Word-wrapped negation," each reported twice). Unchanged from every count
+since 10-03, as expected since nothing has merged:
+
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.**
+
+The four open criticals are still the same four restatements of the core
+architectural gap (the one-way, claim-anchored funnel and its three
+near-duplicates); "Zero registry reach on a realistic prose profile" is
+`[IN PROGRESS]`, not `[FIXED]` — reconcile.py's reverse path covers company
+roles and publication volume but still no per-claim reconciliation for
+degrees, employers generally, or traction claims.
+
+### What I did
+
+Spent the night on the mandatory per-cycle mutation-testing pass across all
+four required files plus a continued sweep of `reconcile.py` (highest-
+priority module, still short of a full pass per 10-06's note). No code or
+test commits: every mutation was applied from a saved copy of the file
+(`cp larp_meter/X.py /tmp/X.py.orig`), the suite run, then the file restored
+from that copy and diffed byte-identical (`git diff --stat` empty) before
+moving to the next one. `__pycache__` cleared before every mutate/restore
+cycle. Grepped this file's full mutation log for every candidate line
+before touching it, to avoid re-deriving a duplicate across the sixteen
+prior entries.
+
+**The four mandatory files — four fresh targets, all caught:**
+
+- `flags.py` — `f_contradicted`'s `rec_notes` filter,
+  `r.outcome not in (rc.CONTRADICTED, rc.CONFIRMED)` → `in` (the evidence
+  list shown when a reconciliation lands on AMBIGUOUS/EXISTS/NO_RECORD/
+  UNCHECKABLE). **Fresh** — grepped `rec_notes` against the whole log,
+  zero hits. Caught: 5 failures, including
+  `test_notes_alone_leave_flag_11_undecided` and
+  `test_a_publication_note_leaves_flag_11_undecided_and_is_shown`.
+- `names.py` — `tokens()`'s hyphen-reading union, `return split | joined`
+  → `return split` (drops the hyphen-as-attachment reading entirely).
+  **Fresh** — grepped `_INNER_HYPHEN_RE.sub` and `joined = {t` against the
+  log, zero hits (the underlying feature is tested; the union line itself
+  had never been mutated directly). Caught: 1 failure,
+  `test_attached_name_matches_its_unhyphenated_spelling` ("Ahmed Al-Sayed"
+  vs "Ahmed Alsayed").
+- `verify.py` — `verify_patent`'s `if not inventors:` → `if inventors:`
+  (inverts which branch runs when the scrape does/doesn't find inventor
+  tags). **Fresh** — grepped `itemprop=.inventor` and `inventors = \[`
+  against the log, zero hits. Caught: 1 failure,
+  `test_patent_inventor_entities_are_decoded_before_comparison`.
+- `scoring.py` — `score()`'s `"raw_score": larp,` → `"raw_score": larp if
+  scored else None,`. Grepped first and found this is a re-confirmation,
+  not new: 09-28 already logged the `decided`/`triggered` dead-output pair
+  in this same dict — this is a different field in the same literal,
+  caught by `test_ungraded_report_exposes_no_score`. Also tried the
+  already-known `"triggered"` field mutation (`== TRIGGERED` → `== PASSED`)
+  out of curiosity: **confirmed dead code, not a new finding** — grepped
+  `cli.py` and found it recomputes its own `triggered` count from
+  `report["flags"]` directly and never reads `score()`'s `"triggered"` key
+  at all, matching 09-28's own "decided/triggered dead-output pair" entry
+  exactly. Not re-logged as separate; folded into the existing dead-output
+  note.
+
+**`reconcile.py` — continuing 10-06's sweep into the still-untested
+functions it named (`_registered_people`, `extract_company_claims`,
+`_founding`, `_reconcile_company_be`, `extract_publication_claim`). Two
+real, previously-unpinned survivors, both traced live and NOT pinned
+(capped night forbids code/test changes):**
+
+1. **`extract_company_claims`'s dedup-merge condition,
+   `(claim.since and not prev.since) or (claim.board_role and not
+   prev.board_role)` → `and` (line 242) — real survivor.** All 661 tests
+   stayed green. This condition decides which of two mentions of the same
+   company (by normalized `full_name`) to *keep* when a profile names it
+   twice — not merge fields, a full replace. Under the mutation, a second
+   mention only replaces the first when it adds BOTH a `since` year AND a
+   board-role framing that the first lacked; adding just one is no longer
+   enough. Concrete repro, watched return different results on the mutated
+   vs. restored file:
+   ```python
+   from larp_meter import reconcile as rc
+   text = "Hans Muster is Chairman of Acme AG. He has been CEO of Acme AG since 2015."
+   claims = rc.extract_company_claims(text)
+   # restored:  [('CEO', 'Acme', 2015, False)]   -- keeps the claim that adds the `since` year
+   # mutated:   [('Chairman', 'Acme', None, True)] -- since=2015 is silently discarded
+   ```
+   Severity: this can only ever make a *contradiction* harder to reach
+   (losing a `since` year means `_reconcile_company`'s incorporation-date
+   check never runs on it), never easier — a false negative, not a false
+   accusation, consistent with the project's own risk ordering. Still a
+   real, previously-untested gap: a bio naming the same company twice with
+   different detail in each mention (common — "Chairman of Acme AG...
+   joined as CEO of Acme AG in 2015") could silently lose the one detail
+   that would have let the register check its founding date. Regression
+   test to add (new `TestExtractCompanyClaimsDedup` class in
+   `tests/test_reconcile.py` or similar):
+   ```python
+   def test_a_second_mention_adding_only_a_since_year_still_replaces_the_first(self):
+       """extract_company_claims keeps whichever mention of a repeated
+       company 'says more' -- but the merge condition ORs two independent
+       signals (a new `since` year, a new board-role framing). If that `or`
+       is ever weakened to `and`, a second mention that adds only a `since`
+       year (without also adding board-role framing the first lacked) is
+       wrongly discarded, silently losing the one detail that would let
+       `_reconcile_company`'s incorporation-date check ever run."""
+       text = "Hans Muster is Chairman of Acme AG. He has been CEO of Acme AG since 2015."
+       claims = rc.extract_company_claims(text)
+       self.assertEqual(len(claims), 1)
+       self.assertEqual(claims[0].since, 2015)
+   ```
+2. **`_registered_people`'s field-count guard, `len(fields) >= 2 and
+   fields[0] and fields[1]` → `len(fields) >= 1 and ...` (line 385) — real
+   survivor, and a crash, not just a missed signal.** All 661 tests stayed
+   green (none of them exercise a comma-less semicolon-delimited fragment
+   in a person section). Live-confirmed this is not equivalent: a
+   semicolon-delimited person-section entry with no comma in it (a stray
+   trailing fragment — malformed OCR/formatting noise is plausible in a
+   scraped gazette message, and the function's own job is to tolerate
+   exactly that) makes `fields` a one-element list; `fields[0] and
+   fields[1]` then raises `IndexError` under the mutation instead of
+   short-circuiting before `fields[1]` is ever evaluated:
+   ```python
+   from larp_meter import reconcile as rc
+   record = {"shabPub": [{"shabDate": "2020-01-01", "message":
+       "Eingetragene Personen neu oder mutierend: Muster, Hans, von Zürich, "
+       "mit Einzelunterschrift; SoloName;"}]}
+   rc._registered_people(record)
+   # restored:  ['Hans Muster']               -- "SoloName" (no comma) safely skipped
+   # mutated:   IndexError: list index out of range
+   ```
+   Severity: this is an availability bug, not a false-accusation one — a
+   crash takes down the whole audit (no exception handling wraps
+   `reconcile_text`'s call chain in either `reconcile.py` or `audit.py`),
+   but it cannot misattribute anything. Still real: the function's whole
+   purpose is to tolerate messy gazette text, and this guard is exactly
+   what makes a malformed entry degrade to "skipped" instead of crashing.
+   Regression test to add (same file/class as above):
+   ```python
+   def test_a_comma_less_fragment_in_a_person_section_is_skipped_not_a_crash(self):
+       """_registered_people's `len(fields) >= 2` guard exists so a
+       malformed, comma-less entry in a semicolon-delimited person section
+       degrades to 'skipped' rather than crashing on `fields[1]` with no
+       index 1 to read. A real gazette message can plausibly contain such
+       a fragment; the whole audit must not die on it."""
+       record = {"shabPub": [{"shabDate": "2020-01-01", "message":
+           "Eingetragene Personen neu oder mutierend: Muster, Hans, von "
+           "Zürich, mit Einzelunterschrift; SoloName;"}]}
+       self.assertEqual(rc._registered_people(record), ["Hans Muster"])
+   ```
+
+Did not reach `_founding`, `_reconcile_company_be`, or
+`extract_publication_claim` tonight — still untouched by any mutation, per
+10-06's original note.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged, 10
+  [FIXED] / 1 [PARTIALLY FIXED] / 4 still open — expected, since nothing
+  has merged to `master` since 10-03.
+- Did not open any individual CRITICAL/MAJOR/MODERATE/MINOR entry tonight
+  beyond the tally recount; all budget went to the mutation pass above.
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` | `f_contradicted`'s `rec_notes` filter `not in (CONTRADICTED, CONFIRMED)` → `in` | **Caught — fresh target (5 failures)** |
+| `names.py` | `tokens()`'s `return split \| joined` → `return split` | **Caught — fresh target (1 failure)** |
+| `verify.py` | `verify_patent`'s `if not inventors:` → `if inventors:` | **Caught — fresh target (1 failure)** |
+| `scoring.py` | `score()`'s `"raw_score": larp` → gated on `scored` | Caught (re-confirm of the dead-output-dict pattern, not new) |
+| `reconcile.py` | `extract_company_claims`'s dedup `or` → `and` | **Survived — real, new, not pinned (capped night)** |
+| `reconcile.py` | `_registered_people`'s `len(fields) >= 2` → `>= 1` | **Survived — real crash bug, new, not pinned (capped night)** |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py` (09-20, 09-23, 09-26, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03,
+10-04, 10-05, 10-06, 10-07, **10-18**), `names.py` (09-15, 09-20, 09-23,
+09-26, 09-27, 09-28, 09-29, 09-30, 10-01, 10-02, 10-03, 10-04, 10-05, 10-06,
+10-07, **10-18**), `flags.py` (09-16, 09-23, 09-25, 09-26, 09-27, 09-28,
+09-29, 09-30, 10-01, 10-02, 10-03, 10-04, 10-05, 10-06, 10-07, **10-18**),
+`verify.py` (09-16, 09-20, 09-23, 09-24, 09-26, 09-27, 09-28, 09-29, 09-30,
+10-01, 10-02, 10-03, 10-04, 10-05, 10-06, 10-07, **10-18**), `matching.py`
+(10-03, 10-04, 10-05), `reconcile.py` (10-06, **10-18: two more functions
+covered — `extract_company_claims`, `_registered_people` — two real
+survivors, see above; `_founding`, `_reconcile_company_be`,
+`extract_publication_claim` still untouched**).
+
+### What I learned
+
+- **Grepping the log before mutating a line is now reliably finding fresh
+  targets even in the four most heavily-mutated files**, as long as the
+  grep is specific to the exact variable/line rather than the function
+  name (10-06 already learned this the hard way; tonight it worked
+  cleanly from the start). `rec_notes`, the `tokens()` union line, and the
+  patent-inventor guard had all survived sixteen-plus nights of mutation
+  testing on this codebase purely because nobody had grepped for their
+  exact text before — the functions around them were mutated repeatedly,
+  but not these specific lines.
+- **`reconcile.py`'s untested functions are not safe just because they're
+  newer code.** Both survivors found tonight are in functions whose entire
+  job is defensive — tolerating messy real-world register text
+  (`_registered_people`) and picking the more informative of two
+  duplicate mentions (`extract_company_claims`) — and both guards were
+  exactly as unexercised as `_tie`'s was on 10-06. This is the same
+  pattern 10-06 itself named as a technique ("find the line whose comment
+  explains a defensive threshold, then construct the case it's defending
+  against") — it keeps paying off because this file has had only one
+  prior pass across 956 lines.
+- **A long gap in nightly execution doesn't corrupt anything** — the
+  queue, CI, and review-comment state were all exactly as 10-07 left them,
+  down to the dirty/clean mergeable states. The gap's only real cost is
+  eleven nights of mutation-testing and backlog-verification work that
+  didn't happen, and (more importantly) eleven more days the three open
+  PRs and their now-fourteen-item ready-to-paste regression-test pile sat
+  unreviewed. Worth flagging to the human directly rather than just noting
+  it here, since nothing inside this session can tell whether the gap was
+  intentional.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now
+   **fourteen** across ten different nights and eight files — tonight adds
+   two in `reconcile.py` (`extract_company_claims`'s dedup test,
+   `_registered_people`'s crash-guard test, both full source above). Land
+   those alongside 10-06's `_tie` test and 10-05's two
+   (`matching.py` asterisk-bullet, `names.py` mixed-script) first, then the
+   older eight listed in 10-05's own entry.
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for 26 calendar days now.**
+   Rebasing it is still the single most overdue piece of queue-clearing
+   housekeeping — now also the thing most likely to have genuinely drifted
+   given the eleven-day gap (worth re-diffing against current `master`
+   from scratch rather than assuming the old conflict is still the same
+   one).
+3. **`reconcile.py` still needs `_founding`, `_reconcile_company_be`, and
+   `extract_publication_claim` mutation-tested** — the three functions
+   10-06 named that remain untouched after tonight's pass too.
+4. The core architectural gap is still the top priority and still
+   untouched — capped-night rules have correctly kept it off the table for
+   every night since 09-22. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now over
+   nine weeks old (measured 2026-08-14).
+5. Unchanged from prior nights, still open, still low priority:
+   `scoring.py`'s `category_scores` display-order gap (10-01) and
+   `v["dec"]`/`v["flags"]` guard equivalence (10-05), `_apply_floors`'s
+   multi-floor case (09-30, re-confirmed 10-03 and 10-05), `verify.py`'s
+   `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
+   redundant emptiness guard, `_is_retracted`'s `update-to` `and`/`or`
+   survivor (10-01/10-07's entries have the full ready-to-paste test).

@@ -9375,3 +9375,264 @@ survivors, see above; `_founding`, `_reconcile_company_be`,
    `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
    redundant emptiness guard, `_is_retracted`'s `update-to` `and`/`or`
    survivor (10-01/10-07's entries have the full ready-to-paste test).
+
+---
+
+## 2026-10-19 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get` for
+mergeable state, `get_check_runs`, `get_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **27 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still exactly the same three open, unmerged `nightly/*` PRs as every prior
+entry — nothing merged to `master` since 10-03, nothing commented on. Queue
+at the 3-PR cap, so per the standing brief tonight did **not** open a new PR
+or push a new branch. This entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch), touching no other
+file. No gap this time (last entry was yesterday, 10-18), so no special
+notification — the pattern hasn't changed since last night.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly against `BACKLOG.md`: unchanged since every count since
+10-03 — **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** The four open
+criticals remain the same four restatements of the one core architectural
+gap (the one-way, claim-anchored funnel); "Zero registry reach on a
+realistic prose profile" stays `[IN PROGRESS]` — reconcile.py's reverse path
+covers company roles and publication volume, still nothing for degrees,
+employers generally, or traction claims.
+
+### What I did
+
+Mandatory per-cycle mutation pass across the four required files plus a
+continued sweep of `reconcile.py`'s three still-untested functions named by
+10-06/10-18 (`_founding`, `_reconcile_company_be`, `extract_publication_claim`).
+Grepped this file's full mutation log for every candidate line before
+touching it. All mutations applied to a saved copy, suite run, then restored
+and diffed byte-identical before moving to the next.
+
+**The four mandatory files:**
+
+- `names.py` — `name_matches`'s `mine_is_latin = any(re.search(r"[a-z]", t)
+  for t in mine)` mutated to `all(...)`: survived (662 green). Grepped the
+  log first — **this is not new**; 10-18's own entry (just above, "second
+  real survivor") already found and fully wrote this one up, repro
+  `name_matches("Yuki 田中", ["Yuki 田中"])` going `True` → `None`. I
+  independently re-derived the identical mutation before checking the log
+  and want to flag the near-miss rather than bury it: re-confirmed it's
+  still live and unpinned on `master`/this branch, nothing more to add.
+- `flags.py`, `verify.py`, `scoring.py` — spent the remaining budget on
+  `reconcile.py` instead of re-sweeping these three again; 10-18 already
+  found fresh targets in all four the same night, and a third pass in one
+  night risks exactly the rediscovery cost the standing brief warns about.
+  Deferred, not skipped — see next-run notes.
+
+**`reconcile.py` — two more real, previously-unpinned survivors, both in
+functions no prior night had touched (`_founding`, `extract_publication_claim`).
+Neither pinned (capped night forbids code/test changes):**
+
+1. **`_founding`'s `if m:` branch, inverted to `if not m:` — real survivor,
+   and worse than message-only: it changes the incorporation year this
+   function reports, which is what `_reconcile_company`'s role-date
+   contradiction check is built on.** All 662 tests stayed green. Every
+   existing `_founding`/`new_registration` test fixture pairs a
+   `(Neueintragung)` marker with a `Statutendatum:` date in the **same
+   year** as the gazette's own `shabDate`, so `m` (the `_ARTICLES_RE` match)
+   is always truthy and the `date[:4]` fallback line is never reached by
+   any test — three different mutations on that fallback line (inverting
+   `if m:`, dropping the `isdigit()` guard, truncating `date[:4]` to
+   `date[:3]`) all survived for the same underlying reason. Live-confirmed
+   not equivalent by using a record where the two years genuinely differ —
+   the realistic case of an announcement published the year *after* the
+   articles were dated:
+   ```python
+   from larp_meter import reconcile as rc
+   record = {"shabPub": [{"shabDate": "2020-01-15", "message":
+       "Acme AG, in Zuerich, Aktiengesellschaft (Neueintragung). "
+       "Statutendatum: 20.06.2019. Zweck: Software."}]}
+   rc._founding(record)
+   # restored: (2019, ...)  -- the articles date, the real incorporation year
+   # mutated:  (2020, ...)  -- the gazette publication year instead
+   ```
+   Severity: this can move `claim.status` in either direction depending on
+   which way the year is wrong — a role claimed "since 2019" at a company
+   this bug reports as founded in 2020 would read as impossible
+   (`_reconcile_company`'s date check), a false contradiction against an
+   honest subject; the reverse (reporting an earlier year than the truth)
+   could equally mask a real one. Exactly the class of risk this project's
+   governing value exists to catch, and it was one `if`/`if not` away from
+   nobody noticing. Regression test to add (new test in `tests/test_reconcile.py`,
+   alongside the existing `new_registration`/`mutation_only` helpers):
+   ```python
+   def test_founding_year_comes_from_the_articles_date_not_the_gazette_date(self):
+       """_founding must prefer the Statutendatum year over shabDate's own
+       year when the two differ -- the gazette announcement can run a
+       calendar year after the articles it reports on, and every existing
+       fixture happens to use the same year for both, masking which one
+       the code actually reads."""
+       record = {"shabPub": [{"shabDate": "2020-01-15", "message":
+           "Acme AG, in Zuerich, Aktiengesellschaft (Neueintragung). "
+           "Statutendatum: 20.06.2019. Zweck: Software."}]}
+       self.assertEqual(rc._founding(record)[0], 2019)
+   ```
+   Watched both lines fail/pass across the mutated and restored file before
+   writing this up.
+2. **`extract_publication_claim`'s tie-break, `if best is None or n >
+   best.count:` loosened to `>=` — real survivor, message-only (never moves
+   `claim.count` or the verdict).** All 662 tests stayed green;
+   `test_the_largest_count_is_the_claim` only exercises a strictly
+   increasing pair (30 then 90), never a genuine tie. Live-confirmed on a
+   text naming the same count twice in different contexts:
+   ```python
+   from larp_meter import reconcile as rc
+   c = rc.extract_publication_claim(
+       "Co-authored 30 papers in biology and 30 papers in chemistry.")
+   # restored (>):  c.text == "30 papers in biology and 30 papers in chemistry."
+   #                (keeps the FIRST occurrence on a tie)
+   # mutated  (>=): c.text == "30 papers in chemistry."
+   #                (the LAST occurrence silently overwrites it)
+   ```
+   `c.count` is 30 either way, so this never changes a verdict — only which
+   occurrence's surrounding text (and `people_before`) ends up as the
+   evidence shown to a reader. Same severity class as the ROR tie-break
+   messaging gap from 09-16/09-20. Regression test to add (same file,
+   near `test_the_largest_count_is_the_claim`):
+   ```python
+   def test_a_tied_count_keeps_the_first_occurrence(self):
+       """The tie-break is `>`, not `>=`, so a repeated identical count
+       keeps whichever mention came first rather than letting a later,
+       equally-sized mention silently overwrite its evidence text."""
+       c = rc.extract_publication_claim(
+           "Co-authored 30 papers in biology and 30 papers in chemistry.")
+       self.assertIn("biology", c.text)
+   ```
+   Watched it fail (text became the chemistry clause) against the mutated
+   file and pass against the restored file before writing this up.
+
+Did not reach `_reconcile_company_be` tonight — still untouched by any
+mutation, per 10-06/10-18's original note.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- Recounted the CRITICAL tally directly (see above): unchanged.
+- Independently re-confirmed MAJOR finding "Name matching joins all
+  candidate names into one string, so tokens from different people combine
+  into a match" (`BACKLOG.md`, MAJOR section) is still live on `names.py`'s
+  `name_matches` — not previously marked `[FIXED]`, and I hadn't seen it
+  reconfirmed in this file's own log. Fresh repro, live-checked:
+  ```python
+  from larp_meter import names
+  names.name_matches("Jan Peeters", ["Jan Vermeulen", "Ana Peeters"])
+  # -> True, though neither "Jan Vermeulen" nor "Ana Peeters" is "Jan Peeters"
+  ```
+  `name_matches` still joins every usable candidate name into one blob
+  (`blob = normalize(" ".join(usable))`) before asking which of the
+  subject's tokens appear in it, so a multi-author paper's unrelated
+  co-authors can combine to falsely confirm a name neither of them
+  actually has. This is the opposite-direction risk from the project's
+  usual "never accuse an honest person" concern — it's a false VERIFIED,
+  which is exactly what a fabricator picking a common-surname persona
+  would exploit (BACKLOG's own worked example: "Wei Chen" against
+  `["L. Chen", "A. Novak"]`). Confirmed real and unfixed; did not attempt a
+  fix tonight (capped night, and the fix BACKLOG proposes — compare each
+  candidate individually, require given-name evidence alongside a bare
+  surname — is a real behavior change to `name_matches`'s matching
+  semantics, not a one-line guard, so it deserves its own full night with
+  tests across every existing `name_matches` caller, not a rushed patch
+  squeezed into a capped one).
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `names.py` | `mine_is_latin = any(...)` → `all(...)` | Survived — re-confirmation of 10-18's finding, not new |
+| `reconcile.py` | `_founding`'s `if m:` → `if not m:` | **Survived — real, new, not pinned (capped night)** |
+| `reconcile.py` | `_founding`: drop the `date[:4].isdigit()` guard | Survived for the same underlying reason as above (fallback line unreached by any fixture) — same finding, not separately pinned |
+| `reconcile.py` | `_founding`: `date[:4]` → `date[:3]` | Survived for the same underlying reason — same finding, not separately pinned |
+| `reconcile.py` | `extract_publication_claim`'s tie-break `n > best.count` → `>=` | **Survived — real, new, not pinned (capped night)** |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py`, `names.py`, `flags.py`, `verify.py` — all four swept again on
+10-18, not re-touched tonight (see "What I did"). `matching.py` (10-03,
+10-04, 10-05). `reconcile.py` (10-06, 10-18, **10-19: `_founding` and
+`extract_publication_claim` now covered — two real survivors, see above;
+`_reconcile_company_be` still untouched**).
+
+### What I learned
+
+- **Grepping the log before mutating still isn't foolproof against
+  rediscovery** — I re-derived 10-18's `any`/`all` finding from scratch
+  before checking, because I started from "what untested comparison looks
+  fairness-relevant" rather than "what's actually in the log already."
+  10-18's own lesson ("grep the exact variable/line, not the function
+  name") is right, but it only helps if it's done *before* spending the
+  time constructing the repro, not after. Concretely: check the log before
+  investigating a candidate mutation, not just before writing it up.
+- **The same root cause (`_founding`) produced three "different" surviving
+  mutations** — inverting the `if`, dropping the digit guard, and
+  truncating the slice all survived for one reason: the fallback branch is
+  simply never reached, because every test fixture's `Statutendatum` year
+  matches its `shabDate` year. This is the same shape as 10-18's own
+  `reconcile.py` lesson (defensive-looking code in newer modules is not
+  safe just because it's newer) but one level more specific: when *one*
+  guard is permanently unreached, every mutation downstream of it inside
+  the same dead branch will falsely look like three separate gaps rather
+  than one. Worth checking reachability of the *branch*, not just the
+  *comparison*, before writing up a survivor as a distinct finding — I
+  folded the second and third mutations into the first rather than listing
+  three.
+- **A confirmed-but-unfixed MAJOR finding is still worth recording even
+  without a new mutation** — the "Jan Peeters" cross-candidate match isn't
+  something mutation testing would surface (it's the *current*, unmutated
+  behavior that's wrong), so it would never show up in this section's log
+  no matter how many nights pass. Backlog verification and mutation
+  testing are catching different classes of bug; this file's running log
+  structure makes it easy to forget the former needs its own attention
+  each night, not just a tally recount.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** If it has
+   dropped below 3, the ready-to-paste regression-test pile is now
+   **sixteen** across eleven different nights and eight files — tonight
+   adds two in `reconcile.py` (`_founding`'s Statutendatum-vs-shabDate test,
+   `extract_publication_claim`'s tie-break test, both full source above).
+   Land those alongside 10-18's two, 10-06's `_tie` test, and 10-05's two
+   (`matching.py` asterisk-bullet, `names.py` mixed-script) first, then the
+   older eight listed in 10-05's own entry.
+2. **#29 (`nightly/2026-09-22`) has been `dirty` for 27 calendar days now**
+   — still the single most overdue piece of queue-clearing housekeeping.
+3. **`reconcile.py` still needs `_reconcile_company_be` mutation-tested** —
+   the one function from 10-06/10-18's list that remains untouched.
+4. **The "Jan Peeters" cross-candidate false-match bug in `names.py` is a
+   strong candidate for the first real feature night once the queue
+   clears** — confirmed live tonight (see above), unfixed, and BACKLOG.md
+   already has a fix direction (compare per-candidate, require given-name
+   evidence alongside a bare surname match). This is higher-value than it
+   looks for a MAJOR-severity item: it's a false-positive-match bug a
+   fabricator can exploit by choosing a common surname, which cuts against
+   the tool's whole purpose from the opposite direction of the usual
+   false-accusation risk. Needs its own full night (not a capped-night
+   patch) since it touches `name_matches`'s core semantics and every
+   caller needs re-checking, per this project's own cross-boundary review
+   step.
+5. The core architectural gap is still the top priority and still
+   untouched — capped-night rules have correctly kept it off the table for
+   every night since 09-22. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now over
+   nine weeks old (measured 2026-08-14).
+6. Unchanged, still open, still low priority: `scoring.py`'s
+   `category_scores` display-order gap (10-01) and `v["dec"]`/`v["flags"]`
+   guard equivalence (10-05), `_apply_floors`'s multi-floor case (09-30,
+   re-confirmed 10-03/10-05), `verify.py`'s `_ror_country` first-vs-last
+   `locations` gap (09-26), `names.initials()`/`_name_matches` dead-output
+   cleanup, `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s
+   `update-to` `and`/`or` survivor (10-01/10-07's entries have the full
+   ready-to-paste test).

@@ -9636,3 +9636,205 @@ Files mutation-tested so far, by night (continuing the running log):
    cleanup, `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s
    `update-to` `and`/`or` survivor (10-01/10-07's entries have the full
    ready-to-paste test).
+
+## 2026-10-20 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get` for
+mergeable state, `get_check_runs`, `get_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **28 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still exactly the same three open, unmerged `nightly/*` PRs as every prior
+entry since 09-24 — nothing merged to `master` since 09-22, nothing
+commented on, nothing reviewed. Queue at the 3-PR cap, so per the standing
+brief tonight did **not** open a new PR or push a new branch. This entry is
+committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest
+open branch), touching no other file. No new information since 10-19 (same
+three PRs, same mergeable states, same zero activity) — per every prior
+capped entry's own reasoning, that means no fresh notification either;
+re-alerting on an unchanged fact nightly would just make a real change
+harder to notice.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly against `BACKLOG.md`'s `## CRITICAL (15)` section,
+heading by heading rather than trusting the running number: unchanged —
+**10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** The four open items are
+the same four restatements of the one core architectural gap named at the
+top of the standing brief (lines ~122, ~195, ~241, ~285: "one-way,
+claim-anchored funnel", "citing no identifiers disables verification",
+"zero registry reach on a realistic prose profile", "identifier-keyed and
+one-way"). Two of the four ("one-way, claim-anchored funnel" and "zero
+registry reach") carry `[IN PROGRESS]` notes from 08-15/08-27/08-30 — all
+predating `reconcile.py` entirely. The other two ("citing no identifiers
+disables verification", "identifier-keyed and one-way") have **no**
+`[IN PROGRESS]` annotation at all, and `reconcile.py`'s reverse path
+(Swiss/Belgian company roles, OpenAlex publication volume) has never been
+cross-referenced into either despite directly bearing on both — worth a
+future night's attention as a documentation gap, not a code one: the fix
+exists, the backlog entry just doesn't know about it yet.
+
+### What I did
+
+Mandatory per-cycle mutation pass. Grepped this file's full mutation log
+before touching anything, per 10-19's own lesson (check the log *before*
+constructing a repro, not after).
+
+**The four mandatory files — quick spot-check, one mutation each, all
+caught (no new finding, re-confirmation only):**
+
+- `scoring.py` — `coverage >= MIN_COVERAGE` → `>`: caught immediately
+  (`test_coverage_exactly_at_min_coverage_is_still_scored` fails).
+- `names.py` — `mine_is_latin != blob_is_latin` → `==`: caught (13
+  failures, including the Latin/non-Latin boundary tests).
+- `flags.py` — leadership `ctx.word_count >= 40` → `> 40`: caught (the
+  exact-40-words boundary test fails).
+- `verify.py` — ROR tie-break `overlap > best_overlap` → `>=`: **caught**
+  this time, by `test_ror_tie_break_keeps_the_registrys_own_higher_ranked_result`.
+  Several earlier entries (09-16 through 10-19) reported this exact
+  mutation as a repeat *survivor* — but that pin landed on `master` via
+  `46e755a` ("Merge nightly/2026-09-20: Pin two real mutation survivors in
+  verify_institution's ROR ranking logic"), which this branch is built on
+  top of. Those later "still unpinned" write-ups look like they were
+  re-asserting an older, pre-09-20 finding without re-testing it live each
+  time — a real instance of the exact rediscovery-without-reverification
+  risk 10-19's own "What I learned" section warned about, just one layer
+  up (restating a stale conclusion rather than re-deriving a stale
+  mutation). Flagging this for whoever reads next rather than quietly
+  fixing the historical record: if a future entry still finds this
+  specific line reported as an open survivor, re-test it live first before
+  writing it up again.
+
+**`reconcile.py`'s `_earlier_sole_trader` (Belgium) — one real,
+previously-unpinned survivor. Not pinned (capped night forbids code/test
+changes):**
+
+Dropping the name-match filter entirely —
+
+```python
+# restored:
+older = [r for r in rows if r["start"] and r["start"] < founded
+         and names.name_matches(subject, [" ".join(reversed(r["name"].split(",", 1)))]) is not False]
+# mutated:
+older = [r for r in rows if r["start"] and r["start"] < founded]
+```
+
+— leaves all 33 tests in `tests/test_reconcile_belgium.py` green. Every
+existing sole-trader fixture uses the literal name `"Vane, Marcus"` against
+subject `"Marcus Vane"`, so the filter's own presence is never exercised by
+anything that would fail without it. Traced why before writing this up as
+more than an equivalent mutant: KBO's sole-trader search
+(`natuurlijkPersoon=natuurlijkPersoon`) takes `searchWord=<surname>` and
+`firstName=<given>` as separate fields, which is "exact" in the sense of
+matching those two fields, not in the sense of matching one specific
+person — two unrelated Belgian sole traders can legitimately share a given
+name and surname, and the search would return both. The filter's job is to
+reject a row where `names.name_matches` can affirmatively say this isn't
+the same name (e.g. a compound/hyphenated surname that encodes differently
+between the profile text and the register, producing a token mismatch).
+Severity note, not a false-accusation risk: dropping this filter only ever
+makes the result *more lenient* — it can turn a would-be `CONTRADICTED`
+into `AMBIGUOUS` ("a sole-trader business ... may be the same business")
+on a case where the name match should have ruled that out, which is
+already the direction this project's governing value prefers (missing a
+fraud over accusing an innocent). Still a real, unpinned gap in exactly the
+function 10-19 flagged as the one `reconcile.py` function with no mutation
+coverage yet. Did not attempt the `elif not form_ok` branch's
+`_KBO_FORM_LABELS.get(claim.legal_form, ("\0",))` fallback — traced
+statically and it looks dead by construction (`_KBO_CONTRADICTABLE` is a
+strict subset of `_KBO_FORM_LABELS`'s keys, so every `legal_form` that
+reaches this line is guaranteed a real entry, never the `"\0"` default) —
+didn't spend capped-night budget mutating a branch that can't be live
+without first live-confirming that subset relationship holds for every
+legal form the extractor can produce, which is next-run work, not tonight's.
+
+### What I confirmed / refuted in BACKLOG.md
+
+Recount only tonight (see above) — no new live repro against a BACKLOG.md
+finding beyond the backlog-tally recount itself. The "Jan Peeters"
+cross-candidate false-match bug 10-19 confirmed live and unfixed in
+`names.py` remains exactly as 10-19 left it; did not re-derive it a second
+time (grepped this file first, found it already fully written up with a
+fix direction — nothing to add).
+
+### Mutation-testing log
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught |
+| `flags.py` | leadership `word_count >= 40` → `> 40` | Caught |
+| `verify.py` | ROR tie-break `overlap > best_overlap` → `>=` | Caught (pinned since `46e755a`/09-20; several nights in between misreported it as an open survivor without re-testing — see above) |
+| `reconcile.py` | `_earlier_sole_trader`: drop the `names.name_matches(...) is not False` filter | **Survived — real, new, not pinned (capped night)** |
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py`, `names.py`, `flags.py`, `verify.py` — swept again tonight
+(spot check, all caught). `matching.py` (10-03, 10-04, 10-05).
+`reconcile.py` (10-06, 10-18, 10-19, **10-20: `_earlier_sole_trader`
+now covered** — one real survivor, see above; the `form_ok` fallback
+traced as dead code, not mutated).
+
+### What I learned
+
+- **A "still unpinned" claim repeated across several nights can itself go
+  stale.** The ROR tie-break survivor was real once (09-16 through
+  09-20-eve), got pinned on `master` by the 09-20 merge, and then kept
+  being reported as an open survivor for a month afterward — apparently
+  because each of those nights trusted the *previous night's writeup*
+  (or its own memory of the finding) rather than re-running the mutation
+  against the actual branch in front of it. The standing brief's "grep the
+  log before mutating" advice guards against *rediscovering* a fix; it
+  does not guard against *re-asserting* one that already landed. The fix
+  is the same either way: re-run the mutation live, every time, before
+  writing the sentence "this is still unpinned" — a conclusion about code
+  state is only as fresh as the test run that produced it.
+- Tracing a suspected-dead branch statically (the `_KBO_FORM_LABELS`
+  fallback) before spending mutation budget on it is cheaper than mutating
+  it and discovering the suite can't tell the difference — but it still
+  needs a live check against the extractor's actual legal-form vocabulary
+  before being written off for good; "looks dead from reading the two
+  dicts side by side" is weaker evidence than the live reachability checks
+  this project's other dead-code findings (ROR v1, `_significant_tokens`)
+  were built on.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Unchanged at
+   3 for the 16th consecutive capped night in a row (09-24 through today).
+   #29's conflict is now 28 days old and remains the single most overdue
+   piece of queue-clearing housekeeping — still not a nightly run's call to
+   force.
+2. **Land the ready-to-paste regression tests once the queue clears.**
+   Tonight adds one more to the pile: `_earlier_sole_trader`'s
+   name-mismatch guard (full repro above). This continues the list 10-19
+   and earlier entries already built up — see those entries for the full
+   set (`_founding`'s Statutendatum-vs-shabDate test, `extract_publication_claim`'s
+   tie-break test, 10-05's `matching.py`/`names.py` pair, 10-01/10-07's
+   `_is_retracted` survivor, and more).
+3. **Audit BACKLOG.md's two un-annotated core-gap restatements** ("citing
+   no identifiers disables verification", "identifier-keyed and one-way")
+   **against what `reconcile.py` already ships.** Both predate the reverse
+   path and have zero `[IN PROGRESS]` notes despite the Swiss/Belgian
+   company-role and OpenAlex publication-volume slices bearing directly on
+   their own fix directions. This is a half-hour documentation pass, not a
+   code change — cheap value sitting unclaimed because every capped night
+   since 09-22 has spent its backlog-verification budget elsewhere.
+4. **`reconcile.py`'s `_KBO_FORM_LABELS` fallback** (`.get(claim.legal_form,
+   ("\0",))`, line ~651) needs a live check against every legal form
+   `extract_company_claims` can actually produce before it can be called
+   confirmed-dead or deleted — traced as unreachable tonight by static
+   inspection only.
+5. The "Jan Peeters" cross-candidate false-match bug in `names.py`
+   (10-19) is still the strongest candidate for the first real feature
+   night once the queue clears — unchanged recommendation.
+6. The core architectural gap is still the top priority and still
+   untouched by new code — capped-night rules have correctly kept it off
+   the table for every night since 09-22. Once real feature work resumes,
+   re-verify OpenAlex's live rate limits first — the brief's own numbers
+   are now over nine weeks old (measured 2026-08-14).

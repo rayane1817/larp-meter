@@ -9838,3 +9838,345 @@ traced as dead code, not mutated).
    the table for every night since 09-22. Once real feature work resumes,
    re-verify OpenAlex's live rate limits first — the brief's own numbers
    are now over nine weeks old (measured 2026-08-14).
+
+## 2026-10-21 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get` for
+mergeable state, `get_check_runs`, `get_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **29 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still exactly the same three open, unmerged `nightly/*` PRs as every entry
+since 09-24 — the 17th consecutive capped night, and the 29th calendar day
+since anything last merged to `master` (the last merge was the 2026-09-22
+interactive session that landed `reconcile.py` itself). Zero review comments
+on any of the three. Per the standing brief, tonight did **not** open a new
+PR or push a new branch — this entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch), touching no other
+file, per the standing brief's explicit rule for a capped night.
+
+**Flagging this to the user directly tonight (not just in this file).** A
+prior run already raised the queue once on 10-01 (seven nights capped, then);
+it is now 17 nights capped and 29 days with zero merge or review activity on
+any of the three PRs, and the pile of fully-verified, ready-to-paste
+regression tests sitting behind the cap (see below) has grown past twenty
+across twelve different nights and nine files, including a confirmed MAJOR
+fairness bug (`names.py`'s cross-candidate false match, 10-19) with its fix
+direction already written down. Nothing about *this* repeats the 10-01
+notification's content — the fact that merits a fresh ping is the scale the
+backlog has reached, not a day-to-day change.
+
+### Running backlog tally (15 CRITICALs)
+
+Recounted directly against `BACKLOG.md`'s `## CRITICAL (15)` section: unchanged
+— **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** The four open items
+remain the same four restatements of the one core architectural gap. Tonight's
+backlog-verification work (see below) adds `[IN PROGRESS]` write-ups for the
+two of the four that had none yet, documenting what `reconcile.py` already
+closes — this does not move any of the four into `[FIXED]`/`[PARTIALLY
+FIXED]`, since the core gap (no probe for credentials/leadership/traction
+claims, no reconciliation for the general case) is still fully open; it only
+replaces "undocumented" with "documented, partially closed, partially open."
+
+### What I did
+
+Mandatory per-cycle mutation pass, spot-checking the four required files first
+(quick, one mutation each — all re-confirmed caught, no new finding), then a
+deeper pass on `flags.py`'s `f_contradicted` (the function `reconcile.py`'s
+09-22 integration rewired, not touched by name since) and continuing the
+`reconcile.py` sweep into `_reconcile_company_be`, the function 10-19/10-20
+left mid-swept.
+
+**Four mandatory files — spot-check, all caught:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught (61 failures + 11 errors) |
+| `verify.py` | ROR tie-break `overlap > best_overlap` → `>=` | Caught (still pinned since `46e755a`/09-20) |
+
+**`flags.py`'s `f_contradicted` — one real, previously-undiscovered coverage
+gap, confirmed reachable with a direct repro (not pinned — capped night
+forbids code/test changes):**
+
+```python
+# flags.py:642-645, inside f_contradicted, reached when: checkable (identifier)
+# claims exist and ctx.verified, but none of them is refuted/mismatched/confirmed
+# (e.g. every identifier's registry was unreachable -> UNCHECKABLE), AND a
+# reconciliation (company role or publications) is independently CONFIRMED:
+if rec_confirmed:
+    return FlagResult(
+        PASSED, _rec_confirmed_summary(rec_confirmed) + "; no identifier could be attributed.",
+        [r.line() for r in rec_confirmed[:4]])
+```
+
+Deleting this entire branch (`if False: pass`) left all 662 tests green — zero
+coverage, not even indirectly. Traced reachability before writing it up as a
+coverage gap rather than dead code, with a direct `AuditContext`/`f_contradicted`
+repro (not full `run_audit`, since this is a pure flag-logic reachability
+question, not a dispatch-wiring one — the dispatch itself, `ctx.reconciliations`
+reaching `f_contradicted`, is already exercised by the 09-22 end-to-end test):
+
+```python
+from larp_meter import extract as ex
+from larp_meter import reconcile as rc
+from larp_meter.flags import AuditContext, f_contradicted
+
+claim = ex.Claim(kind="output", subtype="doi", value="10.1/xyz", status=ex.UNCHECKABLE, detail="network down")
+rec = rc.Reconciliation(kind="company", claim="CEO of Vane NV since 2010", company="Vane NV",
+                         outcome=rc.CONFIRMED, identity=rc.CONFIDENT, detail="On record as director.")
+ctx = AuditContext(text="", claims=[claim], source_urls=[], subject_name="Marcus Vane",
+                    banks=None, verified=True, reconciliations=[rec])
+r = f_contradicted(ctx)
+# -> PASSED, "The commercial register names the subject at 1 claimed company;
+#    no identifier could be attributed."
+```
+
+This is a real, live-reachable combination — `run_audit` runs `Verifier` (its
+own `urlopen`-based network layer) and `reconcile.reconcile_text` (its own,
+separate `_http`) independently, so one registry being unreachable while the
+other confirms a company role is an entirely ordinary outcome, not a
+contrived edge case. The output itself looks correct (PASSED, with an honest
+caveat that attribution wasn't established) — this is a coverage gap in the
+"tests validating a path production could not reach" family's mirror image: a
+path production *can* reach, that *no test anywhere* reaches, found only
+because tonight's mutation happened to land inside it. Ready-to-paste
+regression test for whoever next has queue room (add near
+`test_a_vague_belgian_profile_is_caught_by_its_company_claim` in
+`tests/test_reconcile_belgium.py`, or as a direct `AuditContext` test in
+`tests/test_flags.py` alongside flag 11's other direct-construction cases):
+
+```python
+def test_a_confirmed_company_role_passes_even_when_no_identifier_resolved(self):
+    """An unreachable DOI registry must not blank out an independent company-role
+    confirmation: a profile with one UNCHECKABLE identifier and one CONFIRMED
+    reconciliation should still PASS flag 11 on the reconciliation's own strength,
+    not fall through to a generic "nothing could be attributed" UNKNOWN."""
+    claim = ex.Claim(kind="output", subtype="doi", value="10.1/xyz",
+                      status=ex.UNCHECKABLE, detail="network down")
+    rec = rc.Reconciliation(kind="company", claim="CEO of Vane NV since 2010",
+                             company="Vane NV", outcome=rc.CONFIRMED,
+                             identity=rc.CONFIDENT, detail="On record as director.")
+    ctx = AuditContext(text="", claims=[claim], source_urls=[], subject_name="Marcus Vane",
+                        banks=load_banks(), verified=True, reconciliations=[rec])
+    r = f_contradicted(ctx)
+    self.assertEqual(r.status, PASSED)
+    self.assertIn("no identifier could be attributed", r.description)
+```
+
+**`reconcile.py`'s `_reconcile_company_be` — continuing 10-19/10-20's sweep,
+two mutations tried, both caught (re-confirmation, not new findings):**
+
+| Mutation | Result |
+|---|---|
+| `rec.identity`'s `and not about_someone_else` → `and about_someone_else` | Caught (5 failures, incl. the 09-22 end-to-end test) |
+| `if not wanted & {_norm(n) for n in record["names"]}:` → `wanted \| {...}` | Caught (1 failure) |
+
+`_reconcile_company_be` is now fully covered end to end: every branch tried
+across 10-19/10-20/tonight (the dedup, the departed-officer split handled in
+PR #29's own body, `about_someone_else`, the names-don't-match AMBIGUOUS
+early-return, `_earlier_sole_trader`'s name filter) has either a real,
+written-up survivor already on record or a caught, re-confirmed mutation.
+
+### What I confirmed / refuted in BACKLOG.md
+
+**Live-enumerated (not just statically traced) that `verify.py`'s sibling,
+`reconcile.py`'s `_KBO_FORM_LABELS.get(claim.legal_form, ("\0",))` fallback
+(reconcile.py:651), is dead code** — the specific follow-up 10-20's entry
+asked for. `reconcile_text` (reconcile.py:937-956) only ever calls
+`_reconcile_company_be` when `c.legal_form in BELGIAN_FORMS` (the 9-member
+set at reconcile.py:161) or when `c.legal_form == "SA" and c.belgian and not
+c.swiss` — so the only `claim.legal_form` values that can ever reach line 651
+are `{NV, BV, BVBA, SPRL, SRL, CVBA, SCRL, VZW, ASBL, SA}`, exactly the 10 keys
+`_KBO_FORM_LABELS` defines (reconcile.py:603-608). `_FORM_CANON`
+(reconcile.py:153-159) confirms no other spelling canonicalises to one of
+these 10 strings, and no claim with any of the other 6 possible canonical
+forms (`Sàrl`, `Sagl`, `AG`, `GmbH`, `Genossenschaft`, `Stiftung`) ever reaches
+`_reconcile_company_be` at all — they always route to `_reconcile_company`
+(the Swiss path) instead. The `.get(..., ("\0",))` default can never actually
+fire. Not deleted tonight (capped night forbids code changes) — same
+treatment as `verify.py`'s ROR v1 fallback (PR #31): delete outright rather
+than writing a synthetic test to pin an unreachable branch, once queue room
+exists.
+
+**Audited `BACKLOG.md`'s two un-annotated core-gap restatements against what
+`reconcile.py` already ships** (10-20's own flagged documentation gap).
+Reverted the edits from the working tree per the capped-night NIGHTLY.md-only
+rule — full text below, ready to paste into `BACKLOG.md` on a night with
+queue room:
+
+---
+**Paste 1 — append to "Citing no identifiers disables the entire verification
+half of the tool, including its only severity floor" (BACKLOG.md, currently
+ending "...so the floor is not co-extensive with the identifier gate."):**
+
+> **[IN PROGRESS — nightly/2026-09-22 interactive session, documented
+> 2026-10-21]** `reconcile.py`'s reverse path (Swiss/Belgian company-role
+> claims against Zefix/KBO, landed 2026-09-22) closes this gap for one claim
+> type. `f_contradicted` (flags.py:534-586) now checks `ctx.reconciliations`
+> even when `checkable` — the identifier-subtype list this finding is about —
+> is empty (flags.py:547-556), and a `CONTRADICTED` company-role
+> reconciliation TRIGGERS flag 11 and arms its ORANGE floor with zero
+> DOI/ORCID/GitHub/arXiv/NCT/patent claims anywhere in the profile — exactly
+> the mechanism this finding's own fix direction asked for. Live-confirmable:
+> a bio naming a company role dated earlier than the register's own founding
+> date, with no identifier anywhere, now reaches TRIGGERED via `rec_contra`
+> alone. Still open: the publication-volume side of the same gap is
+> architecturally incapable of arming the floor, by design rather than
+> oversight — `OpenAlexAuthors.complete = False` (reconcile.py:846) means
+> `gate()` (reconcile.py:115-125) always demotes a publications
+> `CONTRADICTED` to `AMBIGUOUS` before it reaches flag 11, because OpenAlex's
+> author-splitting makes "fewer works than claimed" genuinely weaker evidence
+> than a commercial register's absence. So a bare "published extensively" /
+> "40 peer-reviewed papers" fabrication with no identifiers — this finding's
+> own running example — still cannot TRIGGER or floor from `reconcile.py`
+> alone; it only ever surfaces as an `UNKNOWN`-with-evidence note (`rec_notes`,
+> flags.py:546/560-563). That is a deliberate, correct scope limit (see
+> `reconcile.py`'s module docstring and NIGHTLY.md's 2026-09-22 entry), not a
+> remaining bug — closing it further is covered by the sibling finding below
+> ("Verification is identifier-keyed and one-way"), whose fix direction items
+> (3)/(4) this is.
+
+**Paste 2 — append to "Verification is identifier-keyed and one-way: the
+verifiable set is bounded by what the subject volunteered, not by what
+registries can answer" (BACKLOG.md, currently ending "...the one thing that
+would make name-keyed probes safe, and then throws it away."):**
+
+> **[IN PROGRESS — nightly/2026-09-22 interactive session, documented
+> 2026-10-21]** `reconcile.py` ships fix-direction items (1), (3) and (4)
+> above for exactly two claim types — company roles against Zefix/KBO,
+> publication volume against OpenAlex — not yet the general case this finding
+> describes.
+>
+> (1) **Subject-keyed probes:** `ZefixWeb.search`, `KboPublic.search`,
+> `OpenAlexAuthors.search` (reconcile.py:837-864, the OpenAlex one reusing
+> providers.py's own by-name endpoint) all query by subject name or claimed
+> company, never by a subject-volunteered identifier.
+>
+> (3) **Quantity reconciliation:** `_reconcile_publications`
+> (reconcile.py:885-930) extracts the claimed count from prose
+> (`extract_publication_claim`, reconcile.py:807-834) and compares it to
+> OpenAlex's own `works_count` total via `CONFIRM_RATIO` — the literal "40
+> peer-reviewed publications vs. what the registry shows" comparison this
+> finding's own worked example (line ~1801) asks for.
+>
+> (4) **Scored honestly:** a publications shortfall computes `outcome =
+> CONTRADICTED` (reconcile.py:925) but is then routed through `gate()`
+> (reconcile.py:115-125), which demotes it to `AMBIGUOUS` because
+> `OpenAlexAuthors.complete` is `False` by design — it surfaces as exactly the
+> "UNKNOWN-with-evidence" line fix-direction item (4) asked for (`rec_notes`,
+> consumed at flags.py:546/560-563), never inheriting flag 11's ORANGE floor.
+> `Reconciliation` (reconcile.py) is also the type distinct from `Claim` that
+> item (2) asked for, threaded into `AuditContext` as the first-class
+> `ctx.reconciliations` field (flags.py:47) rather than the old `signals`
+> dict.
+>
+> Still fully open: item (2)'s *other* half is untouched — `providers.py`'s
+> OpenAlex/Crossref-by-name scholar check (flags.py:242-249,
+> `ctx.signals["openalex"]`) is the pre-existing mechanism this finding itself
+> cites as broken (truthiness-only, claimed count never read, line ~1793), and
+> `reconcile.py` neither touched nor replaced it. The namesake-with-one-paper-
+> PASSES-"40 papers" failure this finding describes at line ~1812 is still
+> live through that separate path, even though `reconcile.py`'s own
+> publications reconciliation now reads the claimed count correctly. Item (5)
+> — stop laundering `bundle.corpus` into `extract_claims`; wire or delete the
+> dead `signals["profile_facts"]` — is entirely untouched. ORCID
+> name+affiliation search, EPO/Google Patents inventor search,
+> ClinicalTrials.gov investigator search and FDA 510(k) search (also named in
+> this finding's own fix direction) remain unbuilt; the reverse path currently
+> covers only Swiss/Belgian company roles and OpenAlex publication volume.
+---
+
+Did not re-derive the "Jan Peeters" cross-candidate `names.py` finding
+(10-19) or re-check the `_KBO_FORM_LABELS` fallback a second way beyond the
+full-vocabulary enumeration above — both already fully written up with fix
+directions, nothing to add tonight.
+
+### Mutation-testing log
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py`, `names.py`, `flags.py`, `verify.py` — all four spot-checked
+again tonight, all caught. `matching.py` (10-03, 10-04, 10-05). `reconcile.py`
+(10-06, 10-18, 10-19, 10-20, **tonight: `_reconcile_company_be` now fully
+swept — two more mutations tried, both caught, closing out the function**).
+`flags.py`'s `f_contradicted` specifically (the reconciliation-aware rewrite
+from 09-22) — **one real, new, unpinned coverage gap found tonight** (see
+above); the rest of the function (the `not checkable` branch's `rec_contra`/
+`rec_confirmed` dispatch, the `confirmed`/`retracted`/`preprint` branches) was
+already covered by 09-22's and later nights' tests and not re-mutated
+tonight.
+
+### What I learned
+
+- **A branch can have zero test coverage without being dead code** — this is
+  a third shape, distinct from the two this project has already named
+  (reachable-and-tested-only-in-isolation, like the ROR dispatch bug; and
+  genuinely-unreachable-by-construction, like the ROR v1 fallback and
+  tonight's `_KBO_FORM_LABELS` confirmation). `f_contradicted`'s `rec_confirmed`
+  fallback branch is live, reachable through an entirely ordinary combination
+  of states (one registry down, another registry confirming), and *also* has
+  no test anywhere exercising it — not because no test could reach it, but
+  because every existing test for this function picks one of the other,
+  better-known branches. Worth treating "which branches has no test ever
+  exercised" as its own checklist, separate from "which branches look
+  statically dead," since mutation testing only surfaces this by accident
+  (whichever line the mutation happens to land on) rather than by design.
+- **Tracing `_reconcile_company_be`'s full dispatch condition against the
+  complete `_FORM_CANON` vocabulary (10 reachable forms, 6 unreachable ones)
+  was cheap and conclusive** — cheaper than the live-`curl`-against-a-real-
+  endpoint style of confirmation the ROR v1 finding needed, because this is a
+  closed, enumerable set of strings defined entirely inside the same file,
+  not an external API's behavior that could silently change. When a
+  suspected-dead branch's reachability depends only on the codebase's own
+  constants, enumerate them exhaustively rather than reasoning about a sample.
+- Reverting backlog-verification write-ups out of the working tree before
+  committing (rather than committing them alongside NIGHTLY.md) is new
+  discipline worth naming explicitly: the standing brief's capped-night rule
+  says "NIGHTLY.md-only... never any other file," and earlier capped nights
+  seem to have respected this already (no `BACKLOG.md` diffs appear in any of
+  their commits), but tonight is the first entry to spell out *why* — the
+  verified text still gets written and preserved, just as a paste-ready block
+  in this file rather than as a live edit, so nothing found is lost and
+  nothing violates the single-file rule.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Unchanged at 3
+   for the 17th consecutive capped night (09-24 through today). #29's conflict
+   is now 29 calendar days old.
+2. **Land the ready-to-paste regression tests once the queue clears.** Tonight
+   adds one more — `f_contradicted`'s `rec_confirmed`-without-attribution
+   branch (full source above) — to the pile this file has been accumulating
+   since 10-01; see 10-20's and earlier entries for the full list
+   (`_earlier_sole_trader`'s name-mismatch guard, `_founding`'s
+   Statutendatum-vs-shabDate test, `extract_publication_claim`'s tie-break
+   test, the `matching.py`/`names.py` pair from 10-05, `_is_retracted`'s
+   `update-to` survivor from 10-01/10-07, and more).
+3. **Paste the two `BACKLOG.md` annotations above** (full text in this entry)
+   once there is queue room to commit a `BACKLOG.md` change — this closes out
+   10-20's own flagged documentation gap and both of the backlog's two
+   previously-un-annotated core-gap restatements.
+4. **Delete `reconcile.py`'s `_KBO_FORM_LABELS` dead fallback** (reconcile.py:651)
+   once there is queue room — fully enumerated dead tonight, same treatment as
+   PR #31's ROR v1 deletion; no test needed, by the same precedent.
+5. **The "Jan Peeters" cross-candidate false-match bug in `names.py`** (10-19)
+   is still the strongest candidate for the first real feature night once the
+   queue clears — unchanged recommendation, not re-verified a third time
+   tonight.
+6. The core architectural gap is still the top priority and still untouched by
+   new code — capped-night rules have correctly kept it off the table for
+   every night since 09-22. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now over
+   nine weeks old (measured 2026-08-14).
+7. Unchanged, still open, still low priority: `scoring.py`'s `category_scores`
+   display-order gap (10-01) and `v["dec"]`/`v["flags"]` guard equivalence
+   (10-05), `_apply_floors`'s multi-floor case (09-30, re-confirmed 10-03/10-05),
+   `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
+   `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
+   redundant emptiness guard, `_is_retracted`'s `update-to` survivor.

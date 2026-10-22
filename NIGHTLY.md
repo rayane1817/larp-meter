@@ -10180,3 +10180,200 @@ tonight.
    `verify.py`'s `_ror_country` first-vs-last `locations` gap (09-26),
    `names.initials()`/`_name_matches` dead-output cleanup, `verify_orcid`'s
    redundant emptiness guard, `_is_retracted`'s `update-to` survivor.
+
+## 2026-10-22 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get` for
+mergeable state, `get_check_runs`, `get_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **30 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still the same three open, unmerged `nightly/*` PRs as every entry since
+09-24 — the **18th consecutive capped night**, 30 calendar days since
+anything last merged to `master` (the 2026-09-22 interactive session that
+landed `reconcile.py`). Zero review comments on any of the three, no change
+in mergeable state or CI since 10-21's entry. Per the standing brief,
+tonight did **not** open a new PR or push a new branch — this entry is
+committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest
+open branch), touching no other file.
+
+**Not re-notifying the user tonight.** 10-21's entry already escalated the
+queue's scale directly (17 nights, 29 days, 20+ ready-to-paste regression
+tests). One more day at the same depth, with the same zero-comment,
+all-green state on all three PRs, is not new information by the standard
+10-21 itself set ("the fact that merits a fresh ping is the scale the
+backlog has reached, not a day-to-day change"). Would re-notify immediately
+if the next check finds: the queue growing past 3, a review appearing on
+any PR, CI turning red, or #29's conflict getting materially worse (e.g.
+no longer a clean rebase).
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged from 10-21's recount against `BACKLOG.md`'s `## CRITICAL (15)`
+section (confirmed no commits have touched `BACKLOG.md` since the 09-22
+interactive session — `git log --oneline -- BACKLOG.md` still shows that
+session as the most recent): **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still
+open.** The four open items are the same four restatements of the one core
+architectural gap. 10-21's two drafted `[IN PROGRESS]` annotations (full
+text in that entry, documenting what `reconcile.py` already closes for two
+of the four) are still pending — not pasted into `BACKLOG.md` tonight
+either, for the same single-file capped-night reason.
+
+### What I did
+
+Mandatory per-cycle mutation pass. Baseline confirmed green first
+(`python -m unittest discover -s tests -t . -q` → 661 tests, OK), then one
+fresh-line spot-check on each of the four required files, then a deeper
+pass on `names.py`'s `name_matches` since the quick check there turned up
+something worth following up live rather than moving straight on.
+
+**Four mandatory files — spot-check, all caught (fresh lines, not repeats
+of 10-21's):**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `LEVELS` lookup `larp < cut` → `larp <= cut` | Caught (3 failures; ORANGE became RED at the 65 boundary) |
+| `names.py` | token-presence boundary — see below | **Survived — real, new coverage gap, not pinned (capped night)** |
+| `flags.py` | `f_timeline`'s 3-year slack `claimed > available + 3` → `>=` | Caught (2 failures) |
+| `verify.py` | `verify_institution`'s exact-match test `wanted <= have` → `>=` | Caught (2 failures) |
+
+One other `scoring.py` mutation tried first and set aside as **not new**:
+`_apply_floors`'s `strongest = max(floored, ...)` → `min(...)` survives
+again tonight, same as every night since 09-30 — still an equivalent
+mutant under the current `REGISTRY` (only one flag sets `"floor"`, so
+`floored` never exceeds length 1). Re-confirmed, not re-logged as a finding.
+
+**`names.py`'s `name_matches` — real, new mutation-coverage gap, confirmed
+live, not pinned (capped night forbids code/test changes):**
+
+The per-token presence check (names.py:107-108) anchors each of the
+subject's tokens with `(?<!\w)` / `(?!\w)` so a short token can only match a
+*whole word* in the candidate blob, never a substring of a longer unrelated
+word:
+
+```python
+present = {t for t in mine
+           if any(re.search(r"(?<!\w)" + re.escape(t) + r"(?!\w)", v) for v in blob_variants)}
+```
+
+Dropping both lookarounds (`re.search(re.escape(t), v)`) left all 661 tests
+green — zero coverage of a protection that is live, correct, and doing real
+work on unmodified `master`. Confirmed the gap is real, not academic, with
+a direct `name_matches` repro before and after the mutation:
+
+```python
+>>> name_matches("Ann Lee", ["Anna Leeuwen"])     # master (lookarounds intact): False
+>>> name_matches("Jan Smit", ["Marjan Smithson"])  # master: False
+# with the mutation applied (lookarounds dropped), both flip to True:
+# "ann"/"lee" match as substrings inside "anna"/"leeuwen"; "jan"/"smit"
+# inside "marjan"/"smithson" — a false CONFIRMED match between two
+# unrelated people, the exact cross-person false-positive this tool must
+# never produce.
+```
+
+This is distinct from the already-documented "Jan Peeters" cross-candidate
+bug (10-19, still open, still the top feature-night candidate): that one is
+about `name_matches` pooling *every usable candidate* into one blob so
+tokens from *different* candidates can combine to falsely confirm a name
+neither candidate actually has. Tonight's gap is about a *single* token
+matching as a bare substring *within one word* of the blob — same family
+(false positive / false corroboration, not a false accusation), different
+mechanism, and not previously noted anywhere in this file or `BACKLOG.md`
+(checked both). Ready-to-paste regression test for whoever next has queue
+room (add to `TestNameMatchingStrictness` in `tests/test_mutation_guards.py`,
+alongside `test_one_shared_token_is_not_a_match`):
+
+```python
+def test_a_short_token_does_not_match_as_a_substring_of_a_longer_word(self):
+    """name_matches's per-token presence check anchors each token with
+    (?<!\\w)...(?!\\w) so a short token like 'ann' or 'smit' cannot match as
+    a substring of an unrelated longer word ('Anna', 'Marjan'). Drop those
+    lookarounds and the whole suite still passes -- no test anywhere pins
+    this specific protection -- yet it is live, correct production
+    behavior: without it, 'Ann Lee' would falsely match 'Anna Leeuwen', and
+    'Jan Smit' would falsely match 'Marjan Smithson', both exactly the
+    cross-person false-positive this tool must never produce."""
+    self.assertFalse(names.name_matches("Ann Lee", ["Anna Leeuwen"]))
+    self.assertFalse(names.name_matches("Jan Smit", ["Marjan Smithson"]))
+```
+
+Also sanity-checked two more realistic fabricator-style short-surname
+collisions (`"Li Wei"` vs `["Alice Weiss"]`, `"Eva Noor"` vs
+`["Steva Noordman"]`) — both correctly `False` on unmodified `master`,
+confirming the guard's coverage is broad, not a narrow coincidence of the
+two names picked for the regression test above.
+
+### What I confirmed / refuted in BACKLOG.md
+
+Nothing new attempted tonight beyond the mutation-testing finding above —
+10-21 already left two fully-verified `[IN PROGRESS]` annotations drafted
+and ready to paste (the two core-gap restatements `reconcile.py` partially
+closes) and a dead-code finding (`_KBO_FORM_LABELS`'s unreachable `("\0",)`
+fallback) ready to delete once there's queue room; re-deriving either
+tonight would just restate what's already fully written up. Did not
+re-check the "Jan Peeters" cross-candidate finding (10-19) a third time —
+unchanged, still open, still the right first pick for a feature night.
+
+### Mutation-testing log
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py`, `names.py`, `flags.py`, `verify.py` — all four spot-checked
+again tonight on fresh lines (three caught, one real new survivor in
+`names.py`, see above). `matching.py` (10-03, 10-04, 10-05). `reconcile.py`
+(10-06, 10-18, 10-19, 10-20, 10-21 — `_reconcile_company_be` now fully
+swept). No `reconcile.py` mutations attempted tonight; budget went to the
+`names.py` follow-up instead.
+
+### What I learned
+
+- **A mutation-coverage gap can hide behind a correct, well-commented line
+  of production code for a long time** if no test happens to construct the
+  specific adjacency (a short token, a longer word that contains it as a
+  substring) the guard exists to prevent. `tokens()`'s own docstring and the
+  inline comments around `blob_variants`/`present` clearly show the
+  boundary regex was added deliberately — but "the author clearly meant to
+  guard this" and "a test pins that the guard still works" are different
+  claims, and only mutation testing (landing on this exact line by chance)
+  surfaced the gap between them tonight.
+- Checked both this file and `BACKLOG.md` before writing the finding up as
+  new, specifically to avoid the mistake 10-20's entry flagged about
+  restating an old conclusion without checking whether it was already
+  recorded — worth keeping as a standing step whenever a mutation survivor
+  looks similar to an already-named bug (here, "Jan Peeters") rather than
+  assuming it's a duplicate or assuming it's new.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth again before picking a task.** Unchanged at 3
+   for the 18th consecutive capped night (09-24 through today). #29's
+   conflict is now 30 calendar days old.
+2. **Land the ready-to-paste regression tests once the queue clears.**
+   Tonight adds one more — `name_matches`'s token-boundary substring test
+   (full source above) — to the pile; see 10-21's and earlier entries for
+   the rest of the list (`f_contradicted`'s `rec_confirmed`-without-
+   attribution test, `_earlier_sole_trader`'s name-mismatch guard,
+   `_founding`'s Statutendatum-vs-shabDate test, `extract_publication_claim`'s
+   tie-break test, the `matching.py`/`names.py` pair from 10-05, and more).
+3. **Paste 10-21's two `BACKLOG.md` annotations and delete `_KBO_FORM_LABELS`'s
+   dead fallback** once there is queue room — both fully written up and
+   ready, nothing further to verify.
+4. **The "Jan Peeters" cross-candidate false-match bug in `names.py`**
+   (10-19) is still the strongest candidate for the first real feature
+   night once the queue clears — unchanged recommendation.
+5. The core architectural gap is still the top priority and still untouched
+   by new code. Once real feature work resumes, re-verify OpenAlex's live
+   rate limits first — the brief's own numbers are now over nine weeks old
+   (measured 2026-08-14).
+6. Unchanged, still open, still low priority: `scoring.py`'s
+   `_apply_floors` multi-floor equivalent-mutant case (09-30, re-confirmed
+   every night since, including tonight), `category_scores` display-order
+   gap (10-01), `verify.py`'s `_ror_country` first-vs-last `locations` gap
+   (09-26), `names.initials()`/`_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s `update-to`
+   survivor.

@@ -10377,3 +10377,227 @@ swept). No `reconcile.py` mutations attempted tonight; budget went to the
    (09-26), `names.initials()`/`_name_matches` dead-output cleanup,
    `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s `update-to`
    survivor.
+
+## 2026-10-23 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_status`, `get_check_runs`, `get_comments`, `get_reviews`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **31 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still the same three open, unmerged `nightly/*` PRs as every entry since
+09-24 — the **19th consecutive capped night**, 31 calendar days since
+anything last merged to `master` (the 2026-09-22 interactive session that
+landed `reconcile.py`). Zero review comments and zero reviews on any of the
+three, no change in mergeable state or CI since 10-22's entry. Per the
+standing brief, tonight did **not** open a new PR or push a new branch —
+this entry is committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, still
+the newest open branch), touching no other file.
+
+**Not notifying the user tonight.** Checked all four of 10-22's own
+stated re-notify triggers directly rather than assuming: queue still
+exactly 3 (not grown), CI still green on all three (`get_check_runs`, 6/6
+each), zero comments and zero reviews on any PR (`get_comments`/
+`get_reviews`, all empty), and #29's `mergeable_state` is still plain
+`dirty` (not worse — no sign of a deeper conflict than the simple rebase
+10-21 first found). One more day at an unchanged state is not new
+information by the standard this file has used for the last several
+nights.
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Confirmed
+`BACKLOG.md` itself carries no commits since the 2026-09-22 interactive
+session (this branch's own history is the only place it could have
+changed, and the only `BACKLOG.md` diff on `nightly/2026-09-24` is the
+original PR's, from before the capped-night streak started). The four open
+items remain the same four restatements of the one core architectural gap
+(reverse path / claim-anchored funnel); the two `[IN PROGRESS]` annotations
+drafted 10-21, and documenting what `reconcile.py` already closes for two
+of the four, are still unpasted — same single-file capped-night reason as
+every night since.
+
+### What I did
+
+Mandatory per-cycle mutation pass, against `master`'s current tip (9fe23ff,
+661 tests) — then a fairness-lens read of `linkedin.py` once the mutation
+pass stopped turning up anything genuinely new.
+
+**Mutation pass, all four required files — baseline confirmed green first,
+`__pycache__` cleared before and after every run:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught (1 failure — "coverage exactly at the threshold must still be scored") |
+| `scoring.py` | `_apply_floors`'s tie-break `<=` → `<` | Caught (1 failure) |
+| `names.py` | single-token loop: `all(w in mine for w in extra)` → `any(...)` | Survived — **not new**, see below |
+| `flags.py` | `f_contradicted`: `if refuted or mismatched or rec_contra:` → drop `rec_contra` | Survived — **not new**, see below |
+| `verify.py` | `_attribute`'s `usable = [... if n and n.strip()]` → `if n or n.strip()` | Survived — **not new**, see below |
+
+Both `scoring.py` boundaries are the same two pinned since 2026-08-16;
+re-confirming them live was the point, not a search for something new —
+they're still exactly as protected as every prior spot-check found.
+
+**The three survivors are each already fully resolved earlier in this same
+file, and I initially missed that before checking.** I ran all three
+mutations, confirmed they survived, and had half-written them up as
+tonight's findings before doing what 09-26's entry (line ~6815 of this
+file) explicitly told a future night to do first: grep this log for the
+exact mutated line before presenting a survivor as new. Doing that after
+the fact:
+
+- `names.py`'s `all`→`any` in the single-token loop: **proven equivalent
+  mutant**, re-derived independently on 2026-09-25/09-26 and again at least
+  three more times since (formal argument: `present`'s construction via the
+  same whole-word regex search against the joined blob guarantees any word
+  shared between `extra` and `mine` would already have been counted in
+  `present`, so `extra ∩ mine` is always empty whenever the single-token
+  branch is even reached — `all(...)` and `any(...)` are therefore both
+  always `False` on a non-empty `extra`). Already pinned as such in
+  `BACKLOG.md`.
+- `flags.py`'s `f_contradicted` `rec_contra` disjunct: **real finding, but
+  from 2026-09-25**, not tonight — a profile with a checkable identifier
+  (DOI/ORCID/GitHub/arXiv/NCT/patent) that is itself VERIFIED, combined with
+  a company-role reconciliation that is CONTRADICTED, currently correctly
+  reaches `TRIGGERED` via the `or rec_contra` disjunct; dropping it leaves
+  every existing test green because no test constructs a profile with both
+  a checkable identifier AND a company reconciliation at once. A
+  ready-to-paste regression test for this has been sitting in this file
+  since 09-25 (see that entry, and the repeated "what's next" pointers at
+  09-25 through 10-21) — not re-derived tonight, just re-confirmed still
+  unfixed and still accurate.
+- `verify.py`'s `_attribute` filter `n and n.strip()` → `n or n.strip()`:
+  **proven equivalent mutant**, re-derived 09-25/09-26 and traced to
+  `verify_orcid`'s own redundant emptiness guard producing the same
+  filtered result either way for any string a real registry would ever
+  return (the only behavioral difference is a theoretical whitespace-only
+  name string, which no registry response in this codebase's test
+  fixtures or live samples has ever produced). Already logged as a
+  simplification opportunity, not a coverage gap.
+
+Net effect: tonight's mutation pass did not find anything new, but it did
+positively reconfirm, on today's `master`, that nothing has regressed in
+any of the four required files in the (at least) four weeks since these
+were last checked — a real, if unglamorous, result on a file this
+exhaustively mined.
+
+**Fairness-lens read of `linkedin.py`** (not mutation testing — a cold
+read of the whole module against the "non-Western naming/credential
+conventions" angle, since 18 straight nights of mutation testing on the
+same four core files is reaching steeply diminishing returns and this
+module hasn't had fresh eyes since the 09-25/09-26 cluster). Found one
+concrete, live-reproduced gap, but it too turns out to be already fully
+documented:
+
+- `_DEGREE_LEVEL_RE`/`_DEGREE_FIELD_RE` (linkedin.py:459-473) only recognise
+  an English-abbreviation degree vocabulary (MSc, BSc, PhD, MBA, MEng, BEng,
+  LLM, LLB, Master, Bachelor, Doctorate, Doctor) — identical in substance to
+  `extract.py`'s own `DEGREE_RE` (extract.py:173-180), which every plain-text
+  or LinkedIn-paste profile ultimately goes through. Live-confirmed just now
+  against `extract.py.DEGREE_RE` directly: `"Diplom-Ingenieur Maschinenbau
+  at Technische Universitat Munchen (2012)."` and `"Licence en Droit at
+  Universite Paris 1 Pantheon-Sorbonne (2010)."` and `"B.Tech Computer
+  Science at Indian Institute of Technology Bombay (2015)."` all fail to
+  match, while the equivalent `"MSc Computer Science at ETH Zurich
+  (2015)."` matches cleanly. This means a genuine German, French or Indian
+  engineering/law graduate's credential never becomes a `degree`/
+  `degree_institution` claim at all — not flagged as fake, just invisible
+  to flag 8 in either direction. **This is the same gap already named in
+  this file's own 2026-08-28 entry** ("remaining untouched leads from the
+  2026-08-17 list") and reconfirmed unchanged tonight, two months later —
+  not a new finding, but worth reconfirming live rather than assuming a
+  two-month-old note is still accurate without checking.
+
+### What I confirmed / refuted in BACKLOG.md
+
+Nothing new. Re-confirmed, by direct grep against `BACKLOG.md`'s own
+`## CRITICAL (15)` section headers, that the tally is unchanged (see
+above). Re-confirmed live that the `linkedin.py`/`DEGREE_RE` non-Western
+degree-vocabulary gap (BACKLOG.md's fairness-audit lead, NIGHTLY.md
+2026-08-28) still reproduces exactly as described — see evidence above.
+Did not re-check the "Jan Peeters" cross-candidate finding (10-19) a fourth
+time, or the two 10-21 `[IN PROGRESS]` annotations, or the `_KBO_FORM_LABELS`
+dead-fallback deletion — all unchanged, all still accurately described in
+their own entries, re-deriving them again would add nothing.
+
+### Mutation-testing log
+
+Files mutation-tested so far, by night (continuing the running log):
+`scoring.py`, `names.py`, `flags.py`, `verify.py` — all four spot-checked
+again tonight (two fresh-but-already-pinned `scoring.py` boundaries
+caught; three already-known survivors on the other three files
+re-confirmed, not new — see above). `matching.py` (10-03, 10-04, 10-05).
+`reconcile.py` (10-06, 10-18 through 10-21). `linkedin.py`: not mutation
+tested tonight (a cold fairness-lens read instead, see above) — still has
+no dedicated mutation-testing pass of its own in this log; worth one on a
+future night specifically targeting `_parse_educations`/`_parse_experiences`
+and the `_SECTION_ORDER`/rank-must-advance guard (linkedin.py:573-581).
+
+### What I learned
+
+- **Check this file's own log before running a mutation, not just before
+  writing one up.** I ran all three "survivor" mutations above, half
+  believed they were new findings, and only avoided repeating 09-26's
+  explicitly-named mistake ("should have checked the log first") by
+  grepping for the mutated line's literal text before finalizing this
+  entry — after already having spent the time re-deriving the formal
+  equivalent-mutant argument for `names.py`'s `all`/`any` case from
+  scratch. The grep takes seconds; re-deriving a conclusion eighteen nights
+  of this file already reached takes much longer. For whoever reads this
+  next: `grep -n "<the exact mutated line>" NIGHTLY.md` *before* mutating,
+  not after.
+- With the four required files this thoroughly mined after 18+ capped
+  nights, a fresh *lens* (fairness, red-team, newest-module) is now more
+  likely to surface something than one more generic mutation sweep of the
+  same four files — tonight's `linkedin.py` read found a real (if
+  already-known) gap in minutes, where the mutation pass spent longer
+  finding nothing new. Worth defaulting to a lens-based review earlier in
+  a capped night's time budget, with the mandatory mutation pass kept
+  short and spot-check-only once a file has had several prior full sweeps.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all four re-notify triggers again before
+   picking a task** (queue size, CI color, review/comment count, #29's
+   exact `mergeable_state`) — don't assume yesterday's check still holds.
+   Unchanged at 3 for the 19th consecutive capped night; #29's conflict is
+   now 31 calendar days old.
+2. **Grep this file for the exact mutated line before trusting a mutation
+   survivor is new** — see tonight's own near-miss above. This should be
+   step zero of every future mutation pass, not a cleanup step done after
+   the fact.
+3. **Land the ready-to-paste regression tests once the queue clears** —
+   unchanged pile, see 09-25 through 10-22's entries for the full list
+   (`f_contradicted`'s `rec_contra` disjunct test and the
+   `rec_confirmed`-without-attribution test, `_earlier_sole_trader`'s
+   name-mismatch guard, `_founding`'s Statutendatum-vs-shabDate test,
+   `extract_publication_claim`'s tie-break test, the `matching.py`/
+   `names.py` pair from 10-05, `name_matches`'s token-boundary substring
+   test from 10-22, and more).
+4. **Paste 10-21's two `BACKLOG.md` annotations and delete
+   `_KBO_FORM_LABELS`'s dead fallback** once there is queue room.
+5. **The "Jan Peeters" cross-candidate false-match bug in `names.py`**
+   (10-19) and **`DEGREE_RE`/`_DEGREE_LEVEL_RE`'s non-Western degree
+   vocabulary gap** (08-17/08-28, reconfirmed live tonight) are the two
+   strongest candidates for the first real feature night once the queue
+   clears — the first is a cross-person false-positive (evasion-adjacent),
+   the second is a fairness gap that costs honest non-Anglophone graduates
+   a credential check in either direction. Pick whichever the next run has
+   the clearest evidence for; neither has been attempted in code yet.
+6. The core architectural gap is still the top priority and still untouched
+   by new code since 09-22. Once real feature work resumes, re-verify
+   OpenAlex's live rate limits first — the brief's own numbers are now over
+   ten weeks old (measured 2026-08-14).
+7. Unchanged, still open, still low priority: `scoring.py`'s
+   `_apply_floors` multi-floor equivalent-mutant case, `category_scores`
+   display-order gap, `verify.py`'s `_ror_country` first-vs-last
+   `locations` gap, `names.initials()`/`_name_matches` dead-output cleanup,
+   `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s
+   `update-to` survivor. `linkedin.py` still has no dedicated
+   mutation-testing pass of its own (see log above).

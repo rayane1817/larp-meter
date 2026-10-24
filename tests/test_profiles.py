@@ -8,7 +8,9 @@ All network access is stubbed.
 import io
 import json
 import unittest
+import urllib.request
 from contextlib import redirect_stdout, redirect_stderr
+from unittest import mock
 
 from larp_meter import profiles
 from larp_meter.cli import main
@@ -160,16 +162,52 @@ class TestUrlModeCli(unittest.TestCase):
         self.assertIn("not one person's profile", out)
 
     def test_url_plus_pasted_text_is_scored_against_the_anchor(self):
-        code, out = self._run([
-            "--url", "https://be.linkedin.com/in/jan-fictief", "--no-save", "--json",
-            "--text", "President at ExampleCo building radiation tolerant edge AI hardware. "
-                      "MSc European Public Health. Seeking 8-12M funding. Visionary thought "
-                      "leader delivering a world class paradigm shift."])
+        """This test's own --url argument used to reach cmd_url's real
+        make_fetcher unstubbed -- live-confirmed 2026-09-24: it issued a
+        genuine request to https://be.linkedin.com/in/jan-fictief on every
+        run of this file. fetch()'s `except Exception: return ""` swallows
+        a blocked or failing request silently, so the leak never showed up
+        as a test failure; it just spent a real, unauthenticated request
+        against a real third party's site (and would cache a live response
+        into the repo's own on-disk cache/ directory on success), directly
+        contradicting this module's own docstring ("All network access is
+        stubbed."). Stubbing cli.make_fetcher keeps the assertions below
+        unchanged, since none of them depend on the fetched body -- the
+        anchor and mode come from the URL itself, not the page content."""
+        with mock.patch("larp_meter.cli.make_fetcher", lambda cache_dir, refresh=False: stub({})):
+            code, out = self._run([
+                "--url", "https://be.linkedin.com/in/jan-fictief", "--no-save", "--json",
+                "--text", "President at ExampleCo building radiation tolerant edge AI hardware. "
+                          "MSc European Public Health. Seeking 8-12M funding. Visionary thought "
+                          "leader delivering a world class paradigm shift."])
         self.assertEqual(code, 0)
         report = json.loads(out[out.index("{"):])
         self.assertEqual(report["subject_url"], "https://be.linkedin.com/in/jan-fictief")
         self.assertEqual(report["signals"]["profile_anchor"], "linkedin:jan-fictief")
         self.assertTrue(report["mode"].startswith("profile:"))
+
+    def test_url_mode_never_touches_a_real_socket(self):
+        """Permanent guard for the bug fixed directly above: if a future edit
+        to this file (or a new --url test) drops the cli.make_fetcher stub
+        again, cmd_url's real fetcher would make a genuine network request.
+        fetch() catches any exception urlopen raises and returns "" instead
+        of propagating it, so a spy that merely raises is invisible to the
+        caller -- recording every call into `calls` first is the only way to
+        observe the leak. Watched this fail (calls == [the live URL]) against
+        the unfixed test above before adding its stub."""
+        calls = []
+
+        def spy(req, *_a, **_kw):
+            calls.append(getattr(req, "full_url", str(req)))
+            raise AssertionError("a real network request escaped the stub")
+
+        with mock.patch("urllib.request.urlopen", spy), \
+             mock.patch("larp_meter.cli.make_fetcher", lambda cache_dir, refresh=False: stub({})):
+            code, _out = self._run([
+                "--url", "https://be.linkedin.com/in/jan-fictief", "--no-save", "--json",
+                "--text", "President at ExampleCo."])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [])
 
     def test_the_report_states_what_the_anchor_does_not_cover(self):
         from larp_meter.audit import run_audit

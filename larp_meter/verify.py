@@ -160,24 +160,27 @@ def _is_ambiguous_acronym(name):
 
 
 def _ror_names(item):
-    """Every name variant of a ROR v2 record (display name, labels, aliases, acronyms)."""
+    """Every name variant of a ROR record (display name, labels, aliases, acronyms).
+
+    ROR's own changelog: the unversioned endpoint verify.py queries
+    (`https://api.ror.org/organizations`, no `/v1/` or `/v2/` in the path)
+    has defaulted to v2-schema responses since the week of 2025-07-28, and
+    v1 of the API and schema was turned off entirely during the week of
+    2025-12-08 (explicit `/v1/` requests now 410). There is no live response
+    shape left for a v1 fallback to catch here.
+    """
     names = item.get("names")
-    if isinstance(names, list):                      # ROR v2 schema
-        return [n.get("value", "") for n in names if isinstance(n, dict) and n.get("value")]
-    legacy = [item.get("name", "")]                  # ROR v1 fallback
-    legacy += list(item.get("aliases") or []) + list(item.get("acronyms") or [])
-    return [n for n in legacy if n]
+    return [n.get("value", "") for n in names if isinstance(n, dict) and n.get("value")] \
+        if isinstance(names, list) else []
 
 
 def _ror_country(item):
     if not item:
         return ""
     locations = item.get("locations") or []
-    if locations:
-        country = (locations[0].get("geonames_details") or {}).get("country_name")
-        if country:
-            return f" ({country})"
-    country = (item.get("country") or {}).get("country_name")      # v1 fallback
+    if not locations:
+        return ""
+    country = (locations[0].get("geonames_details") or {}).get("country_name")
     return f" ({country})" if country else ""
 
 

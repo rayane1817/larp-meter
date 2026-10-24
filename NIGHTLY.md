@@ -10601,3 +10601,195 @@ and the `_SECTION_ORDER`/rank-must-advance guard (linkedin.py:573-581).
    `verify_orcid`'s redundant emptiness guard, `_is_retracted`'s
    `update-to` survivor. `linkedin.py` still has no dedicated
    mutation-testing pass of its own (see log above).
+
+## 2026-10-24 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_status`, `get_check_runs`, `get_comments`, `get_review_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **32 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 |
+
+Still the same three open, unmerged `nightly/*` PRs as every entry since
+09-24 — the **20th consecutive capped night**, 32 calendar days since
+anything last merged to `master` (the 2026-09-22 interactive session that
+landed `reconcile.py`). Zero review comments and zero reviews on any of the
+three, no change in mergeable state or CI since 10-23's entry. Per the
+standing brief, tonight did **not** open a new PR or push a new branch —
+this entry is committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, still
+the newest open branch), touching no other file.
+
+**Not notifying the user tonight.** Checked every re-notify trigger the
+10-22/10-23 entries established, fresh rather than assumed: queue still
+exactly 3 (not grown), CI still green on all three (6/6 each), zero
+comments and zero reviews on any PR, and #29's `mergeable_state` is still
+plain `dirty` — one more day longer, not a deeper or different conflict.
+No qualitatively new information since the last notification; repeating it
+again tonight would be noise.
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Confirmed
+by grepping `BACKLOG.md`'s own `## CRITICAL (15)` section headers directly
+against `master`'s current tip — `BACKLOG.md` carries no commits since the
+2026-09-22 interactive session, consistent with every entry since. The
+`[IN PROGRESS — nightly/2026-09-22]` annotation this file has recommended
+since that date (see line ~6852 above for the exact drafted wording) is
+still unpasted — same single-file capped-night constraint as every prior
+night; not re-derived again here.
+
+### What I did
+
+**Mandatory per-cycle mutation pass, all four required files, baseline
+confirmed green first (661 tests), `__pycache__` cleared before and after
+every run:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `LEVELS` lookup: `larp < cut` → `larp <= cut` | Caught (3 failures — ORANGE became RED at the 65 boundary) |
+| `names.py` | `tokens()`'s split-reading length filter: `len(t) > 1` → `>= 1` | Caught (`test_bare_single_letter_given_name_still_matches_via_surname_alone` failed) |
+| `flags.py` | `f_output`'s reconciliation branch: `if any(r.outcome == rc.CONFIRMED for r in pubs):` → `if all(...) and pubs:` | Survived — **not new**, see below |
+| `flags.py` (second attempt) | `f_output`'s OpenAlex branch: dropping `and not ctx.signals.get("ambiguous_identity")` entirely | Caught (1 failure — the 2026-09-21 ambiguity-guard test) |
+| `verify.py` | `_is_ambiguous_acronym`: dropping the `" " not in stripped` conjunct entirely (not flipping it — see below) | **Survived — new, not previously logged** |
+
+**The `flags.py` `any`/`all` survivor is the known equivalent mutant from
+the day this code landed** (line ~6089 above: `reconcile_text` appends at
+most one `publications`-kind `Reconciliation` per audit today, so `pubs`
+only ever has 0 or 1 elements, and `any`/`all` cannot diverge on a list of
+that length). Grepped this file for the exact mutated line before writing
+it up, per the standing lesson several prior nights learned the hard way —
+confirmed not new, not re-pinned.
+
+**The `verify.py` survivor is new in this specific form.** This file's log
+already has `_is_ambiguous_acronym`'s `" " not in stripped` → `" " in
+stripped` (a *flip*, caught, line ~6334) and the `<= 5`/`isupper()`
+boundaries (caught, multiple nights) — but nobody had tried *deleting* the
+space conjunct outright (equivalent to hardcoding it `True`), which is a
+different mutant from flipping it. Reproduced directly:
+
+```
+_is_ambiguous_acronym("A & M")   # original: False (contains a space)
+# with " " not in stripped removed: True
+```
+
+Traced the consequence rather than assuming it matters: `_is_ambiguous_acronym`
+is read in exactly one place (`verify_institution`, verify.py:518), and
+only inside the already-`VERIFIED` branch — it only chooses which of two
+*message strings* accompanies a VERIFIED claim ("a short acronym is
+ambiguous — confirm which institution is meant" vs. a plain "Real
+institution: ..."). It never changes `claim.status`, never moves a claim
+between VERIFIED/NOT_FOUND/UNCHECKABLE, and therefore never changes a
+score, a flag outcome, or a verdict. Tried to construct a realistic
+institution-name claim that is simultaneously (a) all-uppercase, (b)
+contains an internal space, and (c) five characters or fewer in total
+(e.g. "A & M", "U OF A" is already 6 and too long) — could not find a real
+institution matching all three constraints; the closest real abbreviations
+("A&M", "LSE", "RWTH") have no internal space and are already correctly
+flagged as ambiguous either way. **Judgment: a real but very low-value
+gap** — reachable in principle, affects wording only (never an accusation,
+never a status), and has no known realistic trigger. Recording per the
+mandatory-finding rule rather than dropping it, but not recommending it as
+a priority pickup. If a future night wants to close it anyway: regression
+test `test_a_multi_word_short_acronym_still_reads_as_ambiguous` asserting
+`_is_ambiguous_acronym("A & M")` is `True`, paired with a check that the
+VERIFIED detail string for such a claim still includes "ambiguous" — would
+fail on today's `master`, pass once the conjunct is restored (it already
+is; nothing to fix, only to pin).
+
+**Backlog verification — fresh live reconfirmation, not previously
+re-checked since 2026-09-12:** re-ran `Verifier.verify_institution` live
+against ROR for "Le Wagon" and "Universite Paris Sud" (BACKLOG.md's
+"inverse looseness" evidence, MAJOR section). Both still reproduce the
+single-significant-token/loose-subset false-positive exactly as described,
+six weeks later:
+
+```
+Le Wagon              -> VERIFIED | Real institution: Health Wagon (United States)
+Universite Paris Sud  -> VERIFIED | Real institution: Hôpitaux universitaires Paris Sud (France)
+```
+
+Worth noting precisely: "Universite Paris Sud" no longer matches
+"Geosciences Paris Sud" — the 2026-09-12 stopword fix (removing
+"universite" from `_ORG_STOPWORDS`) is holding, confirmed live. But the
+underlying subset-match looseness this BACKLOG entry's candidate fix
+(`len(wanted) >= 2` for a subset-match VERIFIED) targets is still fully
+open: ROR now returns a *different* wrong match (a hospital network
+instead of an unrelated geoscience institute) for the same claim text,
+because "Universite Paris Sud" reduces to the same 2-3 significant tokens
+either match shares. This is fresh, useful evidence that the bug is both
+unfixed and not merely an artifact of one stale ROR record — it recurs
+against whatever ROR currently indexes under those tokens.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed live, still unfixed**: "Le Wagon" → VERIFIED as "Health
+  Wagon" and "Universite Paris Sud" → VERIFIED as an unrelated institution
+  (now a different one than originally recorded) — see reproduction above.
+  Not fixed tonight (capped night, NIGHTLY.md-only); candidate fix
+  (`len(wanted) >= 2` for subset-match VERIFIED) remains exactly as
+  BACKLOG.md already describes it.
+- **Confirmed live, unchanged**: the CRITICAL tally (10/1/4 of 15),
+  counted directly against `BACKLOG.md`'s current section headers.
+- Did not re-verify anything else in BACKLOG.md tonight.
+
+### Mutation-testing log
+
+Continuing the running log: `scoring.py`, `names.py`, `flags.py`,
+`verify.py` all spot-checked again tonight (three fresh-but-already-pinned
+boundaries caught; one already-known equivalent mutant re-confirmed, not
+new; one genuinely new but low-value survivor found and documented in
+`verify.py` — see above, not pinned, narrow wording-only consequence with
+no realistic trigger found).
+
+### What I learned
+
+- **"Flip the condition" and "delete the condition" are different
+  mutations and can have different outcomes even on the same boolean
+  conjunct.** This file already had `_is_ambiguous_acronym`'s space check
+  tested as a flip (caught) and treated that as the conjunct being fully
+  pinned; it wasn't — deletion (equivalent to hardcoding `True`) survived.
+  Worth remembering for any future mutation sweep: a boundary condition
+  being caught under negation doesn't guarantee it's caught under
+  omission, especially for a three-way `and` where the other two conjuncts
+  can carry most of a test suite's coverage on their own.
+- A six-week-old BACKLOG.md evidence quote ("Le Wagon" → "Health Wagon")
+  is not just still true, it degrades informatively: the specific wrong
+  match for "Universite Paris Sud" changed from one night's live run to
+  this one (different ROR record), which is itself evidence the bug is a
+  structural property of the token-subset test, not a fluke of one
+  registry snapshot. Worth re-running a live reproduction's *exact* output
+  (not just its verdict) periodically for exactly this reason.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all re-notify triggers again before
+   picking a task** — unchanged at 3 for 20 consecutive capped nights now;
+   #29's conflict is 32 calendar days old. Still the single most overdue
+   piece of queue-clearing housekeeping the moment there is a human slot
+   for it.
+2. **Paste the `[IN PROGRESS — nightly/2026-09-22]` BACKLOG.md annotation**
+   (exact wording at line ~6852 above) once there is queue room for a
+   BACKLOG.md-touching night — still unpasted after a month.
+3. **Land the pile of ready-to-paste regression tests** once the queue
+   clears — unchanged list, see 09-25 through 10-23's entries (the
+   `f_contradicted` `rec_contra` disjunct test, `_earlier_sole_trader`'s
+   name-mismatch guard, the `matching.py`/`names.py` pair from 10-05, and
+   more) — plus tonight's own new, low-priority
+   `test_a_multi_word_short_acronym_still_reads_as_ambiguous` candidate
+   (see above; genuinely optional, not worth a queue slot on its own).
+4. The core architectural gap is still the top priority and still
+   untouched by new code since 09-22. Once real feature work resumes,
+   re-verify OpenAlex's live rate limits first — the brief's own numbers
+   are now over ten weeks old (measured 2026-08-14).
+5. **"Le Wagon"-shaped single-token/loose-subset ROR false positives**
+   (BACKLOG.md, re-confirmed live again tonight with fresh evidence that
+   the specific wrong match drifts over time) remains a good candidate for
+   the first real feature night once the queue clears — concrete fix
+   direction already sketched (`len(wanted) >= 2` for a subset-match
+   VERIFIED), not yet checked against real short-named institutions beyond
+   the existing test suite's fixtures.

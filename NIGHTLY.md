@@ -10793,3 +10793,222 @@ no realistic trigger found).
    direction already sketched (`len(wanted) >= 2` for a subset-match
    VERIFIED), not yet checked against real short-named institutions beyond
    the existing test suite's fixtures.
+
+## 2026-10-26 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh, not carried forward from 10-24, via `list_pull_requests`,
+`pull_request_read` (`get`, `get_check_runs`, `get_comments`, `get_reviews`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **33 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 / 0 |
+
+Still exactly the same three open, unmerged `nightly/*` PRs as every entry
+since 09-24 — the **21st capped night** against this queue (one calendar
+day missing from the run before this one: the last entry is 10-24, today is
+10-26, so either no run fired on 10-25 or its output never landed here;
+treating the gap the same way the 10-18 entry did, as a missing run rather
+than evidence of anything). Nothing merged to `master` since the 2026-09-22
+interactive session that landed `reconcile.py` — **34 calendar days** now.
+Zero comments and zero reviews on all three PRs, no change in mergeable
+state or CI color since 10-24's entry. Per the standing brief, tonight did
+**not** open a new PR or push a new branch — this entry is committed
+NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest open
+branch), touching no other file.
+
+**Not sending a push notification tonight.** Checked all of 10-21's
+established re-notify triggers fresh rather than assumed: queue still
+exactly 3 (not grown), CI still green on all three (6/6 each), still zero
+comments and zero reviews on any PR, and #29's `mergeable_state` is still
+plain `dirty` (one day older, not a different or deeper conflict than
+10-24 recorded). 10-21 already escalated the scale of this backlog
+directly to the user (17 nights, 29 days, 20+ ready-to-paste tests); one
+more capped night at the same depth, with the same all-green state, is not
+new information by that same entry's own standard. Would notify
+immediately if the next check finds the queue growing past 3, a review or
+comment appearing on any PR, CI turning red, or #29's conflict becoming
+materially worse.
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Recounted
+directly against `master`'s current `BACKLOG.md` (`sed -n '1547,1886p'
+BACKLOG.md | grep '^### '` — the `## CRITICAL (15)` section's own line
+range, bounded by the next `## MAJOR (25)` header — 15 raw headings after
+accounting for the project's two long-standing duplicate-title pairs,
+"ROR institution verification" and "Word-wrapped negation," each written
+up twice): 10 carry `[FIXED]`, 1 carries `[PARTIALLY FIXED]`, 4 carry
+neither. `BACKLOG.md` carries no commits since the 2026-09-22 interactive
+session, consistent with every count since. The four open criticals are
+still the same four restatements of the core one-way, claim-anchored-funnel
+gap. The `[IN PROGRESS — nightly/2026-09-22]`-style annotation this file
+has recommended pasting onto the core-gap entry since that date (describing
+what `reconcile.py`'s three reverse-path slices now cover) is still
+unpasted — same single-file capped-night constraint as every prior night.
+
+### What I did
+
+Read this file's own tail (10795 lines, on `nightly/2026-09-24` — **not**
+`master`'s much shorter copy, which lags a month behind because the queue
+never clears) before touching anything, per the standing lesson several
+nights have learned the hard way. That caught two near-misses before they
+became wasted work: (1) `verify.py`'s ROR v1-schema fallback in
+`_ror_names`/`_ror_country` looked like a fresh finding under a mutation
+test (deleting the legacy branch left the suite green) — already found
+*and deleted* by this exact branch's own earlier commit `5b194ff`
+(2026-09-24), then independently reconfirmed dead four more times since;
+not re-recorded as new. (2) `flags.py`'s `f_contradicted` `rec_contra`
+disjunct and `verify.py`'s `_is_ambiguous_acronym` space-conjunct-deletion
+survivor are both already fully written up (09-25 and 10-24 respectively,
+complete with ready-to-paste tests) — reconfirmed both still reproduce
+identically, not re-logged as new.
+
+**Mandatory per-cycle mutation pass, all four required files, baseline
+confirmed green first (662 tests on this branch), `__pycache__` cleared
+before and after every run:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `scored = coverage >= MIN_COVERAGE` → `>` | Caught |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught (61 failures + 11 errors) |
+| `flags.py` | leadership `ctx.word_count >= 40` → `> 40` | Caught |
+| `verify.py` | `_is_ambiguous_acronym`: drop `" " not in stripped` entirely | Survived — **not new**, see above (10-24's finding, reconfirmed identical) |
+
+**Fresh lens: `linkedin.py`, which has never had a dedicated mutation pass
+of its own** (flagged as a gap in 10-23's and 10-24's "next run" lists).
+Picked `_looks_like_location` — the heuristic deciding whether the line
+right after a date/duration belongs in `exp.location` (silently dropped;
+`to_prose()` never renders it) or `exp.description` (preserved) — because
+its own docstring already names exactly this stakes ("the sentence would
+silently vanish from everything the extractors and flags ever see").
+
+- Mutation: `if not line or len(line) >= 60: return False` → `len(line) >
+  60`. Suite stayed green: 662/662.
+- Grepped `tests/test_linkedin.py` for `_looks_like_location`,
+  `60`, and this file's own `## 2026-09-2*` entries for the function name
+  first — no existing test pins this exact boundary, and no prior night
+  has mutation-tested this function. Genuinely new.
+- **Confirmed real, not equivalent**, with a live repro against the
+  restored (unmutated) code, not just the mutant:
+  ```
+  >>> s60 = "Greater Zurich Metropolitan Area, Canton Zurich, Switzerland"
+  >>> len(s60)
+  60
+  >>> _looks_like_location(s60)
+  False   # correct: too long, treated as a sentence/description
+  >>> _looks_like_location(s60[:-1])   # 59 chars, otherwise identical
+  True    # treated as a location
+  ```
+  So the 60-character cutoff is live and load-bearing today, exactly as
+  the docstring intends (a long comma-separated, Title-Case line is
+  presumed to be a real sentence, not a place name, and is kept rather
+  than silently dropped) — but nothing in the suite would catch a future
+  refactor that nudged this boundary by one character in either
+  direction, which is exactly the kind of edit a drive-by cleanup makes
+  without noticing.
+- **Traced the consequence rather than assuming it:** `Experience.location`
+  is captured by `_parse_experiences` but `Profile.to_prose()` never reads
+  it (confirmed by reading `to_prose()` end to end again) — so a line
+  wrongly classified as a location is not merely mislabeled, it is
+  **removed from every extractor's view**, identically to the "Led a team
+  of 12, shipped v2 platform." failure mode this same function's docstring
+  already describes for the opposite direction (a sentence wrongly kept as
+  a location). This mutation only moves the boundary by one character, so
+  the blast radius is narrow (a real achievement line would need to land
+  at exactly 60 characters, be comma-separated, Title-Case, free of digits
+  and not end in punctuation to be affected) — real but low-probability,
+  same family as several other message/boundary-only survivors already
+  logged in this file (the ROR tie-break, `_ror_country`'s `locations[0]`
+  vs `[-1]`, the `_is_ambiguous_acronym` space conjunct above).
+- **Ready-to-paste regression test** (not pinned tonight — capped night,
+  NIGHTLY.md-only):
+  ```python
+  def test_a_sixty_character_line_after_a_date_is_not_mistaken_for_a_location(self):
+      """At exactly 60 characters _looks_like_location must say no, so a
+      long achievement sentence is kept in the description rather than
+      silently dropped by to_prose() (which never renders .location)."""
+      from larp_meter.linkedin import _looks_like_location
+      sixty = "Greater Zurich Metropolitan Area, Canton Zurich, Switzerland"
+      self.assertEqual(len(sixty), 60)
+      self.assertFalse(_looks_like_location(sixty))
+      self.assertTrue(_looks_like_location(sixty[:-1]))  # 59 chars: still a location
+  ```
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed live, unchanged**: the CRITICAL tally (10/1/4 of 15),
+  counted directly against `master`'s current `BACKLOG.md` section
+  headers (see above).
+- Did not re-verify any other BACKLOG.md finding tonight — time went to
+  catching up on 20 nights of this file's own log first (see "What I
+  did") and the fresh `linkedin.py` pass, which is not itself a BACKLOG.md
+  entry.
+
+### Mutation-testing log
+
+`scoring.py`, `names.py`, `flags.py` spot-checked again tonight (all
+caught, nothing new). `verify.py` spot-checked and reconfirmed the known
+10-24 `_is_ambiguous_acronym` survivor, not re-pinned (unchanged
+low-value judgment). **`linkedin.py` had its first dedicated mutation
+pass this run**: one real, previously-unpinned, narrow-severity survivor
+found in `_looks_like_location` (see above, ready-to-paste test drafted,
+not yet landed).
+
+### What I learned
+
+- **Reading this branch's own NIGHTLY.md tail before mutating anything
+  paid for itself twice in one night.** Both near-misses above (the ROR
+  v1 fallback, the already-logged `rec_contra`/acronym survivors) would
+  have cost significant time to re-derive from scratch and would have
+  added noise to an already-long "ready-to-paste" pile rather than new
+  signal. The project's own standing lesson ("grep the exact mutated line
+  before trusting a survivor is new") generalizes to "read the tail of
+  the real log, not master's stale copy, before starting" — `master`'s
+  `NIGHTLY.md` is a full month and ~5300 lines behind this branch's, and
+  nothing in the standing instructions says to prefer the branch's copy,
+  so a run that only reads `master` (as I nearly did) silently repeats
+  work.
+- A fresh *module* (not yet mutation-tested at all) is still cheaper to
+  find real gaps in than a sixth or seventh pass over the four
+  thoroughly-mined required files — matching 10-23's own conclusion
+  about `linkedin.py` specifically, now borne out a second time.
+
+### What the next run should pick up first
+
+1. **Read this branch's (`nightly/2026-09-24`, PR #31) NIGHTLY.md tail,
+   not `master`'s, before doing anything else.** This is now the second
+   time that distinction mattered; make it step zero.
+2. **Check the PR queue depth and all re-notify triggers fresh** — queue
+   has now sat at exactly 3 for 21 capped nights (minus whatever gap
+   produced the missing 10-25 entry), #29's conflict is 33+ calendar days
+   old. Still the single highest-leverage action available the moment a
+   human has a slot to merge.
+3. **Land the pile of ready-to-paste regression tests once the queue
+   clears** — now including tonight's `linkedin.py` boundary test above,
+   alongside the unchanged pile from 09-25 through 10-24 (the
+   `f_contradicted` `rec_contra` disjunct test, `_earlier_sole_trader`'s
+   name-mismatch guard, the `matching.py`/`names.py` pair from 10-05,
+   `_ror_country`'s first-vs-last `locations` gap, and more).
+4. **Paste the `[IN PROGRESS — nightly/2026-09-22]` BACKLOG.md
+   annotation** documenting what `reconcile.py`'s three reverse-path
+   slices already cover of the core gap's fix direction — still unpasted
+   a month later, still blocked on the same single-file capped-night
+   constraint.
+5. The core architectural gap is still the top priority and still
+   untouched by new code since 09-22. Once real feature work resumes,
+   re-verify OpenAlex's live rate limits first — the brief's own numbers
+   are now over eleven weeks old (measured 2026-08-14).
+6. `linkedin.py` likely has more real gaps now that it has had exactly one
+   mutation (this run's single data point) — `_parse_experiences`,
+   `_parse_educations` and the `_SECTION_ORDER` rank-tie logic (same rank
+   shared by `publications`/`patents`/`courses`/`projects`/`honors &
+   awards`/`test scores`/`languages`/`organizations` — worth checking
+   whether content under those sections is used *anywhere* downstream of
+   `parse_linkedin_paste`, since a quick read tonight suggests it may be
+   captured and then silently discarded entirely, a separate and
+   potentially larger finding this run did not have time to chase down)
+   are good next targets.

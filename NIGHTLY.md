@@ -11012,3 +11012,347 @@ not yet landed).
    captured and then silently discarded entirely, a separate and
    potentially larger finding this run did not have time to chase down)
    are good next targets.
+
+## 2026-10-27 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_check_runs`, `get_reviews`, `get_comments`):
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved for **35 calendar days** now (first flagged 09-23) | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 / 0 |
+
+Same three open, unmerged `nightly/*` PRs as every entry since 09-24 — the
+**22nd capped night** against this queue. Nothing merged to `master` since
+the 2026-09-22 interactive session — **35 calendar days** now. Zero
+comments and zero reviews on all three PRs, no change in mergeable state
+or CI color since 10-26's entry. Per the standing brief, tonight did
+**not** open a new PR or push a new branch — this entry is committed
+NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest open
+branch), touching no other file.
+
+**Not sending a push notification tonight.** Checked 10-21's and 10-26's
+established re-notify triggers fresh: queue still exactly 3 (not grown),
+CI still green on all three (6/6 each), still zero comments and zero
+reviews on any PR, and #29's `mergeable_state` is still plain `dirty`
+(one day older, not a different or deeper conflict). This is not new
+information by 10-21's/10-26's own standard — would notify immediately if
+the next check finds the queue growing past 3, a review or comment
+appearing, CI turning red, or #29's conflict becoming materially worse.
+The new finding below (the LinkedIn section-drop) is a backlog item, not
+an operational-health signal — it goes through the normal NIGHTLY.md /
+BACKLOG.md channel for the human's own-schedule review, same as every
+other finding this project has surfaced.
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Recounted
+directly against `master`'s current `BACKLOG.md` (`## CRITICAL (15)`
+section, bounded by the next `## MAJOR (25)` header, accounting for the
+two long-standing duplicate-title pairs as single items): 10 carry
+`[FIXED]`, 1 carries `[PARTIALLY FIXED]`, 4 carry neither — the same four
+restatements of the core one-way, claim-anchored-funnel gap as every
+count since 09-22. No commits to `BACKLOG.md` since the 09-22 interactive
+session.
+
+### What I did
+
+Read `nightly/2026-09-24`'s own `NIGHTLY.md` tail (11,014 lines — not
+`master`'s, which is now over a month and ~5,500 lines behind) before
+touching anything, per 10-26's own "make it step zero" instruction.
+
+**Mandatory per-cycle mutation pass, all four required files, baseline
+confirmed green first (662 tests on this branch):**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `coverage >= MIN_COVERAGE` → `>` | Caught (`test_coverage_exactly_at_min_coverage_is_still_scored`) |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught (61 failures + 11 errors) |
+| `flags.py` | leadership `ctx.word_count >= 40` → `> 40` | Caught |
+| `verify.py` | `_ror_country`: `locations[0]` → `locations[-1]` | **Survived** — new, see below |
+
+All four files restored to the exact committed state afterward (`git
+status --short` clean, suite back to 662/662) before moving on.
+
+**`_ror_country`'s `locations[0]` vs `locations[-1]` — 10-26's own flagged
+next target, now checked.** `verify.py:177-184`:
+
+```python
+def _ror_country(item):
+    if not item:
+        return ""
+    locations = item.get("locations") or []
+    if not locations:
+        return ""
+    country = (locations[0].get("geonames_details") or {}).get("country_name")
+    return f" ({country})" if country else ""
+```
+
+No test in `tests/test_verify.py` ever gives `locations` more than one
+element (checked every fixture: `grep -n "locations" tests/test_verify.py`,
+all nine hits are single-item arrays), so nothing pins which index is
+meant to win when a record carries more than one.
+
+Before writing this up as a plain "pin it" survivor, checked whether it is
+actually reachable — the same live-evidence standard the deleted ROR v1
+fallback (PR #31, this same branch) was held to. Two findings, pulling in
+different directions:
+
+- **The schema permits it.** Fetched ROR's own schema
+  (`https://raw.githubusercontent.com/ror-community/ror-schema/master/ror_schema_v2_1.json`)
+  live: `locations` is `"type": "array", "minItems": 1`, with no
+  `maxItems` — multiple locations per record is a schema-legal shape, not
+  forbidden.
+- **No live record sampled has one.** Queried the real ROR API
+  (`api.ror.org/organizations?query=...`) for nine real multi-site/
+  multi-country institutions chosen specifically to stress this — INSEAD
+  (Fontainebleau/Singapore/Abu Dhabi), NYU, University of Nottingham,
+  Sorbonne, European Southern Observatory (Chile/Germany), CERN, Istituto
+  Nazionale di Fisica Nucleare — and every single returned record has
+  exactly one `locations` entry. INSEAD's three campuses are three
+  *separate* ROR IDs, not one record with three locations. Real-world ROR
+  practice appears to always collapse an organization to a single
+  "headquarters" location even when the organization is genuinely
+  multi-site, splitting multi-campus institutions into distinct IDs
+  instead of a multi-location array.
+
+So this survivor sits in a third category this file hasn't named
+explicitly before, distinct from both "definitely reachable" (pin it) and
+"definitely dead" (delete it, as the v1 fallback was — proven unreachable
+by ROR's own changelog, HTTP 410 on the old endpoint): **schema-legal, but
+with zero live evidence of ever firing.** Recommend neither deleting (no
+positive proof of unreachability, unlike v1) nor silently pinning an
+invented fixture as if "index 0 is obviously correct" — the code gives no
+reason for preferring first over last, and if ROR ever does emit a
+multi-location record (a future schema use nobody has tested against),
+first-vs-last is a real, user-visible choice about which country the
+report prints. Ready-to-paste regression test, documenting current
+behavior as a deliberate choice rather than an accident (not landed
+tonight — capped night, NIGHTLY.md-only):
+
+```python
+def test_ror_country_prefers_the_first_location_when_a_record_has_several(self):
+    """_ror_country must have a documented, tested answer for a record with
+    more than one location (schema-legal: ror_schema_v2_1.json's `locations`
+    is minItems:1 with no maxItems), even though no live ROR record sampled
+    so far has more than one. Pins first-wins as the deliberate choice it
+    currently is only by accident of untested code, not a verified policy."""
+    item = {"locations": [
+        {"geonames_details": {"country_name": "Netherlands"}},
+        {"geonames_details": {"country_name": "Belgium"}},
+    ]}
+    self.assertEqual(_ror_country(item), " (Netherlands)")
+```
+
+**Fresh-lens finding: LinkedIn's own structured sections for identifiers —
+Publications, Patents, Licenses & Certifications — are silently erased by
+the paste normaliser before extraction ever runs.** 10-26's own "next
+run" list named exactly this as a suspected gap ("may be captured and then
+silently discarded entirely... a separate and potentially larger finding")
+after noticing `_SECTION_ORDER` ranks eight sections (`publications`,
+`patents`, `courses`, `projects`, `honors & awards`, `test scores`,
+`languages`, `organizations`) that `parse_linkedin_paste` never reads back
+out. Chased it down live rather than leaving it as a hunch, and it is
+worse than "a module's internal dict has unused entries" — it is a
+complete, silent data path:
+
+1. `larp_meter/linkedin.py:168-176`, `_SECTION_HEADERS` also recognises
+   `licenses & certifications`/`certifications`, `volunteer
+   experience`/`volunteer`, `recommendations`, `activity`, `interests` —
+   none of those is read back out either. Only `_preamble`, `about`,
+   `experience`, `education`, `skills` ever reach a `Profile` field
+   (`parse_linkedin_paste`, lines 584-604).
+2. `Profile` itself (`linkedin.py:46-54`) has **no field at all** for any
+   of the other thirteen section types — this is not a missed `if`
+   branch, the schema has nowhere to put the content. `to_dict()` /
+   `from_dict()` (the documented `--from-json` contract) are equally
+   blind to it.
+3. `cli._maybe_normalise` (`cli.py:65-75`) does not append `to_prose()` to
+   the original text — it **replaces** it: `normalised = profile.to_prose()`
+   is the only text that reaches `extract_claims` once `is_linkedin_paste`
+   fires. Nothing recognised as a LinkedIn paste ever has its raw text
+   extracted again.
+
+**Live repro**, a realistic paste with a real-shaped DOI, patent number
+and certification in their own correctly-labelled LinkedIn sections:
+
+```python
+from larp_meter.linkedin import is_linkedin_paste, parse_linkedin_paste
+from larp_meter import extract
+
+text = """Jan de Vries
+Senior Research Scientist at Acme Labs
+Greater Zurich Area
+500+ connections
+
+About
+Research scientist working on applied cryptography.
+
+Experience
+Senior Research Scientist
+Acme Labs · Full-time
+Jan 2019 - Present · 6 yrs
+Zurich, Switzerland
+
+Education
+ETH Zurich
+MSc Physics
+
+Publications
+Lattice-based key exchange for constrained devices
+10.1234/acme.2021.00123
+Published in Journal of Applied Cryptography, 2021
+
+Patents
+Method and apparatus for post-quantum key exchange
+US10123456B2
+
+Licenses & Certifications
+CISSP
+Issued by (ISC)2
+"""
+
+assert is_linkedin_paste(text) is True
+prose = parse_linkedin_paste(text).to_prose()
+assert "10.1234" not in prose      # the DOI: gone
+assert "US10123456B2" not in prose  # the patent: gone
+assert "CISSP" not in prose          # the certification: gone
+
+claims_from_prose = extract.extract_claims(prose)
+claims_from_raw = extract.extract_claims(text)
+assert not any(c.subtype in ("doi", "patent") for c in claims_from_prose)   # 0 identifiers
+assert any(c.subtype == "doi" for c in claims_from_raw)       # the raw text finds both —
+assert any(c.subtype == "patent" for c in claims_from_raw)    # proving the loss is the normaliser's, not extract.py's
+```
+
+Measured output: `to_prose()` renders five lines (name, headline, about,
+one experience line, one education line) and **zero** trace of the DOI,
+patent number, or certification. `extract_claims` on that prose finds only
+a `degree` claim and a `year` claim — zero identifiers. The identical text,
+run through `extract_claims` directly without the LinkedIn normaliser,
+finds both the DOI and the patent.
+
+**Why this is bigger than "a parser drops some fields," and belongs as a
+new BACKLOG.md CRITICAL, not filed tonight (capped night, NIGHTLY.md-only
+— flagging clearly for the next BACKLOG.md-touching night instead):** This
+project's whole premise is auditing the LinkedIn-paste format by name.
+LinkedIn gives a member exactly one place to put a DOI or patent number
+without writing it into prose by hand: the dedicated Publications/Patents
+sections. A member who fills those in the *correct, structured* way — the
+behavior LinkedIn's own UI encourages, and the behavior an honest
+professional is more likely to use than a fabricator improvising prose —
+has that evidence erased before verification ever runs. The identical DOI
+typed into the About section survives untouched. This inverts the fix
+direction every other fairness-lens finding in this project has pushed
+toward: it is not merely "an honest person with non-Western naming gets
+false MISMATCH," it is "an honest person who uses LinkedIn's own
+structured, most-verifiable fields scores *worse* than one who doesn't."
+It also compounds the core architectural gap this file's every entry
+tracks (vagueness beats the tool): a LinkedIn-pasting fabricator loses
+nothing by leaving Publications/Patents empty (nothing there to lose),
+while a truthful LinkedIn-pasting researcher loses the one piece of
+machine-checkable evidence that could have earned PASSED/VERIFIED and
+pushed coverage above `MIN_COVERAGE`.
+
+**Fix direction (for the next code-touching night, not attempted
+tonight):** The safest-looking option — append the raw, unrecognised-
+section lines verbatim after `to_prose()`'s structured output rather than
+discarding them — needs real care before landing: `_is_chrome` filtering
+and the license/certification-vs-content ambiguity that the carefully
+commented `_SECTION_ORDER` backwards-jump logic already had to solve once
+for `experience`/`education` would need to be re-solved for these
+sections too, or the fix just reintroduces LinkedIn UI chrome
+("Show credential", endorsement counts) into the extractor's input. A
+narrower first slice: give `Profile` a `publications: list` and
+`patents: list` field (the two sections carrying registry-checkable
+identifiers, same scope PR #31's own commit already prioritises), parse
+each entry's raw text without discarding it, and append it to
+`to_prose()` verbatim — deferring `licenses & certifications` (relevant to
+flag 13) and the rest to a follow-up. Needs a failing test written first,
+per the standing brief, confirming a fabricated-vs-real DOI in a
+Publications section is caught identically to one in free prose before
+touching production code.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed live, unchanged**: the CRITICAL tally (10/1/4 of 15),
+  counted directly against `master`'s current `BACKLOG.md` section
+  headers.
+- Did not verify any existing individual BACKLOG.md finding tonight —
+  time went to the `_ror_country` mutation finding and chasing down
+  10-26's own flagged LinkedIn-section-drop hunch into a full live repro,
+  which took priority as a new, higher-severity, not-yet-filed finding.
+
+### Mutation-testing log
+
+`scoring.py`, `names.py`, `flags.py` spot-checked again tonight (1
+mutation each, all caught, nothing new). `verify.py`: `_ror_country`'s
+`locations[0]`/`locations[-1]` gap (flagged by 10-26 as the next target)
+— survived, confirmed real-but-unobserved-live (see above), not pinned
+tonight (capped night). `linkedin.py` had no new line-level mutation this
+run; tonight's `linkedin.py` work is a structural/architectural finding
+(an entire class of content never reaching the extractor), not a single
+boundary a single mutated line would represent — recorded separately
+above rather than in this mutation table.
+
+### What I learned
+
+- **10-26's "next run should pick up" list predicted both of tonight's
+  findings correctly** — the `_ror_country` locations gap and the
+  linkedin.py section-drop were both named there as suspected-but-
+  unchased leads, and both turned out real once actually pursued. Worth
+  trusting that list as a genuine priority queue rather than treating it
+  as boilerplate carried forward by habit.
+- **"Schema-legal but never observed live" is a real third category**,
+  distinct from this file's existing "pin it" (reachable in production)
+  and "delete it" (proven unreachable, like the ROR v1 fallback) buckets.
+  Collapsing it into either extreme would have been wrong either way:
+  deleting `_ror_country`'s `[0]` would have thrown away a real decision
+  with no positive proof the decision never matters, while pinning
+  `locations[0]` as unquestionably correct would have asserted a policy
+  the code has never actually stated or tested. Worth keeping this
+  three-way distinction explicit in future entries rather than defaulting
+  to whichever of the two familiar buckets is more convenient.
+- **A finding does not have to be a mutation survivor to be the most
+  valuable thing found in a night.** Tonight's mandatory four-file pass
+  produced one real-but-low-confidence-reachability survivor; the
+  LinkedIn section-drop (found by just reading `_SECTION_ORDER` against
+  `parse_linkedin_paste` with a skeptical eye, then proving it live) is a
+  structural gap with much higher real-world impact on this project's
+  named core gap. The brief's five-lens review list and the mandatory
+  mutation pass are complementary, not substitutes for each other.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all re-notify triggers fresh before
+   anything else** — unchanged at 3 for 22 consecutive capped nights now;
+   #29's conflict is 35 calendar days old. Still the single most overdue
+   piece of queue-clearing housekeeping the moment there is a human slot
+   for it.
+2. **File tonight's LinkedIn section-drop finding as a new BACKLOG.md
+   CRITICAL and build the narrower fix** (`publications`/`patents` fields
+   on `Profile`, appended verbatim to `to_prose()`, failing test first) —
+   this is now the single highest-value, most concretely-scoped piece of
+   work in this file, ahead of the OpenAlex reverse-path work below it
+   precisely because it is smaller, self-contained, and actively
+   undermines the core gap's own fix direction in the meantime. Needs a
+   queue slot (a BACKLOG.md-touching, code-touching night) to land.
+3. **Land the pile of ready-to-paste regression tests** once the queue
+   clears — unchanged list from 09-25 through 10-26's entries, plus
+   tonight's `_ror_country` test and the LinkedIn section-drop repro
+   above.
+4. **Paste the `[IN PROGRESS — nightly/2026-09-22]` BACKLOG.md
+   annotation** — still unpasted, still blocked by the same single-file
+   capped-night constraint as every prior night.
+5. The core architectural gap is still the top priority after item 2 and
+   still untouched by new code since 09-22. Once real feature work
+   resumes, re-verify OpenAlex's live rate limits first — the brief's own
+   numbers are now over eleven and a half weeks old (measured 2026-08-14).
+6. `linkedin.py`'s other unread sections (`licenses & certifications`,
+   `volunteer experience`, `recommendations`) are lower-priority
+   extensions of tonight's finding — worth a follow-up once the
+   `publications`/`patents` slice lands, not before.

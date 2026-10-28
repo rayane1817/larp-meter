@@ -11356,3 +11356,192 @@ above rather than in this mutation table.
    `volunteer experience`, `recommendations`) are lower-priority
    extensions of tonight's finding — worth a follow-up once the
    `publications`/`patents` slice lands, not before.
+
+## 2026-10-28 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh tonight via `list_pull_requests` and `pull_request_read`
+(`get`, `get_check_runs`, `get_comments`, `get_reviews`) on all three:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Review comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 / 0 |
+
+Same three open, unmerged `nightly/*` PRs as every entry since 09-24 —
+the **23rd capped night** against this queue. Nothing merged to `master`
+since the 2026-09-22 interactive session. Zero comments and zero reviews
+on all three, no change in mergeable state or CI color since 10-27's
+entry. Per the standing brief, tonight did **not** open a new PR or push
+a new branch — this entry is committed NIGHTLY.md-only to
+`nightly/2026-09-24` (#31, still the newest open branch), touching no
+other file.
+
+**Not sending a push notification tonight.** Checked the established
+re-notify triggers fresh: queue still exactly 3 (not grown), CI still
+green on all three (6/6 each), still zero comments and zero reviews on
+any PR, and #29's `mergeable_state` is still plain `dirty` (one day
+older, not a materially different or deeper conflict). Nothing here is
+new information by the standard the 10-21 entry set and every entry
+since has reapplied.
+
+### Running backlog tally (15 CRITICALs)
+
+Unchanged: **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** No commits
+to `BACKLOG.md` since the 09-22 interactive session, so the count itself
+cannot have moved — but see "What I confirmed / refuted" below for two of
+those four I actually live-checked tonight rather than just recounting
+headers.
+
+### What I did
+
+Read `nightly/2026-09-24`'s own `NIGHTLY.md` tail (its 22nd-capped-night
+entry) before touching anything. Baseline: 661 tests green on `master`.
+
+**Mandatory per-cycle mutation pass, all four required files — eight
+mutations tonight, zero survivors:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors`: `_SEVERITY_ORDER.index(strongest["floor"]) <= _SEVERITY_ORDER.index(level)` → `<` | Caught (`test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message`) |
+| `names.py` | `mine_is_latin != blob_is_latin` → `==` | Caught (61 failures + 11 errors) |
+| `names.py` | single-token surname-position guard: `parts[0] == matched or parts[-1] == matched` → `and` | Caught (`test_family_name_first_author_is_not_falsely_mismatched`) |
+| `flags.py` | flag 6: `scholar.get("works") and not ctx.signals.get("ambiguous_identity")` → drop `not` (flip the guard) | Caught — flag 6 flips TRIGGERED on the exact ambiguous-identity case it exists to protect |
+| `flags.py` | flag 6: `if any(r.outcome == rc.CONFIRMED for r in pubs):` → `!=` | Caught |
+| `verify.py` | `verify_institution`'s ROR tie-break: `if overlap > best_overlap:` → `>=` | Caught (`test_ror_tie_break_keeps_the_registrys_own_higher_ranked_result`) |
+| `verify.py` | `verify_patent`: `if not title or "not found" in title.lower():` → `and` | Caught |
+| `verify.py` | `_attribute`: `elif match is None:` → `elif False:` (restores the exact historical None-as-False conflation this function's own docstring warns against) | Caught (`test_unanswerable_name_comparison_is_not_a_mismatch`) |
+
+All four files restored to the exact committed state after each check
+(`git status --short` clean, suite back to 661/661 after every mutation).
+Chose the `_attribute` mutation deliberately: it is the precise bug this
+project's standing brief names as the canonical "caller didn't handle a
+new return value" failure, and tonight's goal there was less "find
+something new" than "prove the fix is still load-bearing" — it is.
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed: "Word-wrapped negation loses its scope at every bare
+  newline" (CRITICAL section) is correctly fixed on `master`, but the
+  entry's own text is stale and has a stray duplicate heading.** Live
+  repro with the exact sentence the finding cites:
+  `matching.is_negated("We are not\nraising a Series A at this time; the
+  team is heads-down on the product.", idx_of("raising"))` → `True` on
+  current `master`. Traced the fix to `6a967fd` / merge `0189816`
+  (2026-09-02, "A word-wrap can hide a denial from is_negated..."),
+  which added `_hard_newline_before` and removed `\n` from
+  `_CLAUSE_END_CHARS` — exactly the mechanism the finding's "fix
+  direction" called for. The entry already carries a `[FIXED]` tag
+  (line ~1853), but it sits on a **duplicate, untagged copy of the same
+  heading immediately above it** (line ~1852: a bare "### Word-wrapped
+  negation loses its scope at every bare newline" with no content of its
+  own — a leftover from however the tag was appended), and the body's
+  own "Evidence" block still quotes the *pre-fix* code
+  (`_CLAUSE_END_CHARS = ".;:!?\n•|"`), which is no longer what `master`
+  contains. Nothing to do tonight (capped, NIGHTLY.md-only) but flagging
+  precisely so a future doc-only night can delete the stray duplicate
+  header and replace the stale evidence block with a pointer to
+  `6a967fd` instead of re-deriving this.
+- **Investigated, not resolved: "Citing no identifiers disables the
+  entire verification half of the tool, including its only severity
+  floor" — the finding's own worst-case repro no longer reproduces as
+  written, but the structural point is untouched.** Built the exact
+  fabricated bio the finding describes (fake PhD from "the Institute of
+  Advanced Photonic Systems", fake MSc from "Universidad Tecnica de
+  Valdoria", fabricated 15-year career, fabricated Nature/Forbes/IEEE
+  Spectrum coverage, fabricated 12,000 customers and Thales/Airbus
+  contracts) and ran it through the real CLI end-to-end: `python
+  larp-meter.py --file <bio> --verify --name "Jane Falsworth" --json`.
+  Result: **INSUFFICIENT DATA, coverage 27%** (below `MIN_COVERAGE`),
+  not the finding's claimed "GREEN, larp_score 0/100, coverage 56%". Flag
+  8 correctly reaches ROR, gets `NOT_FOUND` for the invented institute,
+  and — per the already-`[FIXED]`-tagged "ROR absence is scored as a
+  triggered credential flag" fix elsewhere in this file — correctly
+  returns UNKNOWN rather than crediting or penalizing it, which is why
+  coverage lands where it does. I do **not** read this as the core gap
+  being closed: the finding's structural claim (no reverse path exists
+  for claims without a subject-volunteered identifier) is still
+  completely true, and a profile shaped to clear `MIN_COVERAGE` on
+  cosmetic grounds alone (the finding's own "two cosmetic differences"
+  variant, not re-tested tonight for time) could still slip through.
+  What's actually stale is the *specific numeric repro* cited as
+  evidence — it was measured against an older build, and whatever
+  changed since (the ROR-floor fairness fix is the most likely single
+  cause, dated by this file's own record to a separate night) moved this
+  exact input from GREEN to INSUFFICIENT DATA. Recommend a future
+  BACKLOG.md-touching night re-run the finding's full pair (the
+  fabricated bio AND its "cosmetic difference" YELLOW-27 sibling) and
+  either update the evidence block with fresh numbers or fold this into
+  the top-level core-gap entry rather than carrying a now-inaccurate
+  standalone repro.
+- Did not re-verify the other two of the "4 still open" core-gap
+  restatements tonight (the top entry and the "identifier-keyed and
+  one-way" duplicate) beyond confirming they are still present and
+  untagged — time went to the two above plus the mandatory mutation
+  pass.
+
+### Mutation-testing log
+
+See the table above — first full run, this specific line set, against
+`scoring.py`, `names.py`, `flags.py` and `verify.py` tonight. All eight
+mutations caught by existing tests; no new survivor, so nothing new to
+pin. This keeps the per-file "real pass on master" ledger this project
+has kept since 08-15/08-18/08-19 current for all four required files.
+
+### What I learned
+
+- Tracing a `[FIXED]`-tagged finding all the way to its fix commit is
+  worth doing even when the tag already says it's closed — the tag was
+  right, but the surrounding prose (a stale evidence block, a stray
+  duplicate heading) would have cost a future run real time re-deriving
+  what tonight confirmed in minutes. A `[FIXED]` tag on a heading is not
+  the same promise as "this entry's body is still accurate."
+- A finding's own worst-case repro going stale is not the same as the
+  finding being refuted. Re-running the exact scenario BACKLOG.md cites
+  as evidence, rather than taking the prose at face value, is the same
+  discipline the standing brief asks for when verifying any other
+  unverified lead — and it cuts both ways: tonight it showed the tool
+  behaving *better* than documented, not worse, which is exactly the
+  kind of update that keeps this file trustworthy rather than stale in
+  either direction.
+- `--text` (the CLI's literal-pasted-text flag, `-t`) and `--file` (read
+  text from a path, `-f`) are easy to confuse when testing by hand —
+  passing a file path to `--text` silently audits the path string itself
+  as if it were the subject's bio, extracts almost nothing, and produces
+  a misleadingly thin "INSUFFICIENT DATA" that looks like a real finding
+  until you check which flag you used. Wasted several minutes on this
+  tonight before catching it; worth remembering for the next run that
+  reaches for a hand-built repro.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all re-notify triggers fresh before
+   anything else** — unchanged at 3 for 23 consecutive capped nights now;
+   #29's conflict is now five weeks old. Still the single most overdue
+   piece of queue-clearing housekeeping the moment there is a human slot
+   for it.
+2. **File the LinkedIn section-drop finding from 10-27's entry as a new
+   BACKLOG.md CRITICAL and build the narrower fix** (`publications`/
+   `patents` fields on `Profile`, appended verbatim to `to_prose()`,
+   failing test first) — still the single highest-value, most
+   concretely-scoped piece of work in this file. Needs a queue slot (a
+   BACKLOG.md-touching, code-touching night) to land.
+3. **Clean up the "Word-wrapped negation" BACKLOG.md entry** (delete the
+   stray duplicate untagged heading, replace the stale pre-fix evidence
+   block with a pointer to `6a967fd`) and **refresh or fold the "Citing
+   no identifiers..." entry's stale repro** per tonight's findings above
+   — both are small, doc-only edits that don't need a code-touching
+   night, just a BACKLOG.md-touching one.
+4. **Land the pile of ready-to-paste regression tests** once the queue
+   clears — unchanged list carried forward since 09-25, plus the
+   `_ror_country` test and LinkedIn section-drop repro from 10-27.
+5. **Paste the `[IN PROGRESS — nightly/2026-09-22]` BACKLOG.md
+   annotation** — still unpasted, still blocked by the same single-file
+   capped-night constraint as every prior night.
+6. The core architectural gap (the reverse path) is still the top
+   priority after items 2-3 and still untouched by new code since 09-22.
+   Once real feature work resumes, re-verify OpenAlex's live rate limits
+   first — the brief's own numbers are now over eleven weeks old
+   (measured 2026-08-14).

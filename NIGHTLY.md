@@ -11545,3 +11545,207 @@ has kept since 08-15/08-18/08-19 current for all four required files.
    Once real feature work resumes, re-verify OpenAlex's live rate limits
    first — the brief's own numbers are now over eleven weeks old
    (measured 2026-08-14).
+
+## 2026-10-29 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests` and `pull_request_read` (`get`,
+`get_status`, `get_check_runs`, `get_comments`) on all three open,
+unmerged `nightly/*` PRs against `master`:
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all 6 jobs | 0 / 0 |
+
+Same three PRs as every entry since 09-24 — the **24th capped night**
+against this queue. Nothing merged to `master` since the 2026-09-22
+interactive session (now 37 calendar days). Per the standing brief,
+tonight did **not** open a new PR or push a new branch — this entry is
+committed NIGHTLY.md-only to `nightly/2026-09-24` (#31, still the newest
+open branch), touching no other file.
+
+**Not sending a push notification tonight.** Checked the established
+re-notify triggers fresh and none fired: queue still exactly 3 (not
+grown), CI still green on all three (6/6 each), still zero comments and
+zero reviews on any PR, and #29's `mergeable_state` is still plain
+`dirty` (a few days older, not a materially different or deeper
+conflict). This reapplies the standard every entry since 10-21 has used;
+noting explicitly for the next run that #30 and #31 in particular are
+trivially mergeable right now (clean, green, zero review burden) whenever
+a human has a slot — they are not blocked on anything this project can
+fix from here.
+
+### Running backlog tally (15 CRITICALs)
+
+Independently recounted directly against `master`'s current
+`BACKLOG.md` `## CRITICAL (15)` section (not just trusted from the prior
+entry): **10 [FIXED] / 1 [PARTIALLY FIXED] / 4 still open.** Unchanged
+from every entry since the 09-22 interactive session, as expected — no
+commits have touched `BACKLOG.md` since then. The section lists 16
+`###` headings for 15 findings because of the still-unpasted stray
+duplicate heading noted below.
+
+### What I did
+
+Read `nightly/2026-09-24`'s own `NIGHTLY.md` tail (its 23rd-capped-night
+entry) before touching anything. Baseline on `master`: 661 tests green.
+
+**Mandatory per-cycle mutation pass, all four required files — one new
+real false-accusation-risk survivor found and live-confirmed:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `category_scores`: `r.status not in (TRIGGERED, PASSED)` → `in` (flip the filter) | Caught (`test_category_breakdown`) |
+| `scoring.py` | `category_scores`: `round(100 * v["trig"] / v["dec"]) if v["dec"] else None` → always compute (drop the `else None` guard) | **Survived — confirmed dead code, not an equivalent-mutant risk worth pinning.** Every category in the registry carries `weight > 0` (checked directly: `grep '"weight": 0' flags.py` — no matches), and a bucket is only created inside the loop at the same moment `dec` first receives that weight, so `v["dec"]` can never be falsy for any bucket the dict actually holds. Same category as the already-deleted ROR v1 fallback (PR #31's own second commit) — schema-legal-looking but structurally unreachable. Not touched tonight (capped night, no code changes), but a candidate for a future night to simplify to `round(100 * v["trig"] / v["dec"])` with the `else None` dropped, same reasoning PR #31 already used once. |
+| `names.py` | `name_matches`'s single-token abbreviation branch: `if not extra or all(w in mine for w in extra):` → `and` | Survived the suite, then **brute-force fuzzed 200,000 random subject/candidate name pairs (particles, hyphens, abbreviations, mid-name matches) against both the real and mutated function directly — zero behavioral differences.** Reasoned why: any word `w` in `extra` that is also a token of `mine` would already have been found by `present`'s own whole-word regex search over `blob` (the same two hyphen readings `present` and `extra` both use), which would force `len(present) >= 2` and route around this branch entirely before `extra` is ever examined. So in the one reachable state where this line runs (`len(present) == 1`), `extra` and `mine` are disjoint by construction, and `all(w in mine for w in extra)` is vacuously equivalent to `not extra` whenever `extra` is non-empty too. This is a genuine equivalent mutant, not an untested gap — the `or` is logically redundant and `if not extra:` would behave identically. Worth a future simplification, not a regression test. |
+| `flags.py` | `f_contradicted`: `if retracted and not standing:` → `or` | Caught (`test_standing_papers_plus_one_retraction_pass_with_the_retraction_named`) |
+| `flags.py` | `f_contradicted`: `preprint_claimed_reviewed = [c for c in confirmed if c.is_preprint and c.claimed_peer_reviewed]` → `or` | **Survived — new, real, and live-confirmed as a false-accusation risk. See below.** |
+| `verify.py` | `_ror_country`: `locations[0]` → `locations[-1]` | Survived — **reconfirms 10-27's already-flagged finding**, not new. Still real-but-unobserved-live: no test exercises an institution with multiple `locations` entries whose first and last geonames country differ. Not pinned tonight (capped night); next code-touching night on `verify.py` should write the regression test, per 10-27's and 10-28's entries. |
+| `verify.py` | `verify_github`: `comparable = [published] if len(published.split()) >= 2 else []` → `> 2` | Caught (an existing two-word-name GitHub attribution test) |
+
+**The new `flags.py` survivor, live-confirmed and worth prioritizing:**
+`is_preprint` (set in `verify.py:323` from Crossref's own `type` field —
+a fact about the registry record) and `claimed_peer_reviewed` (set in
+`extract.py:333` from whether the *subject's own text* calls the work
+peer-reviewed) are two fully independent signals, one about the world and
+one about self-presentation. The `and` is load-bearing: the note "cited
+as peer-reviewed... recorded by Crossref as a preprint" must only fire
+when BOTH hold. Built the exact live counter-example and ran it through
+the real, unmutated `flags.f_contradicted` first to establish the correct
+baseline, then applied the mutation to the file on disk and reran through
+the same real module (not a reimplementation) to see the actual buggy
+output:
+
+```
+GOOD CODE  status: PASSED | description: All 1 checked identifier(s)
+confirmed by their registries.
+
+MUTANT     status: PASSED | description: All 1 checked identifier(s)
+confirmed by their registries. Note: 1 cited as peer-reviewed is recorded
+by Crossref as a preprint, which a later journal version would not always
+be linked to — worth checking by hand.
+```
+
+The input: one CONFIRMED, non-retracted DOI claim with `is_preprint =
+False` (Crossref types it a plain `journal-article`) and
+`claimed_peer_reviewed = True` (the subject's own text literally says
+"published in a peer-reviewed journal" — true, ordinary, and exactly what
+an honest academic writes about a normal journal paper). Under the real
+code this correctly produces a clean PASSED with no note. Under the `or`
+mutation it produces a **factually false claim injected into the flag's
+own description** — "recorded by Crossref as a preprint" when it is
+nothing of the kind — attached to "worth checking by hand," i.e. casting
+suspicion on a completely truthful, ordinary claim. This is squarely the
+standing brief's governing failure mode (never libel an honest person) —
+not a live bug (current `master` has the `and`, correctly), but a
+confirmed gap in test coverage: nothing in the suite currently pins this
+boundary, so a future refactor of this line has no safety net. No fix
+attempted tonight (capped night, no code changes) — flagging for the next
+`flags.py`-touching night to add the regression test directly (construct
+a `Claim` with `is_preprint=False, claimed_peer_reviewed=True`, confirmed
+and non-retracted, assert the description contains no "preprint" note),
+which should be a five-minute addition once there's a code-touching slot.
+
+All four files restored to their exact committed state after each check
+(`git status --short` clean, suite back to 661/661 after every mutation).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Confirmed, independently recounted (not just trusted from the prior
+  entry's tally): 10 [FIXED] / 1 [PARTIALLY FIXED] / 4 open of 15
+  CRITICALs**, directly against `master`'s current `## CRITICAL (15)`
+  section headers. See "Running backlog tally" above.
+- Did not re-verify any individual open finding's own repro tonight
+  (unlike 10-28's entry, which re-ran two of the four open findings
+  live) — time went to the new `flags.py` preprint/peer-review survivor
+  and the `names.py` fuzz-verification, which took priority as
+  higher-confidence, more concretely scoped new findings.
+
+### Mutation-testing log
+
+See the table above — seven mutations tonight across all four required
+files: two caught, two confirmed real-but-reachability-limited survivors
+(one new — `_ror_country`'s companion is a reconfirmation, not new — the
+`flags.py` preprint/peer-review gap is genuinely new), and two confirmed
+equivalent mutants / dead code (`scoring.py`'s `category_scores` None
+guard, `names.py`'s `extra` `or`/`and`). This keeps the per-file "real
+pass on `master`" ledger current for all four required files for the
+24th consecutive capped night.
+
+### What I learned
+
+- **"Survived the suite" is not the end of the investigation — the
+  project's own three-way distinction (pin it / delete it / schema-legal-
+  but-unobserved) needs a fourth bucket: equivalent mutant.** Both the
+  `scoring.py` and `names.py` survivors tonight turned out, on actually
+  tracing the surrounding logic (and for `names.py`, brute-force fuzzing
+  200,000 inputs to be sure rather than asserting it from reading alone),
+  to be mutations with **no observable effect on any input**, not just
+  "untested." Writing a regression test for either would pin an arbitrary
+  implementation detail, not a behavior — the opposite of what a
+  regression test should do. Worth keeping "equivalent mutant" explicit
+  in future entries' tables rather than folding it into either "pin it"
+  or "schema-legal-but-unobserved," which both imply the behavior is at
+  least reachable.
+- **A survivor's real value is proportional to how directly it touches
+  the standing brief's own named failure modes, not to how exotic the
+  input is.** Tonight's highest-value finding (`is_preprint`/
+  `claimed_peer_reviewed`) needed no registry edge case, no non-Western
+  name, no adversarial profile — just two independently-set booleans on
+  a completely ordinary, honest claim. The brief's own "never libel an
+  honest person" sentence is not a decoration; it is the single most
+  efficient place to look when deciding which of several survivors in one
+  night's pass is worth the longer live-verification write-up.
+- Reran the mutation through the *actual* module (editing the file on
+  disk, re-importing, then reverting) rather than hand-copying the
+  mutated line into a standalone reimplementation for the "GOOD CODE" vs
+  "MUTANT" comparison above — a reimplementation risks silently fixing or
+  introducing a difference from the real code that the write-up would
+  never catch. Worth keeping as the default technique for any future
+  night that wants to show a mutation's live, user-visible effect rather
+  than just reporting pass/fail from the test runner.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all re-notify triggers fresh before
+   anything else** — unchanged at 3 for 24 consecutive capped nights now;
+   #29's conflict is 37 calendar days old. #30 and #31 are clean, green,
+   and have zero outstanding review burden — the single most overdue
+   piece of queue-clearing housekeeping the moment there is a human slot
+   for it, and the cheapest possible one (no conflict to resolve on
+   either).
+2. **Add the `flags.py` preprint/peer-review regression test** found
+   tonight — `Claim(is_preprint=False, claimed_peer_reviewed=True)`,
+   confirmed and non-retracted, assert no "preprint" note appears in the
+   description. Small, self-contained, no production code change needed
+   (the `and` is already correct on `master`) — purely closing a test-
+   coverage gap. Good candidate for the next single-file capped night if
+   the queue is still stuck, or folds trivially into any other
+   `flags.py`-touching night.
+3. **File the LinkedIn section-drop finding from 10-27's entry as a new
+   BACKLOG.md CRITICAL and build the narrower fix** (`publications`/
+   `patents` fields on `Profile`, appended verbatim to `to_prose()`,
+   failing test first) — still the single highest-value, most
+   concretely-scoped piece of feature work in this file. Needs a queue
+   slot (a BACKLOG.md-touching, code-touching night) to land.
+4. **Clean up the "Word-wrapped negation" BACKLOG.md entry** (delete the
+   stray duplicate untagged heading, replace the stale pre-fix evidence
+   block with a pointer to `6a967fd`) and **pin `_ror_country`'s
+   `locations[0]` vs `locations[-1]` choice with a real regression test**
+   — both small, don't need a code-touching night strictly (the latter
+   does need one line of test code, no production change).
+5. **Land the pile of ready-to-paste regression tests** once the queue
+   clears — unchanged list carried forward since 09-25, plus tonight's
+   `flags.py` preprint/peer-review test and 10-27's `_ror_country` test
+   and LinkedIn section-drop repro.
+6. **Paste the `[IN PROGRESS — nightly/2026-09-22]` BACKLOG.md
+   annotation** — still unpasted, still blocked by the same single-file
+   capped-night constraint as every prior night.
+7. The core architectural gap (the reverse path) is still the top
+   priority after items 2-4 and still untouched by new code since 09-22.
+   Once real feature work resumes, re-verify OpenAlex's live rate limits
+   first — the brief's own numbers are now over eleven and a half weeks
+   old (measured 2026-08-14).

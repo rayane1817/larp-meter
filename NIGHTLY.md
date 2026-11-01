@@ -11749,3 +11749,254 @@ pass on `master`" ledger current for all four required files for the
    Once real feature work resumes, re-verify OpenAlex's live rate limits
    first — the brief's own numbers are now over eleven and a half weeks
    old (measured 2026-08-14).
+
+
+## 2026-11-01 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_status`, `get_comments`) and `actions_list` (`list_workflow_runs`) on
+all three open, unmerged `nightly/*` PRs against `master`. (No run landed
+on 10-30 or 10-31; this is simply the next check after 10-29's.)
+
+| PR | Branch | Mergeable | CI (`tests` workflow) | Comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 (39 calendar days now) | success, all jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | clean | success, all jobs | 0 / 0 |
+
+Same three PRs as every entry since 09-24 — the **25th capped night**
+against this queue, 39 calendar days since anything merged to `master`.
+Per the standing brief, tonight did **not** open a new PR or push a new
+branch — this entry is committed NIGHTLY.md-only to `nightly/2026-09-24`
+(#31, still the newest open branch), touching no other file.
+
+**Not sending a push notification tonight.** Checked the established
+re-notify triggers fresh and none fired: queue still exactly 3 (not grown),
+CI still green on all three, still zero comments and zero reviews on any
+PR, and #29's `mergeable_state` is still plain `dirty` — a few days older,
+not a materially different or deeper conflict. #30 and #31 remain clean,
+green, and zero-review-burden — trivially mergeable whenever a human has a
+slot.
+
+### Running backlog tally — **correction: the prior tally was wrong**
+
+Independently recounted directly against `master`'s current `BACKLOG.md`
+`## CRITICAL (15)` section, using a script rather than manual reading this
+time (every prior night's recount, as far as this entry can tell, was done
+by eye against the same `sed` range used the night before, which looks to
+be how a one-heading undercount survived unnoticed for weeks):
+
+```
+awk '/^### Verification is a one-way, claim-anchored funnel/{p=1} /^## MAJOR/{p=0} p && /^### /{print}' BACKLOG.md
+```
+
+This returns **17** `###` headings, not the 16 every entry since 09-24 has
+reported. Of those 17: **11 are `[FIXED]`**, not 10 — the extra one is
+`### [FIXED] Word-wrapped negation loses its scope at every bare newline`
+(line 1912), which sits directly under its own untagged, bodiless
+duplicate heading (`### Word-wrapped negation loses its scope at every
+bare newline`, line 1911 — confirmed zero content between the two
+headings). Every prior night's "16 headings for 15 findings, 10 FIXED"
+phrasing already *knew* about this duplicate pair but, on this evidence,
+undercounted by exactly the FIXED one, while still correctly excluding the
+bodiless stub from the open count. Net effect: the right reading of the
+file today is **16 distinct findings, not 15** — 11 `[FIXED]` / 1
+`[PARTIALLY FIXED]` / **4 still open** (`Verification is a one-way,
+claim-anchored funnel`, `Citing no identifiers disables the entire
+verification half`, `Zero registry reach on a realistic prose profile`,
+`Verification is identifier-keyed and one-way`). The *open* count (4) is
+unchanged from every prior entry; only the FIXED/total arithmetic was off.
+Not corrected in `BACKLOG.md` itself tonight (capped night, NIGHTLY.md
+only) — flagging for the next BACKLOG.md-touching night to: (a) delete the
+stray duplicate heading at line 1911, (b) relabel the section `## CRITICAL
+(16)` or otherwise make its own count agree with its contents.
+
+### What I did
+
+Read this branch's own `NIGHTLY.md` tail (the 24th-capped-night, 10-29
+entry) before touching anything, per 10-26's lesson about reading the
+branch and not `master`. Baseline: 662 tests green throughout (confirmed
+before and after every mutation below).
+
+**Live-reconciliation check: BACKLOG.md's core-gap "Marcus Vane" repro,
+re-run against today's code rather than trusted from its 2026-08-25
+write-up.** That fabricated-end-to-end profile (fake CEO title, fake
+company, "40 peer-reviewed publications," fake patents, no real
+identifiers of any kind) is the finding's own worked example for "the
+honest profile that pastes DOIs gets audited; the competent LARP that
+pastes nothing gets GREEN." Re-ran it through today's pipeline with
+`--verify --name "Marcus Vane"` (real `larp-meter.py`, no stubbing):
+
+- **Still GREEN.** `larp_score` 12, `scored` True, `coverage` 46% — close
+  to but not identical to the finding's original GREEN 14/41% (`reconcile.py`,
+  which did not exist in August, now makes one additional API call and
+  nudges the numbers slightly, but does not change the verdict).
+- The "40 peer-reviewed publications" claim *did* reach `reconcile.py` this
+  time (1 `api_call`, 1 `publications`-kind reconciliation entry) — a real
+  behavior change from pre-09-22 code. It came back `UNCHECKABLE`,
+  `detail: "OpenAlex could not be reached."` A direct follow-up probe
+  (`urlopen` against `api.openalex.org/authors?search=Marcus%20Vane`)
+  confirmed why: live `HTTP 429` — the brief's own documented keyless-budget
+  limit, hit organically, not provoked. Per the project's own rule ("a
+  network failure is never evidence of deception"), this correctly stays
+  neutral rather than becoming either a PASS or a penalty. Did not retry
+  or hammer the endpoint further after confirming the 429 once, to avoid
+  spending more of the same scarce shared budget this finding is about
+  protecting.
+- **"CEO of Helion Neurotech" still gets zero reconciliation attempt of any
+  kind** — not even an `UNCHECKABLE` entry. Traced why: `reconcile.py`'s
+  `_COMPANY_CLAIM_RE` only matches a role phrase followed by a company name
+  carrying one of a fixed list of Swiss/Belgian/German-area legal-form
+  suffixes (`_FORMS`: AG, GmbH, S.A., NV, BV, Sàrl, …). "Helion Neurotech"
+  carries none, so the regex never fires and `owned_org`/`leadership`
+  stay in `verifier_stats.skipped_subtypes` exactly as before 09-22.
+  `reconcile.py`'s own module docstring already frames itself as "the
+  first source" / narrow slices, so this is not a contradiction of
+  anything the project claims — but it is concrete, current evidence that
+  the core gap's company-role half remains **completely unaddressed for
+  any company without a CH/BE (or lookalike) legal suffix**, i.e. the
+  large majority of real-world claims including this exact worked
+  example. The reverse path's two slices so far close a narrow, real
+  piece of the gap (Swiss/Belgian officers, OpenAlex-attributable
+  publication volume) without touching the general case BACKLOG's
+  `### Verification is identifier-keyed and one-way` fix-direction (line
+  1771-1826) describes (a general subject-keyed `PROBES` dispatch
+  returning `Evidence`, independent of jurisdiction or legal form).
+
+**Mandatory per-cycle mutation pass, all four required files:**
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `score()`: `r.status == TRIGGERED` → `!=` (in the `trig_w` sum) | Caught (31 failures, 1 error) |
+| `names.py` | `name_matches`: `if len(present) >= 2:` → `> 2` | Caught (44 failures, 11 errors) |
+| `flags.py` | `f_contradicted`: `if not checkable and not recs:` → `or` | Caught (26 failures) — **reconfirms a known, already-logged real finding** (first found and fully written up earlier; this is a spot-check, not new) |
+| `verify.py` | `_is_retracted`: `rel.get("type") == "retraction"` → `!=` | **Survived — a fresh angle on an already-logged real gap, not a new bug.** See below. |
+
+**The `verify.py` survivor, traced rather than just reported:** this is a
+different mutation operator than the previously-logged `_is_retracted`
+finding (which flipped the `and` joining `isinstance(rel, dict)` and the
+type check to `or`), but it exposes the *same* underlying missing test
+case from the other side of the comparison: nothing in the suite
+constructs an `update-to` entry whose `type` is something other than
+`"retraction"` (e.g. `"correction"`) paired with a title that does *not*
+match `_RETRACTED_TITLE_RE`. Both of the file's existing retraction-path
+tests (`test_retracted_paper_is_flagged_via_update_to`,
+`test_retracted_paper_is_flagged_via_title_when_update_to_lacks_the_relation`)
+happen to use a title carrying the `"RETRACTED"`/`"RETRACTED ARTICLE:"`
+prefix regardless of what `update-to` says, so the title-regex fallback
+masks either mutation and both survive for the identical reason. Not a
+live bug — current `master` has the `==`, correctly — but doubles the
+confidence that this is a real, well-defined test-coverage gap rather
+than a one-off artifact of a single mutation choice, and sharpens exactly
+what the still-unpasted regression test (sitting in this file since an
+earlier night) needs to construct: an `update-to` list with a
+non-`"retraction"`-type entry, and a title with no retraction prefix,
+asserting `claim.retracted` is `False`.
+
+All four files restored to their exact committed state after every check
+(`git status --short` clean; suite back to 662/662 throughout).
+
+### What I confirmed / refuted in BACKLOG.md
+
+- **Corrected the running backlog tally itself** — see "Running backlog
+  tally" above. This is the first night to recount with a script instead
+  of eyeballing a `sed` range; the true count is 11 `[FIXED]` / 1
+  `[PARTIALLY FIXED]` / 4 open of **16** distinct findings (not 15),
+  with the open count unchanged.
+- **Refreshed the core-gap "Marcus Vane" repro with today's numbers**
+  (GREEN 12/46%, not the stale GREEN 14/41% from 2026-08-25) and
+  confirmed with a live trace, not an assumption, exactly which half of
+  the claim `reconcile.py`'s three shipped slices do and do not reach:
+  publication-volume claims now get a real (if currently rate-limited)
+  attempt; company-role claims only get one when the company name itself
+  carries a CH/BE-area legal-form suffix the regex recognizes. Neither
+  open core-gap finding (`Verification is a one-way, claim-anchored
+  funnel`; `Verification is identifier-keyed and one-way`) should be
+  marked fixed or partially fixed on this evidence — the general,
+  jurisdiction-independent subject-keyed `PROBES` architecture both
+  findings' fix-direction sections describe is still entirely unbuilt.
+
+### Mutation-testing log
+
+Four mutations tonight, one per required file: three reconfirmations of
+already-real, already-logged gaps (`scoring.py`'s TRIGGERED-sum caught
+cleanly and is logged here for the first time at this specific line, but
+is the same general class as prior boundary-flip checks; `names.py`'s
+`present`-count boundary, caught, likewise a fresh line but the same
+class as prior `>=`/`>` checks; `flags.py`'s `not checkable and not recs`
+spot-check, caught, exact repeat of a previously-found-and-logged
+mutation) and one survivor (`verify.py`'s `_is_retracted` type-equality
+flip) that sharpens, rather than duplicates, an existing unpinned finding.
+Per-file "real pass" ledger: all four files have now had a real pass on
+multiple separate nights; `names.py` and `verify.py`'s fuller sweeps still
+live only on unmerged branches, as every entry since early September has
+noted.
+
+### What I learned
+
+- **The "recount independently, don't trust the prior entry" instruction
+  has a failure mode of its own: recounting by re-reading the same
+  `sed`/`grep` range a previous night used is not independent.** Twenty-
+  four consecutive nights all arrived at "16 headings, 10 FIXED, 15
+  findings" — a plausible-sounding number that was simply wrong by one,
+  and wrong in a way eyeballing a long heading list doesn't surface but a
+  three-line `awk`+`grep -c` script catches immediately. Worth treating
+  "I recounted it" as meaningfully weaker evidence than "I recounted it
+  with a method different from last time," for this kind of count
+  specifically.
+- **A module's own scoped self-description is useful evidence against
+  over-claiming its reach.** `reconcile.py`'s docstring already says
+  "first source" / "second source" about Zefix and OpenAlex, which is
+  exactly the caveat that kept tonight's Marcus-Vane re-test from being
+  mis-filed as "the core gap is fixed" — the module says plainly it isn't
+  general yet, and the live trace through `_COMPANY_CLAIM_RE` confirmed
+  precisely where the boundary sits (a legal-form suffix, not a
+  jurisdiction check, which means a US LLC/Inc and most Delaware
+  corporations get the same zero coverage as a wholly invented company
+  name, for exactly the same regex reason).
+- Confirming a rate-limit live (one single real `429`) rather than
+  assuming the brief's static numbers still hold is cheap and worth doing
+  occasionally even outside a feature-building night — it cost one API
+  call and settled, for tonight's purposes, that the shared OpenAlex
+  budget pressure described in the standing brief is still a live
+  condition today, not a historical one.
+
+### What the next run should pick up first
+
+1. **Check the PR queue depth and all re-notify triggers fresh before
+   anything else** — unchanged at 3 for 25 consecutive capped nights now;
+   #29's conflict is 39 calendar days old. #30 and #31 remain the
+   cheapest possible queue-clearing win whenever there is a human slot.
+2. **Fix `BACKLOG.md`'s `## CRITICAL (15)` heading and stray duplicate**
+   — new tonight, concrete and small: delete the bodiless duplicate
+   heading at line 1911 and correct the section count to reflect 16
+   distinct findings (11 FIXED / 1 PARTIALLY FIXED / 4 open). Needs a
+   BACKLOG.md-touching night (not purely NIGHTLY.md), so it waits on the
+   same capped-night constraint as everything else below.
+3. **Add the `_is_retracted` regression test** — now confirmed from two
+   independent mutation angles (the previously-logged `and`→`or` and
+   tonight's `==`→`!=`), both masked by the same gap: construct an
+   `update-to` entry with a non-`"retraction"` type and a title with no
+   retraction prefix, assert `claim.retracted` is `False`. Small,
+   self-contained, no production change needed.
+4. **Add the `flags.py` preprint/peer-review regression test** from
+   10-29's entry — `Claim(is_preprint=False, claimed_peer_reviewed=True)`,
+   confirmed and non-retracted, assert no "preprint" note in the
+   description. Still outstanding, still a five-minute addition.
+5. **File the LinkedIn section-drop finding from 10-27's entry** as a new
+   BACKLOG.md CRITICAL and build the narrower fix (`publications`/
+   `patents` fields on `Profile`, appended verbatim to `to_prose()`,
+   failing test first) — still the single highest-value, most
+   concretely-scoped piece of feature work in this file.
+6. **The core architectural gap is still the top priority after 2-5**,
+   and tonight's live re-test shows precisely how much of it `reconcile.py`
+   still leaves untouched: the general, jurisdiction-independent
+   subject-keyed `PROBES`/`Evidence` architecture BACKLOG's own fix-
+   direction sections describe (quantity reconciliation for "40
+   publications"-style claims, an `UNSUPPORTED_AT_SCALE` status, company
+   roles outside CH/BE). Once real feature work resumes, re-verify
+   OpenAlex's live rate limits again first — tonight's single live `429`
+   confirms the pressure is still real, but the brief's own numbers are
+   now over eleven and a half weeks old (measured 2026-08-14).

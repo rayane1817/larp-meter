@@ -12000,3 +12000,289 @@ noted.
    OpenAlex's live rate limits again first — tonight's single live `429`
    confirms the pressure is still real, but the brief's own numbers are
    now over eleven and a half weeks old (measured 2026-08-14).
+
+## 2026-11-02 (nightly run, capped — PR queue at 3)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_status`, `get_review_comments`) and `actions_list`
+(`list_workflow_runs`, `list_workflow_jobs`) on all three open, unmerged
+`nightly/*` PRs against `master`.
+
+| PR | Branch | Mergeable | CI (`tests` workflow, head commit) | Comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 (now 40 calendar days) | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | **unstable** | **failure** — `test (ubuntu-latest, 3.8)` failed at the `actions/setup-python@v5` step, the other 5 jobs (3.10, 3.12 on ubuntu; 3.8, 3.10, 3.12 on windows) all green | 0 / 0 |
+
+**This is the 26th capped night against the same three-PR queue, and the
+first night where something in the queue actually changed since 09-24.**
+`pull_request_read get_status` (the Status API) reports nothing for any
+of the three (`total_count: 0` — this repo's checks run entirely through
+Actions, not the separate Status API, so earlier nights were right to
+use `actions_list` instead; noted here only because it is the first tool
+I tried and it is a trap for whoever checks next). #31's `mergeable_state`
+reads `unstable`, not the `clean` every entry since 09-24 has reported,
+and `actions_list`'s most recent run for that branch (run #83, id
+41268467707, triggered by 11-01's own NIGHTLY.md-only commit `eb2d950`)
+has `conclusion: "failure"` — **not** the "success, all jobs" that
+11-01's own entry recorded for it. Checked why before assuming either a
+real break or a flake: all 6 jobs' steps are identical in both this run
+and the prior green run (#82, 10-29, same branch, same workflow file);
+the one failing job's `Run actions/setup-python@v5` step failed in under
+a second with no later step attempted, while the identical step in the
+*same run*'s other five jobs (including `ubuntu-latest, 3.10` and
+`ubuntu-latest, 3.12` on the same `ubuntu-latest` image) succeeded, and
+the identical `ubuntu-latest, 3.8` job succeeded in 9s on 10-29. Nothing
+in this branch's own tree touches `.github/workflows/tests.yml`,
+`requirements`, or any Python version pin — every commit since 09-24 has
+been this same NIGHTLY.md-only pattern. That combination (one job, one
+step, sub-second failure, immediately adjacent successful runs of the
+exact same job) is the signature of a transient GitHub-hosted-runner
+provisioning flake in `setup-python`'s own Python-3.8 toolchain cache,
+not a regression caused by anything in this repository — but I did not
+re-run the job to confirm it self-heals, since the instructions for a
+capped night are explicit that no push beyond a NIGHTLY.md-only commit
+happens tonight, and triggering a re-run is itself an action on someone
+else's open PR. Flagging rather than fixing: **11-01's own "all jobs
+succeeded" claim for #31 was not accurate for the run it was reporting
+on** (it was almost certainly written from memory of the *previous*
+green run rather than the one actually triggered by that night's own
+push) — worth the next night that touches this queue re-verifying the
+specific run ID for the specific head SHA, not just "CI is green" from
+recollection.
+
+**Sending a push notification tonight** — the established re-notify
+triggers (queue depth change, CI status change, new comments/reviews, a
+materially different mergeable state) include exactly one hit: #31's CI
+went from green to a failing run and its mergeable_state from `clean` to
+`unstable`, a real state change from every night since 09-24, even though
+the likely cause is an external runner flake rather than this repo's own
+code. Forty days with zero review activity on any of the three PRs is
+also, on its own, now well past the point where another silent "nothing
+changed" night serves the project's human.
+
+### Running backlog tally
+
+Recounted independently against `master`'s current `BACKLOG.md`
+`## CRITICAL (15)` section with the same `awk`+`grep -c` method 11-01
+introduced (not by eye): **17** `###` headings, **11** `[FIXED]`, **1**
+`[PARTIALLY FIXED]`. No drift since 11-01's correction, as expected —
+`BACKLOG.md` has not been touched since. Tally stands: **11 FIXED / 1
+PARTIALLY FIXED / 4 open of 16 distinct findings** (not 15 — see 11-01's
+entry for the stray-duplicate-heading explanation, still not fixed in
+the file itself, still waiting on a BACKLOG.md-touching, non-capped
+night).
+
+### What I did
+
+Read this branch's own NIGHTLY.md tail (11-01's entry) before touching
+anything. Baseline: 661 tests green on `master` throughout (this branch's
+own tree carries PR #31's two fixes and would show 662; working from
+`master` tonight since nothing here depends on an unmerged branch).
+
+**Mandatory four-file mutation pass, all four required files**, each
+mutation applied, tested, and reverted (`git status --short` clean
+before and after every one; suite back to 661/661 throughout):
+
+| File | Mutation | Result |
+|---|---|---|
+| `scoring.py` | `_apply_floors`: `<=` → `<` in the tie-break comparison | Caught (1 failure) — reconfirms the already-pinned exact-tie regression, nothing new |
+| `names.py` | `name_matches`: `parts[0] == matched or parts[-1] == matched` → `and` | Caught (10 failures) — reconfirms existing coverage |
+| `names.py` | `name_matches`: `if not extra or all(w in mine for w in extra):` → `and` | **Survived — traced and proven equivalent, not a gap.** See below. |
+| `flags.py` | `f_timeline`: `if available >= claimed or _is_career_start_anchor(...)` → `>` | **Survived — a real, fresh, live-confirmed coverage gap.** See below. |
+| `verify.py` | `verify_institution`: `if wanted and wanted <= have:` → `<` | Caught (6 failures) — reconfirms existing coverage |
+| `verify.py` | `verify_institution`: `if overlap > best_overlap:` → `>=` | Caught (2 failures) — reconfirms existing coverage |
+
+**The `names.py` survivor, traced to a proof rather than left as "looks
+survived":** `extra` is built from a specific candidate string's own
+words, checked against `mine` (the subject's own tokens). I could not
+construct any input where `extra` contains a token that is also in
+`mine` — and there's a structural reason why: any such token would, by
+construction, appear as a literal whole word inside the same candidate
+string, which is itself part of `blob` (the joined set of all candidate
+names `present` is computed against). `present`'s own regex search would
+therefore already have found it and included it in `present`, which
+contradicts being in `len(present) == 1`'s single-survivor branch in the
+first place (this code only runs when exactly one `mine` token is
+present). So `extra ∩ mine` is always empty when this line runs, which
+makes `all(w in mine for w in extra)` always `False` whenever `extra` is
+non-empty — meaning the `or all(...)` clause can **never** change the
+outcome versus plain `not extra`, in the original code just as much as
+the mutation. Confirmed with six constructed name pairs designed to hit
+this branch (committed nowhere — scratch only) before accepting the
+proof over more guessing. Equivalent mutant, same family as 10-29's two
+findings in this file; not worth a regression test, since there is no
+behavior to pin.
+
+**The `flags.py` survivor, live-confirmed with a concrete repro, not
+just a mutation-suite pass/fail count:**
+
+```python
+from test_flags import ctx_for
+from larp_meter.flags import evaluate
+c = ctx_for("17 years of experience in robotics. Joined the team in 2009.")
+c.now_year = 2026
+evaluate(c)[12]
+# unmutated master: PASSED, "Claimed durations are consistent with the dates given."
+# mutated (>= -> >): UNKNOWN, "A claimed duration cannot be tested against a single
+#   date that isn't tied to an education or founding event..."
+```
+
+`f_timeline` (flags.py:702) reads `if available >= claimed or
+_is_career_start_anchor(...)`. The only input where `>=` and `>` disagree
+is `available == claimed` exactly, with no founding/education anchor at
+the earliest mentioned date — i.e. someone whose claimed tenure matches
+*precisely* the span since the earliest thing they happen to mention,
+phrased with a verb (here "joined") that isn't one of
+`_CAREER_ORIGIN_RE`'s anchor words. Current `master` has `>=` and is
+correct (PASSED, as shown above) — this is a test-coverage gap, not a
+live bug: nothing in `tests/test_flags.py`'s timeline suite constructs
+the exact-equality case, only the `claimed > available + 3` boundary
+(`test_career_slack_is_exactly_three_years`, already pinned) and the
+future-year boundary (`test_the_current_year_is_not_a_future_date`,
+already pinned). Direction matters here: were this boundary ever flipped
+by mistake in a future change, an honest person whose stated tenure
+exactly matches their earliest mentioned date would read UNKNOWN instead
+of PASSED — not an accusation, but a quiet loss of deserved
+corroboration, the same fairness direction as several of this project's
+past real bugs. A ready-to-paste regression test is the repro above,
+wrapped in `unittest` style matching the file's two neighboring pinned
+boundary tests.
+
+### What I confirmed in BACKLOG.md — a fresh, concrete, live repro
+
+Chased 10-27's flagged "LinkedIn Publications/Patents section-drop"
+finding (recorded then as a hunch to verify, never since re-confirmed
+live) all the way through the real pipeline rather than trusting the
+prior description:
+
+```python
+from larp_meter import linkedin, cli
+text = """Jane Example
+Senior Researcher at Acme Corp
+
+500+ connections
+Message
+
+About
+Working on distributed systems and consensus protocols.
+
+Experience
+Senior Researcher
+Acme Corp · Full-time
+Jan 2015 - Present · 10 yrs
+
+Education
+MSc Computer Science
+Tech University
+
+Publications
+Scalable Consensus at Scale
+doi:10.1109/TPDS.2021.3051234
+
+Patents
+US10123456 - Distributed lock manager
+
+Skills
+Distributed Systems
+"""
+linkedin.is_linkedin_paste(text)          # True — a genuine LinkedIn-shaped paste,
+                                           # not a borderline case
+normalised, _, _ = cli._maybe_normalise(text)
+# normalised has NO trace of "Publications", "Patents", the DOI, or the
+# patent number -- Profile.to_prose() only renders name/headline/about/
+# experience/education, and _maybe_normalise REPLACES the original text
+# with to_prose() rather than supplementing it.
+```
+
+Confirmed the consequence, not just the missing text: running
+`extract.extract_claims()` on the normalised output yields subtypes
+`{'degree', 'mentioned_institution', 'year'}` only — no `doi`, no
+`patent`. The DOI and patent number typed into LinkedIn's own dedicated
+sections never reach `verify.py` at all; the identical identifiers
+pasted into "About" instead would survive untouched and get verified
+normally. This is a concrete, live, worst-case instance of the standing
+brief's own core complaint, inverted onto the tool's own normalisation
+step rather than the registry side: **the most LinkedIn-native way to
+cite a real publication or patent is the one way guaranteed to make it
+invisible**, for a profile shaped exactly like the ordinary, ubiquitous
+case `is_linkedin_paste()` is tuned to recognize (this is not a
+borderline paste — it scores well past the `signals >= 4` threshold).
+Not filed as a new BACKLOG.md CRITICAL tonight (capped night, NIGHTLY.md
+only, per the standing brief) — the repro above is ready to paste
+directly into a new entry on the next BACKLOG.md-touching night, and
+into a regression test (`Profile` needs `publications`/`patents` fields;
+`to_prose()` needs to render them) once there's room to land one.
+
+### Mutation-testing log
+
+Six mutations across the four required files tonight: four reconfirmed
+already-caught coverage (scoring.py's floor tie-break, one of names.py's
+two survivors from this entry, both of verify.py's `verify_institution`
+boundaries), one proven-equivalent mutant in names.py (traced to a
+structural invariant, not just asserted), and one genuinely new survivor
+in flags.py (`f_timeline`'s `>=`/`>` exact-tenure boundary), live-
+confirmed with a concrete before/after repro rather than left as a bare
+pass/fail count. Per-file "real pass" ledger: all four required files
+have now had multiple real passes across many nights; tonight's new
+finding is the first fresh `f_timeline` boundary logged since the
+`claimed > available + 3` and future-year boundaries were pinned.
+
+### What I learned
+
+- **"CI is green" is a claim about a specific run against a specific
+  commit, not a durable property of a branch.** 11-01's entry stated
+  #31's CI as "success, all jobs" but the run actually triggered by that
+  night's own push failed one job. The fix for next time is cheap:
+  after pushing, re-fetch `list_workflow_runs` filtered to the branch
+  and check the `head_sha` of the newest run matches the commit just
+  pushed, rather than reusing a status checked before that push (or,
+  as seems likely here, carried over from memory of the previous run).
+- **A single-job, sub-second failure at a `setup-python` step, with
+  every sibling job on the same run and the equivalent job on the
+  adjacent run succeeding, is strong evidence of a runner-provisioning
+  flake rather than a code regression** — worth recognizing as a
+  pattern so a future night doesn't spend a code-change budget chasing
+  a CI failure that isn't about the code at all.
+- Proving an "equivalent mutant" claim by deriving the structural
+  invariant that makes two branches of a condition always agree (rather
+  than just trying a handful of inputs and giving up) is worth the extra
+  few minutes — it is the difference between "I couldn't find a
+  counterexample" and "no counterexample exists," and this file already
+  has two entries from a prior night that used the weaker standard.
+
+### What the next run should pick up first
+
+1. **Re-check PR #31's CI on its current head SHA before anything else**
+   — confirm whether tonight's push (the NIGHTLY.md-only commit this
+   entry describes) comes back green on a fresh run, which would confirm
+   the setup-python failure was a one-off flake rather than a now-
+   persistent problem with the `ubuntu-latest, 3.8` matrix leg.
+2. **File the LinkedIn Publications/Patents section-drop finding as a
+   new BACKLOG.md CRITICAL**, using tonight's live repro verbatim, and
+   build the fix (`publications`/`patents` fields on `Profile`, appended
+   verbatim to `to_prose()`, failing test first) on the next
+   non-capped, BACKLOG.md-touching night. This is now confirmed live
+   twice (10-27's hunch, tonight's full pipeline trace) and is concrete,
+   scoped, and high-value.
+3. **Add the `f_timeline` exact-boundary regression test** from
+   tonight's entry (`"17 years of experience... Joined the team in
+   2009."`, `now_year = 2026`, assert PASSED) — small, self-contained,
+   mirrors the file's two existing pinned timeline-boundary tests.
+4. **Fix `BACKLOG.md`'s `## CRITICAL (15)` heading and stray duplicate**
+   (11-01's finding, still outstanding) — delete the bodiless duplicate
+   heading and correct the section count to 16.
+5. **Add the `_is_retracted` regression test** (10-29's and 11-01's
+   finding) and the **preprint/peer-review regression test** (10-29's
+   finding) — both still outstanding, both small.
+6. **The core architectural gap remains top priority after 2-5**: the
+   general, jurisdiction-independent subject-keyed `PROBES`/`Evidence`
+   architecture neither open core-gap BACKLOG finding has yet, and —
+   unrelated to code, but the single highest-leverage thing available —
+   **getting a human to actually look at PR #29/#30/#31**. Forty days
+   and twenty-six capped nights in, #30 and #31 remain a trivial,
+   zero-review-burden merge whenever there is a human slot; #29 alone
+   needs a rebase onto current `master` first, now a far bigger lift at
+   40 days stale than it would have been at day one.

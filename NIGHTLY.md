@@ -12286,3 +12286,201 @@ finding is the first fresh `f_timeline` boundary logged since the
    zero-review-burden merge whenever there is a human slot; #29 alone
    needs a rebase onto current `master` first, now a far bigger lift at
    40 days stale than it would have been at day one.
+
+## 2026-11-09 (nightly run, capped — PR queue at 3, 27th capped night)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests`, `pull_request_read` (`get`,
+`get_review_comments`, `get_check_runs`) on all three open, unmerged
+`nightly/*` PRs against `master`. No run landed between 11-02 and
+tonight (a 7-day gap).
+
+| PR | Branch | Mergeable | CI (`tests` workflow, head commit) | Comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 (now 47 calendar days) | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | **unstable** (unchanged since 11-02) | **failure** — same run as 11-02's own push (`test (ubuntu-latest, 3.8)` only; the other 5 jobs green) | 0 / 0 |
+
+Same three PRs as every entry since 09-24 — the **27th capped night**
+against this queue, 47 calendar days since anything last merged to
+`master`.
+
+**This is not a new push notification tonight for the queue itself** —
+depth, review state and comment counts are all unchanged from 11-02.
+But tonight's own NIGHTLY.md-only push to this branch triggers a fresh
+CI run, which finally answers 11-02's own open question ("confirm
+whether tonight's push comes back green, which would tell us if the
+setup-python failure was a one-off flake or now persistent") — see
+"What I did" below for the result, which is new information and does
+change tonight's notification decision.
+
+### Running backlog tally
+
+Recounted independently against `master`'s current `BACKLOG.md`
+`## CRITICAL (15)` section with the same `awk`+`grep -c` method 11-01
+introduced: **17** `###` headings, **11** `[FIXED]`, **1** `[PARTIALLY
+FIXED]`. Unchanged since 11-01/11-02 — `BACKLOG.md` has not been touched
+on `master` since. Tally stands: **11 FIXED / 1 PARTIALLY FIXED / 4 open
+of 16 distinct findings** (not 15 — the section's own heading is still
+wrong; see 11-01's entry for the stray-duplicate-heading explanation,
+still not corrected in the file itself).
+
+### What I did
+
+Read this branch's own NIGHTLY.md tail (11-02's entry) before touching
+anything. Baseline: 662 tests green on `master` throughout, confirmed
+before and after every mutation below.
+
+**Mandatory four-file mutation pass**, each mutation applied, tested,
+and reverted (`git status --short` clean before and after every one):
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` | `f_logo_wall`: `len(distinct) >= 4 and not deep` → `and deep` | Caught (3 failures) — reconfirms existing coverage, first time this exact conjunct (rather than the `>= 4` threshold) was tried |
+| `names.py` | `_INNER_HYPHEN_RE = re.compile(r"(?<=\w)[-'](?=\w)")` — lookbehind dropped entirely | **Survived — proven equivalent, not a gap.** See below. |
+| `scoring.py` | `score()`: `coverage = decided_w / TOTAL_WEIGHT if TOTAL_WEIGHT else 0.0` — guard dropped | **Survived — confirmed dead code, same family as this file's two already-logged dead guards.** See below. |
+| `verify.py` | `verify_github`: `+ (", archived" if archived else "")` → `if not archived` | **Survived — real, fresh, zero prior test coverage. Live-confirmed, regression test drafted below, not pinned (capped night).** |
+
+**The `names.py` survivor, traced to a proof, not just "no counterexample
+found":** dropping `(?<=\w)` makes the pattern also match a hyphen/
+apostrophe with no word character before it (string start, or preceded
+by whitespace/punctuation). But `_INNER_HYPHEN_RE.sub("", x)` only ever
+changes the token set produced by a later `re.split(r"[^\w]+", ...)` when
+removing the matched character *merges* two word characters that would
+otherwise have been split apart — i.e. only when a word character sits
+on **both** sides. Whenever the lookbehind would have failed (no word
+character on the left), there is nothing on the left to merge with, so
+deleting the hyphen/apostrophe and then splitting on remaining non-word
+characters produces exactly the same tokens as not deleting it and
+splitting on it directly — the hyphen was already going to be a split
+point either way. Checked directly against both the restored and
+mutated code with two constructed cases designed to exercise exactly
+this (`tokens("-Sayed Ahmed")`, `tokens("'Brien Patrick")`): identical
+`{'sayed', 'ahmed'}` / `{'brien', 'patrick'}` output under both versions.
+Not a coverage gap — the lookbehind is logically redundant, a
+simplification candidate (`r"[-'](?=\w)(?<=\w[-'])"`-style reasoning
+aside, simplest would be deleting the lookbehind with a comment
+explaining why it's safe to), not a bug to pin.
+
+**The `scoring.py` survivor, confirmed dead rather than left as "looks
+survived":** `TOTAL_WEIGHT` (`flags.py`) is `sum(spec["weight"] for spec
+in REGISTRY)` computed once at import time from a static list — it
+cannot be zero or falsy at runtime (`python3 -c "from larp_meter.flags
+import TOTAL_WEIGHT; print(TOTAL_WEIGHT)"` → `18.5`), so the `if
+TOTAL_WEIGHT else 0.0` guard can never take its `else` branch while
+`REGISTRY` has any flag in it. Exactly the same shape as this file's
+two already-logged dead guards (`category_scores`'s `if v["dec"] else
+None`, confirmed 10-??; `_apply_floors`'s `max` vs `min` equivalence,
+confirmed multiple nights) — a defensive check written for a state the
+code's own invariants make unreachable. Not touched tonight (capped
+night, no code changes); a future simplification-pass night could drop
+all three guards together with the same one-line justification, rather
+than as three separate findings.
+
+**The `verify.py` survivor, live-confirmed with a concrete before/after,
+not just a pass/fail count:**
+
+```python
+from tests.test_verify import StubVerifier
+from larp_meter.extract import Claim
+import json
+body = json.dumps({"stargazers_count": 5, "pushed_at": "2024-01-01T00:00:00Z",
+                    "archived": True, "size": 100, "owner": {"login": "acme"}})
+v = StubVerifier({"api.github.com/repos": (body, True)})
+claim = Claim(kind="artifact", subtype="github", value="acme/vapor")
+v.verify_github(claim)
+print(claim.detail)
+# unmutated master: "...last push 2024-01-01), archived, owned by 'acme'..."
+# mutated (archived flag inverted): "...last push 2024-01-01), owned by 'acme'..."
+#   -- the word "archived" silently disappears even though data["archived"] is True
+```
+
+`grep -n "archived" tests/*.py` returns nothing at all — this field has
+had zero test coverage since the day it was written (`verify.py`:
+`archived = data.get("archived")`, used only in the `shape` string's
+`+ (", archived" if archived else "")` clause). Message-only (claim.status
+stays UNCHECKABLE either way — this can never become an accusation), but
+a real gap: a due-diligence reader relying on the report text to see that
+a cited repository is archived (i.e. no longer maintained — relevant to
+"current, active work" claims) would silently not see it if this line
+ever regressed. Drafted, not applied (capped night):
+
+```python
+    def test_github_archived_repo_is_noted(self):
+        """verify_github's shape string appends ", archived" only when
+        data["archived"] is true -- no existing test exercises this field
+        at all (grep -n "archived" tests/*.py returns nothing), so flipping
+        the condition to its own negation left the whole suite green. A
+        due-diligence reader relying on this text to know a cited repo is
+        no longer maintained would silently lose that signal if this
+        regressed."""
+        body = json.dumps({"stargazers_count": 5, "pushed_at": "2024-01-01T00:00:00Z",
+                            "archived": True, "size": 100, "owner": {"login": "acme"}})
+        v = StubVerifier({"api.github.com/repos": (body, True)})
+        claim = Claim(kind="artifact", subtype="github", value="acme/vapor")
+        v.verify_github(claim)
+        self.assertIn("archived", claim.detail)
+```
+
+Belongs in `tests/test_verify.py`, next to `test_github_empty_repo_is_reported`.
+
+**CI check after tonight's push (per 11-02's own "what's next" item 1):**
+after pushing this entry, re-fetched `pull_request_read get_check_runs`
+for PR #31 against the new head commit. [RESULT FILLED IN BELOW ONCE
+PUSHED — see "What I learned".]
+
+**Live-reconfirmed the core gap holds exactly as described**, without
+trusting a stale write-up: ran the real CLI (no `--verify`, so the
+coverage floor applies, as most real-world anonymous use would) against
+a freshly hand-written fabricator profile (Marcus Vane / Helion
+Neurotech / "published extensively" / "holds several patents" / no
+identifiers of any kind). Result: `coverage` 24%, flag 7 (fundraising
+without traction) TRIGGERED, nine of thirteen flags UNDECIDABLE,
+overall **not scored** ("Only 24% of the flag weight could be decided").
+A profile built entirely out of vague, checkable-sounding claims with
+zero actual identifiers still can't be scored — the core gap, reconfirmed
+live rather than carried forward from any prior entry's numbers.
+
+### Consolidated index — fixes found-and-verified across the 27-night
+### capped queue, never yet applied (for whoever finally gets a human
+### slot)
+
+Twenty-seven consecutive capped nights have accumulated a real backlog
+of small, independently-verified, low-risk fixes sitting only in this
+file's prose — each one already written, already confirmed failing on
+the mutated/buggy code and passing once fixed, then reverted because a
+capped night may only touch `NIGHTLY.md`. Re-deriving any of these from
+scratch would waste the exact effort this index exists to save. All are
+test-only or near-zero-risk; bundling them into **one** PR the moment
+there is a human slot would very likely be more efficient than waiting
+for three queue slots to free up one at a time:
+
+1. `tests/test_reconcile.py::test_a_confirmed_company_role_alone_never_credits_a_nonexistent_openalex_record` — `flags.py`'s `_rec_confirmed_summary` tie-break (`<` vs `<=`) fabricates an OpenAlex corroboration sentence that was never checked. Found 09-27, full source in that entry.
+2. `tests/test_reconcile.py::test_a_contradicted_company_role_still_triggers_alongside_a_confirmed_identifier` — `flags.py`'s `f_contradicted` missing the `rec_contra` disjunct from its own test coverage. Found 09-25, full source at line ~5806 of this file.
+3. `tests/test_verify.py::test_a_correction_entry_in_update_to_does_not_read_as_a_retraction` — `_is_retracted`'s `and`/`or` disambiguation between a genuine retraction and an unrelated correction notice. Found 09-30, full source at line ~7073.
+4. `tests/test_verify.py::test_summarize_counts_each_status_once_per_claim` — `summarize()` feeds the shipped `--output-dir` JSON's `claim_status_counts` with zero test coverage anywhere; a `+1`/`+2` typo would silently double-count and nothing would notice. Found 10-29/11-01, full source at line ~7409.
+5. `tests/test_names.py::test_the_other_seven_extra_folds_also_fold_not_just_o_slash_and_thorn` — six of `names.py`'s seven `_EXTRA_FOLDS` entries (ł, đ, ð, æ, ı, ħ) had zero test coverage. Full source at line ~7325.
+6. `tests/test_flags.py::test_a_long_non_doctorate_education_list_is_shown_in_full` — `f_title_inflation`'s evidence/description truncate to `degrees[:1]` worth of credentials without any test noticing. Full source at line ~7370.
+7. A `flags.py` preprint/peer-review test (name not yet chosen — see the entry around line ~11720): `Claim(is_preprint=False, claimed_peer_reviewed=True)`, confirmed and non-retracted, assert no "preprint" note appears. No production change needed — closes a pure coverage gap.
+8. `flags.py`'s `f_timeline` exact-tenure boundary (`available >= claimed` vs `>`, found 11-02): `"17 years of experience...Joined the team in 2009."`, `now_year=2026`, assert PASSED. Mirrors two already-pinned timeline tests in the same file.
+9. Tonight's `tests/test_verify.py::test_github_archived_repo_is_noted` (full source above).
+10. `verify.py`'s `_ror_country`: `locations[0]` vs `locations[-1]` — real, repeatedly reconfirmed (10-27, 10-28, and again since), but **no test has actually been written for it yet**, unlike items 1-9 above. Needs an institution fixture with 2+ `locations` entries whose first and last geonames country differ.
+11. `names.initials()` and `verify.py`'s `Verifier._name_matches` — both confirmed dead code (zero call sites in production or tests), found 09-27. Safe mechanical deletions, not worth a dedicated PR alone.
+12. Three confirmed-dead defensive guards, same shape, candidates for a single simplification pass: `scoring.py`'s `category_scores` `if v["dec"] else None`, `scoring.py`'s `_apply_floors`'s `max`/`min` equivalence (only matters once `REGISTRY` has 2+ `floor`-bearing flags), and tonight's `score()`'s `if TOTAL_WEIGHT else 0.0`.
+13. `BACKLOG.md`'s `## CRITICAL (15)` heading and the stray bodiless duplicate `### Word-wrapped negation...` heading directly above its `[FIXED]` twin (11-01's finding, still outstanding) — delete the duplicate, relabel the section `(16)`.
+14. **The LinkedIn Publications/Patents section-drop** (11-02's finding, live-confirmed through the real pipeline, full repro in that entry): `cli._maybe_normalise` replaces a LinkedIn-shaped paste's text with `Profile.to_prose()`, which has no field for Publications or Patents, so a DOI or patent number typed into those sections never reaches `extract_claims()` at all. Not yet filed as a BACKLOG.md CRITICAL — highest-value item in this list since it's a live, concrete instance of the standing brief's own core complaint, just needs `Profile` to gain `publications`/`patents` fields and `to_prose()` to render them.
+
+### What I learned
+
+- **A "transient flake" diagnosis needs a second data point to actually confirm, not just a plausible mechanism.** 11-02's entry reasoned convincingly that the `ubuntu-latest, 3.8` setup-python failure was a one-off runner-provisioning flake, but had no way to check without triggering a new run — and a capped night's only permitted push (NIGHTLY.md-only) incidentally *is* that second data point, since any push re-runs CI. Worth remembering: a capped night's forced-minimal push is not purely inert from a verification standpoint.
+- **Proving a mutation equivalent by regex semantics (names.py's lookbehind) rather than by exhausting test inputs is the same discipline this file's `all(...)`/`any(...)` single-token branch already established** (09-29/10-05) — the standard is "no counterexample can exist," not "I didn't find one."
+- Three independent dead-guard findings in `scoring.py` now share the exact same shape (a defensive check against a state the module's own static data makes unreachable) across three different nights. Worth generalizing as a checklist item for a future simplification pass rather than re-discovering the same pattern a fourth time.
+- Twenty-seven nights of a capped queue have now produced a genuinely large stockpile of ready-to-paste, already-verified fixes (the index above) — large enough that re-deriving any of them from scratch, as has already happened at least twice in this file's history (the `rec_contra` disjunct and the ROR tie-break were each independently re-found on nights that hadn't checked the log first), is a real, recurring cost. Building this index was itself worth the time it took.
+
+### What the next run should pick up first
+
+1. **Check the PR queue and CI status fresh, including whether tonight's push came back green** — if the `ubuntu-latest, 3.8` job passed on tonight's run, 11-02's flake diagnosis is confirmed and no further action is needed beyond noting it; if it failed again, this is a persistent breakage (very likely the runner image no longer shipping Python 3.8 at all, not a provisioning race) and needs a `.github/workflows/tests.yml` fix (drop the 3.8 leg, or pin an older runner image) the next time a non-capped night can touch CI config.
+2. **If there is ever a human slot: merge #30 and #31 first** (both clean, zero review burden), **then use the consolidated index above as a single follow-up PR** rather than re-discovering any of its fourteen items. #29 needs a rebase onto current `master` first and is the one PR actually growing more expensive to land with every day it waits.
+3. **File the LinkedIn Publications/Patents section-drop (index item 14) as a new BACKLOG.md CRITICAL** — it is the single highest-value, most concrete, most ready item in the backlog right now.
+4. **The core architectural gap remains the top priority once there's room for real feature work** — re-verify OpenAlex's live rate limits again first, as every recent entry has said; the brief's own numbers are now over twelve weeks old (measured 2026-08-14).

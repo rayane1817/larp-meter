@@ -13,6 +13,65 @@ Severity mix: {'critical': 15, 'major': 25, 'moderate': 19, 'minor': 4}
 
 ## Shipped since the original review (not from the 63 findings above)
 
+### A test escaped its network stub -- a real, unauthenticated request to LinkedIn on every run of test_profiles.py -- and verify.py's ROR "v1 fallback" turned out to be dead code (2026-09-24, nightly)
+
+Two unrelated findings from tonight's review and mandatory mutation-test
+pass, kept on one small, independent branch since neither touches a file
+either open `nightly/*` PR touches.
+
+**The LinkedIn leak.** `tests/test_profiles.py`'s
+`test_url_plus_pasted_text_is_scored_against_the_anchor` calls `main()`
+with `--url https://be.linkedin.com/in/jan-fictief` and never stubs
+`larp_meter.cli.make_fetcher`, so `cmd_url`'s real fetcher made a genuine,
+unauthenticated request to LinkedIn's servers on every run of this file --
+live-confirmed, and directly contradicting the module's own docstring
+("All network access is stubbed."). `fetch()`'s `except Exception: return
+""` swallows a blocked or failing request silently, so the leak never
+showed up as a test failure; on success it would also cache a live
+response into the repo's own on-disk `cache/` directory. A whole-suite
+`urlopen`-recording sweep found this exact test as the only leak in this
+file (the sweep's other finding -- two OpenAlex calls from
+`test_cli_registry_wiring.py`/`test_report.py` -- is the same known bug PR
+#30, `nightly/2026-09-23`, unmerged, already fixes; not duplicated here).
+
+**Fix:** stubbed `cli.make_fetcher` in that test (none of its assertions
+depend on the fetched body -- the anchor and mode come from the URL, not
+the page), and added a permanent guard,
+`test_url_mode_never_touches_a_real_socket`, that records every `urlopen`
+call via a spy rather than relying on the spy's raise to propagate (the
+same `except Exception` that hid the bug would also swallow that raise).
+Watched the guard fail against the unstubbed invocation first (`calls ==
+[the live URL]`) before finalizing the fix. No production code changed for
+this half. 661 -> 662 tests (net +1: one existing test fixed in place, one
+new guard added).
+
+**The dead ROR v1 fallback.** This cycle's mandatory mutation-test pass
+targeted `verify.py`'s `_ror_names`/`_ror_country`, named as the next spot
+in 2026-09-23's own "what's next" list. Both carry a "v1 fallback" branch
+for the pre-2025 ROR schema (a flat `name`/`aliases`/`acronyms` shape
+instead of v2's single `names` array; a top-level `country.country_name`
+instead of `locations[0].geonames_details.country_name`). Deleting either
+fallback outright left the whole suite green -- no `test_verify.py` ROR
+fixture ever used the v1 shape. Before writing a synthetic test to pin
+that gap, checked whether the branch is reachable at all: ROR's own
+changelog (ror.readme.io/changelog, 2025-07-01 and 2025-12-04 entries) says
+the *unversioned* endpoint verify.py calls
+(`https://api.ror.org/organizations`, no `/v1/` or `/v2/` in the path) has
+defaulted to v2 responses since the week of 2025-07-28, and v1 of the API
+and schema was turned off entirely during the week of 2025-12-08 (an
+explicit `/v1/` request now returns HTTP 410). Live-confirmed directly
+too: a real `curl` against that exact URL returns v2-shaped JSON. There is
+no live response left for the v1 fallback to ever see. Deleted both
+fallback branches rather than pinning them with a test for behavior
+production cannot reach -- the same call PR #29 made for its own dead 4th
+mutation survivor. Verified live end-to-end afterward (a real "PhD from
+the Massachusetts Institute of Technology" claim -> `VERIFIED`, "Real
+institution: Massachusetts Institute of Technology (United States)"; a
+fabricated institution name -> `NOT_FOUND` with a nearest-name suggestion,
+never an accusation) to confirm the refactor still produces correct
+country annotations against the real, current API. 662 tests throughout
+(no new test for this half, by design, matching PR #29's precedent).
+
 ### The reverse path, third slice: Belgian companies against KBO/BCE (2026-09-22, interactive session)
 
 `reconcile.KboPublic` reads the KBO public search (kbopub.economie.fgov.be,

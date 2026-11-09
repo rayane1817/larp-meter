@@ -12425,10 +12425,28 @@ ever regressed. Drafted, not applied (capped night):
 
 Belongs in `tests/test_verify.py`, next to `test_github_empty_repo_is_reported`.
 
-**CI check after tonight's push (per 11-02's own "what's next" item 1):**
-after pushing this entry, re-fetched `pull_request_read get_check_runs`
-for PR #31 against the new head commit. [RESULT FILLED IN BELOW ONCE
-PUSHED — see "What I learned".]
+**CI check after tonight's push (per 11-02's own "what's next" item 1) —
+confirmed persistent, not a flake.** After pushing this entry's first
+commit, re-fetched `pull_request_read get_check_runs` for PR #31 against
+the new head commit (run `42556164919`). `test (ubuntu-latest, 3.8)`
+failed again, same signature as 11-02's run: completed in 4 seconds, only
+the `setup-python` step ran, the other five jobs (3.10/3.12 on Ubuntu,
+3.8/3.10/3.12 on Windows) all green. Pulled the actual error text this
+time rather than inferring from the step name alone: `##[error]The
+version '3.8' with architecture 'x64' was not found for Ubuntu 26.04.`
+This is not a provisioning race — GitHub's `ubuntu-latest` now resolves
+to an Ubuntu 26.04 runner image, and that image's Python-version catalog
+does not include 3.8 at all, for any job, ever. Two independent runs,
+seven days apart, identical failure: **11-02's "likely a transient flake"
+diagnosis was wrong — this is a permanent breakage of the `ubuntu-latest,
+3.8` leg of every PR's CI matrix in this repository**, not specific to
+PR #31 or to anything in this branch's own diff. It will keep failing on
+every future push to every branch until `.github/workflows/tests.yml` is
+changed (drop the `ubuntu-latest`×`3.8` combination from the matrix, or
+pin that leg to an older image tag such as `ubuntu-22.04`). Not fixed
+tonight — editing the workflow file is a code change, barred on a capped
+night — but this is new, actionable information 11-02's entry did not
+have, and it changes what the next CI-touching night needs to do first.
 
 **Live-reconfirmed the core gap holds exactly as described**, without
 trusting a stale write-up: ran the real CLI (no `--verify`, so the
@@ -12480,7 +12498,7 @@ for three queue slots to free up one at a time:
 
 ### What the next run should pick up first
 
-1. **Check the PR queue and CI status fresh, including whether tonight's push came back green** — if the `ubuntu-latest, 3.8` job passed on tonight's run, 11-02's flake diagnosis is confirmed and no further action is needed beyond noting it; if it failed again, this is a persistent breakage (very likely the runner image no longer shipping Python 3.8 at all, not a provisioning race) and needs a `.github/workflows/tests.yml` fix (drop the 3.8 leg, or pin an older runner image) the next time a non-capped night can touch CI config.
+1. **Fix `.github/workflows/tests.yml`'s `ubuntu-latest`×`3.8` matrix leg** — confirmed tonight (see above) as a permanent breakage, not a flake: `ubuntu-latest` now resolves to an image whose Python catalog has no 3.8 build at all. This blocks every PR's CI, not just #31's, and will not self-heal. Drop that one combination from the matrix, or pin it to `ubuntu-22.04`, the next time a non-capped night (or the human directly) can touch workflow config — this is not a `larp_meter/` code change and does not need to wait for the queue to clear.
 2. **If there is ever a human slot: merge #30 and #31 first** (both clean, zero review burden), **then use the consolidated index above as a single follow-up PR** rather than re-discovering any of its fourteen items. #29 needs a rebase onto current `master` first and is the one PR actually growing more expensive to land with every day it waits.
 3. **File the LinkedIn Publications/Patents section-drop (index item 14) as a new BACKLOG.md CRITICAL** — it is the single highest-value, most concrete, most ready item in the backlog right now.
 4. **The core architectural gap remains the top priority once there's room for real feature work** — re-verify OpenAlex's live rate limits again first, as every recent entry has said; the brief's own numbers are now over twelve weeks old (measured 2026-08-14).

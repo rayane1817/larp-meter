@@ -12502,3 +12502,132 @@ for three queue slots to free up one at a time:
 2. **If there is ever a human slot: merge #30 and #31 first** (both clean, zero review burden), **then use the consolidated index above as a single follow-up PR** rather than re-discovering any of its fourteen items. #29 needs a rebase onto current `master` first and is the one PR actually growing more expensive to land with every day it waits.
 3. **File the LinkedIn Publications/Patents section-drop (index item 14) as a new BACKLOG.md CRITICAL** — it is the single highest-value, most concrete, most ready item in the backlog right now.
 4. **The core architectural gap remains the top priority once there's room for real feature work** — re-verify OpenAlex's live rate limits again first, as every recent entry has said; the brief's own numbers are now over twelve weeks old (measured 2026-08-14).
+
+---
+
+## 2026-11-16 (nightly run, capped — PR queue at 3, 28th capped night)
+
+### Open-PR queue (for human visibility, not action)
+
+Re-checked fresh via `list_pull_requests` and `pull_request_read` (`get`,
+`get_check_runs`, `get_review_comments`) on all three open, unmerged
+`nightly/*` PRs against `master`. No run landed between 11-09 and tonight
+(a 7-day gap).
+
+| PR | Branch | Mergeable | CI (`tests` workflow, head commit) | Comments / reviews |
+|---|---|---|---|---|
+| #29 | `nightly/2026-09-22` | **dirty** — unresolved since 09-23 (now 54 calendar days) | success, all 6 jobs | 0 / 0 |
+| #30 | `nightly/2026-09-23` | clean | success, all 6 jobs | 0 / 0 |
+| #31 | `nightly/2026-09-24` | **unstable** (unchanged since 11-09) | **failure** — `test (ubuntu-latest, 3.8)` only, same signature as 11-02 and 11-09; other 5 jobs green | 0 / 0 |
+
+Same three PRs as every entry since 09-24 — **28th capped night**, 54
+calendar days since anything last merged to `master`. Nothing has moved:
+no new commits, no reviews, no comments on any of the three since 11-09
+(or, for #29/#30, since the day each was opened). Flagging this to the
+human directly tonight (see push notification) — the queue has now been
+stuck longer than the entire rest of the project's nightly history
+combined, and one of the three real blockers (the CI matrix leg) cannot
+fix itself.
+
+### Running backlog tally
+
+Recounted independently against `master`'s current `BACKLOG.md`
+`## CRITICAL` section with the same `awk` method as 11-01/11-09: **19**
+`###` headings, **11** `[FIXED]`, **1** `[PARTIALLY FIXED]`. Unchanged
+since 11-01 — `BACKLOG.md` has not been touched on `master` since. Tally
+stands: **11 FIXED / 1 PARTIALLY FIXED / 4 open of 16 distinct findings**
+(19 headings minus 2 mutation-testing-pass headings minus 1 stray
+duplicate heading — see 11-01's entry for that accounting).
+
+### What I did
+
+Baseline: 661 tests green on `master` (662 on this branch, which carries
+one extra regression test), confirmed before and after every mutation
+below. Read this branch's own NIGHTLY.md tail (11-09's entry) first.
+
+**Mandatory four-file mutation pass**, each mutation applied, tested, and
+reverted (`git status --short` clean before and after every one):
+
+| File | Mutation | Result |
+|---|---|---|
+| `flags.py` | `f_credentials`: `[i for i in institutions if i.status == ex.NOT_FOUND] if ctx.verified else []` — dropped the `if ctx.verified else []` guard, always computing `unresolved` | **Survived — confirmed dead, a fourth instance of this file's own dead-guard family.** See below. |
+| `scoring.py` | `_apply_floors`: `if _SEVERITY_ORDER.index(strongest["floor"]) <= _SEVERITY_ORDER.index(level):` → `<` | Caught (`test_exact_tie_keeps_the_ordinary_summary_not_the_floor_message` fails) — reconfirms existing coverage of the exact-tie boundary. |
+| `names.py` | single-token abbreviation branch: `if not extra or all(w in mine for w in extra):` → `and` | **Survived — proven equivalent, not a gap.** See below. |
+| `verify.py` | `_disclaims_authorship`: `bool(context) and bool(_NON_ATTRIBUTION_CONTEXT_RE.search(context))` → `or` | Caught immediately (6 failures across attribution/retraction tests) — reconfirms real, well-tested coverage. |
+
+**The `flags.py` survivor, confirmed dead by tracing the invariant, not
+just "no counterexample found":** `f_credentials` only sets `unresolved`
+from claims with `i.status == ex.NOT_FOUND`. `Claim.status` defaults to
+`UNCHECKED` (`extract.py:47`), and the only code that ever sets it to
+`NOT_FOUND` is `Verifier.verify_all` (`verify.py`), which `run_audit` only
+calls when `verify=True` (`audit.py:28`). `ctx.verified` is built as
+`bool(verify)` (`audit.py:61`) — the same flag. So whenever
+`ctx.verified` is `False`, no claim has ever been submitted to a verifier
+and `i.status == ex.NOT_FOUND` cannot be true for any institution claim —
+the `if ctx.verified else []` branch guards against a state that can
+never occur. This is the same shape as the three dead guards 11-09 already
+logged (`scoring.py`'s `category_scores`'s `if v["dec"] else None`, the
+`_apply_floors` `max`/`min` equivalence, and `score()`'s `if TOTAL_WEIGHT
+else 0.0`) — a fourth defensive check written for a state the code's own
+control flow makes unreachable. Not touched tonight (capped night, no code
+changes); belongs in the same future simplification pass as the other
+three.
+
+**The `names.py` survivor, proven equivalent by the same discipline as
+11-09's `_INNER_HYPHEN_RE` lookbehind proof, not by exhausting test
+inputs:** in the single-token-match branch, `extra` is the set of a
+candidate string's other words (besides the matched token), and `present`
+is computed once, up front, by regex-searching `mine`'s tokens against the
+*entire* blob of every usable candidate string concatenated. Since the
+candidate currently being checked is itself part of that blob, any word in
+`extra` that is also in `mine` would, by the same regex word-boundary
+search, already have been counted into `present` — which would make
+`len(present) >= 2` and this code would never be reached at all (that
+branch is gated on `len(present) == 1`, checked earlier in the function).
+So reaching this branch forces `extra ∩ mine = ∅`: whenever `extra` is
+non-empty, `all(w in mine for w in extra)` is necessarily `False` already,
+under the **original** code too — `not extra or all(...)` reduces to
+`False or False` = `False` for a non-empty `extra`, identical to the
+mutated `not extra and all(...)` (`False and False` = `False`). And when
+`extra` is empty, both `or` and `and` short-circuit to the same `True`
+(`all()` over an empty iterable is vacuously `True`). Tried five concrete
+constructions (`"Maria Garcia Lopez"` vs `["M. Garcia Lopez"]`, `"Wei
+Zhang"` vs `["W. Zhang Wei"]`, and three similar double-surname/particle
+cases) looking for a counter-example; every one landed in the
+`len(present) >= 2` branch before reaching this code, exactly as the proof
+predicts. Not a coverage gap — a second confirmed-equivalent mutation in
+this file, same proof technique as 11-09's.
+
+### What I learned
+
+- The dead-guard family first noticed in `scoring.py` on 11-09 (three
+  instances) now has a fourth member in `flags.py`, with the identical
+  root cause: a conditional expression guarding against a `Claim.status`
+  value that the calling context already makes impossible. Worth treating
+  as one checklist item — "does this guard key off a state this function's
+  own caller already rules out?" — for a future simplification pass,
+  rather than re-discovering the pattern a fifth time.
+- `names.py`'s abbreviation-matching code now has two independent
+  equivalent-mutation proofs (11-09's lookbehind, tonight's `extra`/
+  `present` invariant) that both rest on the same kind of argument: a
+  later computation is shown to always re-derive information an earlier
+  computation already captured, so a boolean combinator that looks like it
+  should matter provably doesn't. Both are good candidates for a future
+  simplification pass's write-up, not bugs.
+- Twenty-eight consecutive capped nights, 54 calendar days since the last
+  merge, and the CI matrix is now confirmed (not suspected) permanently
+  broken on one leg. This is no longer a transient queue-depth note — it
+  is the single biggest risk to the project's progress, bigger than
+  anything in BACKLOG.md, and it is outside what any nightly run can fix
+  by itself (no code change here can merge the PRs). Sent a push
+  notification tonight rather than only logging it here, since 27 prior
+  entries logging the same fact in this file produced no visible action.
+
+### What the next run should pick up first
+
+Unchanged from 11-09 — nothing has moved:
+
+1. **Fix `.github/workflows/tests.yml`'s `ubuntu-latest`×`3.8` matrix leg** (confirmed permanent, not a flake, since 11-09) the next time a non-capped night or the human can touch workflow config.
+2. **If there is ever a human slot: merge #30 and #31 first** (both clean/low-risk), **then land the consolidated index** from 11-09's entry as one follow-up PR. #29 needs a rebase and is the one PR actually growing more expensive to land with every day it waits (now 54 days dirty).
+3. **File the LinkedIn Publications/Patents section-drop (11-09's index item 14) as a new BACKLOG.md CRITICAL.**
+4. **The core architectural gap remains the top priority once there's room for real feature work** — re-verify OpenAlex's live rate limits again first; the brief's own numbers are now over fourteen weeks old (measured 2026-08-14).
